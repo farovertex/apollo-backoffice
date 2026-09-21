@@ -29,6 +29,13 @@ const links = [[{
     open.value = false
   }
 }, {
+  label: 'Browser profiles',
+  icon: 'i-lucide-app-window',
+  to: '/browser-profiles',
+  onSelect: () => {
+    open.value = false
+  }
+}, {
   label: 'Settings',
   to: '/settings',
   icon: 'i-lucide-settings',
