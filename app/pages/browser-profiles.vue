@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
- * FEAT-002 — Browser profiles (functions 2.1, read-only).
- * One `GET /backend/browser-profiles/available` (no query) per load / Refresh; search, group and registered filters,
- * sort and pagination are client-side on the returned list (AdsPower Local API is throttled to ~1 req/s).
- * No register / start / stop / delete here — those are later features.
+ * FEAT-002 — Browser profiles (functions 2.1 + 2.2 automatic, read-only; api-contract.md v2).
+ * One `GET /backend/browser-profiles/available` (no query) per load / Refresh — the API syncs the provider list into
+ * the DB and applies per-workspace visibility; search, group and status filters, sort and pagination are client-side
+ * on the returned list (AdsPower Local API is throttled to ~1 req/s).
+ * No claim / start / stop / delete here — those are later features.
  */
 import type { TableColumn } from '@nuxt/ui'
 import { getPaginationRowModel } from '@tanstack/table-core'
-import type { AvailableProfile, AvailableResponse, ProviderErrorBody } from '#shared/types/browser-profiles'
+import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, ProviderErrorBody } from '#shared/types/browser-profiles'
 
 useSeoMeta({ title: 'Browser profiles' })
 
@@ -28,39 +29,42 @@ const { data, status, error, refresh } = useLazyAsyncData(
 // `idle` = SSR HTML / before the client fetch starts (server: false) — show it as loading, never as "no data"
 const pending = computed(() => status.value === 'idle' || status.value === 'pending')
 const profiles = computed<AvailableProfile[]>(() => data.value?.profiles ?? [])
-// `groups` / `total` are new in contract v1 — fall back gracefully while the API side lands.
+// `groups` / `total` / `syncedAt` fall back gracefully while the API side lands.
 const groups = computed<string[]>(() => data.value?.groups ?? [])
 const total = computed(() => data.value?.total ?? profiles.value.length)
+// top-level `syncedAt` = timestamp of this sync. `useTimeAgo` (VueUse) re-renders every 30 s; `—` when missing.
+const syncedAt = computed<string | null>(() => data.value?.syncedAt ?? null)
+const syncedAgo = useTimeAgo(() => syncedAt.value ?? 0)
 
 // ── filters (client-side) ────────────────────────────────────────────────────────────────────────────────────────────
 const ALL = '__all__'
 const search = ref('')
 const searchDebounced = refDebounced(search, 250)
 const group = ref(ALL)
-const registeredFilter = ref<'all' | 'registered' | 'not'>('all')
+const statusFilter = ref<'all' | AvailableProfileStatus>('all')
 
 const groupItems = computed(() => [
   { label: 'All groups', value: ALL },
   ...groups.value.map(g => ({ label: g, value: g }))
 ])
-const registeredItems = [
+const statusItems = [
   { label: 'All', value: 'all' },
-  { label: 'Registered', value: 'registered' },
-  { label: 'Not registered', value: 'not' }
+  { label: 'Free', value: 'free' },
+  { label: 'Bound', value: 'bound' }
 ]
 
 const hasActiveFilter = computed(() =>
-  search.value.trim() !== '' || group.value !== ALL || registeredFilter.value !== 'all'
+  search.value.trim() !== '' || group.value !== ALL || statusFilter.value !== 'all'
 )
 
 function clearFilters() {
   search.value = ''
   group.value = ALL
-  registeredFilter.value = 'all'
+  statusFilter.value = 'all'
 }
 
-// Same rules as the API's `q` / `group` (api-contract.md): case-insensitive substring on name / providerProfileId /
-// groupName; exact groupName; registered = `registered !== null`.
+// Same rules as the API's `q` / `group` / `status` (api-contract.md v2): case-insensitive substring on name /
+// providerProfileId / groupName; exact groupName; exact status (`free` | `bound`).
 const filtered = computed<AvailableProfile[]>(() => {
   const needle = searchDebounced.value.trim().toLowerCase()
   return profiles.value.filter((p) => {
@@ -71,8 +75,7 @@ const filtered = computed<AvailableProfile[]>(() => {
       if (!hit) return false
     }
     if (group.value !== ALL && p.groupName !== group.value) return false
-    if (registeredFilter.value === 'registered' && p.registered === null) return false
-    if (registeredFilter.value === 'not' && p.registered !== null) return false
+    if (statusFilter.value !== 'all' && p.status !== statusFilter.value) return false
     return true
   })
 })
@@ -89,7 +92,7 @@ function setPage(p: number) {
 const currentPage = computed(() => pagination.value.pageIndex + 1)
 
 // any filter change (or a fresh dataset) → page 1
-watch([searchDebounced, group, registeredFilter, data], () => setPage(1))
+watch([searchDebounced, group, statusFilter, data], () => setPage(1))
 
 function formatProxy(proxy: AvailableProfile['proxy']): string {
   if (!proxy) return '—'
@@ -138,18 +141,22 @@ const columns: TableColumn<AvailableProfile>[] = [
     cell: ({ row }) => h('span', { class: 'whitespace-nowrap' }, formatProxy(row.original.proxy))
   },
   {
-    id: 'registered',
-    header: 'Registered',
+    accessorKey: 'status',
+    header: 'Status',
     enableSorting: false,
-    cell: ({ row }) => {
-      const reg = row.original.registered
-      if (!reg) {
-        return h(UBadge, { color: 'neutral', variant: 'outline', class: 'whitespace-nowrap' }, () => 'Not registered')
-      }
-      return reg.visible
-        ? h(UBadge, { color: 'success', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Registered')
-        : h(UBadge, { color: 'neutral', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Registered · other workspace')
-    }
+    // `free` = no TikTok account bound to this profile yet, `bound` = boundAccountId set
+    cell: ({ row }) => row.original.status === 'bound'
+      ? h(UBadge, { color: 'warning', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Bound')
+      : h(UBadge, { color: 'success', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Free')
+  },
+  {
+    id: 'scope',
+    header: 'Scope',
+    enableSorting: false,
+    // workspaceId null = synced from the provider, shared with every admin; set = claimed by a workspace
+    cell: ({ row }) => row.original.workspaceId === null
+      ? h(UBadge, { color: 'neutral', variant: 'outline', class: 'whitespace-nowrap' }, () => 'Shared')
+      : h(UBadge, { color: 'primary', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Workspace')
   }
 ]
 
@@ -220,13 +227,13 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
               data-testid="bp-group-filter"
             />
             <USelect
-              v-model="registeredFilter"
-              :items="registeredItems"
+              v-model="statusFilter"
+              :items="statusItems"
               :disabled="pending"
               :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
-              placeholder="Registered"
+              placeholder="Status"
               class="min-w-36"
-              data-testid="bp-registered-filter"
+              data-testid="bp-status-filter"
             />
             <UButton
               v-if="hasActiveFilter"
@@ -319,8 +326,13 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
           v-if="!errorState"
           class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4"
         >
-          <div class="text-sm text-muted" data-testid="bp-count">
-            Showing {{ filtered.length }} of {{ total }} profiles
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
+            <span data-testid="bp-count">Showing {{ filtered.length }} of {{ total }} profiles</span>
+            <span class="hidden sm:inline" aria-hidden="true">·</span>
+            <span
+              :title="syncedAt ?? undefined"
+              data-testid="bp-synced"
+            >Synced {{ syncedAt ? syncedAgo : '—' }}</span>
           </div>
 
           <UPagination
