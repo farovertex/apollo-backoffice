@@ -37,7 +37,13 @@ const links = [[{
 
       <UDashboardToolbar>
         <!-- NOTE: The `-mx-1` class is used to align with the `DashboardSidebarCollapse` button here. -->
-        <UNavigationMenu :items="links" highlight class="-mx-1 flex-1" />
+        <!-- BUG-001: let the tab groups (root) and tabs (list) wrap on narrow viewports instead of overflowing the toolbar -->
+        <UNavigationMenu
+          :items="links"
+          highlight
+          class="-mx-1 flex-1"
+          :ui="{ root: 'flex-wrap', list: 'flex-wrap' }"
+        />
       </UDashboardToolbar>
     </template>
 
