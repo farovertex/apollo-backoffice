@@ -101,6 +101,11 @@ function formatProxy(proxy: AvailableProfile['proxy']): string {
   return proxy.country ? `${main} · ${proxy.country}` : main
 }
 
+function boundLabel(p: AvailableProfile): string {
+  const account = p.boundAccount
+  return account ? `Bound · ${account.label ?? account.loginEmail}` : 'Bound'
+}
+
 const columns: TableColumn<AvailableProfile>[] = [
   {
     accessorKey: 'name',
@@ -144,9 +149,10 @@ const columns: TableColumn<AvailableProfile>[] = [
     accessorKey: 'status',
     header: 'Status',
     enableSorting: false,
-    // `free` = no TikTok account bound to this profile yet, `bound` = boundAccountId set
+    // `free` = no TikTok account bound to this profile yet, `bound` = boundAccountId set. FEAT-003: the Bound badge
+    // names the account (`label`, else `loginEmail`); plain `Bound` when the join is null (dangling id).
     cell: ({ row }) => row.original.status === 'bound'
-      ? h(UBadge, { color: 'warning', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Bound')
+      ? h(UBadge, { color: 'warning', variant: 'subtle', class: 'whitespace-nowrap' }, () => boundLabel(row.original))
       : h(UBadge, { color: 'success', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Free')
   },
   {

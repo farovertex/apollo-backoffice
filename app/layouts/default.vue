@@ -36,6 +36,13 @@ const links = [[{
     open.value = false
   }
 }, {
+  label: 'TikTok accounts',
+  icon: 'i-lucide-user-round',
+  to: '/tiktok-accounts',
+  onSelect: () => {
+    open.value = false
+  }
+}, {
   label: 'Settings',
   to: '/settings',
   icon: 'i-lucide-settings',

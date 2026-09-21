@@ -1,7 +1,7 @@
 /**
  * FEAT-002 — `GET /browser-profiles/available` (apollo-api, functions 2.1 + 2.2 automatic). Mirrors
  * mission-control/.ai/features/FEAT-002-browser-profiles-menu/api-contract.md v2 (listing syncs into
- * BROWSER_PROFILES; visibility per workspace is applied server-side).
+ * BROWSER_PROFILES; visibility per workspace is applied server-side) + FEAT-003 v1 (`boundAccount` on each item).
  */
 
 export interface AvailableProfileProxy {
@@ -13,6 +13,13 @@ export interface AvailableProfileProxy {
 
 /** `free` = `boundAccountId` null, `bound` otherwise (computed by the API, not stored). */
 export type AvailableProfileStatus = 'free' | 'bound'
+
+/** FEAT-003 (api-contract v1) — the TikTok account bound to a profile, as shown on the Bound badge. */
+export interface BoundAccountRef {
+  id: string
+  label: string | null
+  loginEmail: string
+}
 
 export interface AvailableProfile {
   /** BROWSER_PROFILES._id — every listed profile is in the DB after the sync */
@@ -26,6 +33,8 @@ export interface AvailableProfile {
   workspaceId: string | null
   status: AvailableProfileStatus
   boundAccountId: string | null
+  /** FEAT-003 — joined from `tiktokAccounts` by `boundAccountId`; `null` when free (or the account row is gone) */
+  boundAccount: BoundAccountRef | null
   /** ISO — last time this profile was seen in the provider list */
   syncedAt: string
 }
