@@ -41,7 +41,25 @@ const error = ref<string | null>(null)
 // SSR renders the button disabled until Vue has mounted: a click/Enter before hydration would otherwise trigger a
 // native form submit (credentials in the URL). Implicit submission also respects a disabled default button.
 const mounted = ref(false)
+
+// BUG-002: the inputs stay interactive before hydration (fast typists, password managers autofilling on load), but
+// hydration patches `<input :value>` back to the empty reactive state. Vue does that synchronously while hydrating the
+// element, before any `onMounted`, so the DOM values are captured in `onBeforeMount` (DOM still untouched) and written
+// into the state in `onMounted` (same task, no paint in between). Seeding the state *before* hydration would trigger a
+// dev-only "Hydration attribute mismatch" warning instead.
+let preHydrationValues: { username: string, password: string } | null = null
+function readLoginInput(name: keyof Schema) {
+  return document.querySelector<HTMLInputElement>(`[data-testid="login-form"] input[data-testid="login-${name}"]`)?.value ?? ''
+}
+onBeforeMount(() => {
+  preHydrationValues = { username: readLoginInput('username'), password: readLoginInput('password') }
+})
 onMounted(() => {
+  if (preHydrationValues) {
+    if (preHydrationValues.username && !state.username) state.username = preHydrationValues.username
+    if (preHydrationValues.password && !state.password) state.password = preHydrationValues.password
+    preHydrationValues = null
+  }
   mounted.value = true
 })
 
@@ -97,6 +115,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           variant="subtle"
           icon="i-lucide-circle-alert"
           :title="error"
+          role="alert"
           data-testid="login-error"
         />
 
