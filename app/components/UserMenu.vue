@@ -7,29 +7,31 @@ defineProps<{
 
 const colorMode = useColorMode()
 const appConfig = useAppConfig()
+const auth = useAuth()
 
 const colors = ['red', 'orange', 'amber', 'yellow', 'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose']
 const neutrals = ['slate', 'gray', 'zinc', 'neutral', 'stone', 'taupe', 'mauve', 'mist', 'olive']
 
-const user = ref({
-  name: 'Benjamin Canac',
-  avatar: {
-    src: 'https://github.com/benjamincanac.png',
-    alt: 'Benjamin Canac'
-  }
-})
+const displayName = computed(() => auth.admin.value?.displayName || auth.admin.value?.username || 'Account')
+const roles = computed(() => auth.admin.value?.roles ?? [])
+// no avatar image in the API → UAvatar renders initials from `alt`
+const avatar = computed(() => ({ alt: displayName.value }))
+
+async function onLogout() {
+  await auth.logout()
+  await navigateTo('/login', { replace: true })
+}
 
 const items = computed<DropdownMenuItem[][]>(() => ([[{
   type: 'label',
-  label: user.value.name,
-  avatar: user.value.avatar
+  label: displayName.value,
+  avatar: avatar.value
+}, {
+  type: 'label',
+  label: roles.value.length ? roles.value.join(' · ') : 'no role',
+  icon: 'i-lucide-shield-check',
+  class: 'font-normal text-muted'
 }], [{
-  label: 'Profile',
-  icon: 'i-lucide-user'
-}, {
-  label: 'Billing',
-  icon: 'i-lucide-credit-card'
-}, {
   label: 'Settings',
   icon: 'i-lucide-settings',
   to: '/settings'
@@ -105,60 +107,9 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
     }
   }]
 }], [{
-  label: 'Templates',
-  icon: 'i-lucide-layout-template',
-  children: [{
-    label: 'Starter',
-    to: 'https://starter-template.nuxt.dev/'
-  }, {
-    label: 'Landing',
-    to: 'https://landing-template.nuxt.dev/'
-  }, {
-    label: 'Docs',
-    to: 'https://docs-template.nuxt.dev/'
-  }, {
-    label: 'SaaS',
-    to: 'https://saas-template.nuxt.dev/'
-  }, {
-    label: 'Dashboard',
-    to: 'https://dashboard-template.nuxt.dev/',
-    color: 'primary',
-    checked: true,
-    type: 'checkbox'
-  }, {
-    label: 'Chat',
-    to: 'https://chat-template.nuxt.dev/'
-  }, {
-    label: 'Portfolio',
-    to: 'https://portfolio-template.nuxt.dev/'
-  }, {
-    label: 'Changelog',
-    to: 'https://changelog-template.nuxt.dev/'
-  }, {
-    label: 'Editor',
-    to: 'https://editor-template.nuxt.dev/'
-  }, {
-    label: 'Calendar',
-    to: 'https://calendar-template.nuxt.dev/'
-  }]
-}], [{
-  label: 'Documentation',
-  icon: 'i-lucide-book-open',
-  to: 'https://ui.nuxt.com/docs/getting-started/installation/nuxt',
-  target: '_blank'
-}, {
-  label: 'GitHub repository',
-  icon: 'i-simple-icons-github',
-  to: 'https://github.com/nuxt-ui-templates/dashboard',
-  target: '_blank'
-}, {
-  label: 'Deploy to Vercel',
-  icon: 'i-simple-icons-vercel',
-  to: 'https://vercel.com/new/clone?repository-name=dashboard&repository-url=https%3A%2F%2Fgithub.com%2Fnuxt-ui-templates%2Fdashboard&demo-image=https%3A%2F%2Fui.nuxt.com%2Fassets%2Ftemplates%2Fnuxt%2Fdashboard-dark.png&demo-url=https%3A%2F%2Fdashboard-template.nuxt.dev%2F&demo-title=Nuxt%20Dashboard%20Template&demo-description=A%20dashboard%20template%20with%20multi-column%20layout%20for%20building%20sophisticated%20admin%20interfaces.',
-  target: '_blank'
-}], [{
   label: 'Log out',
-  icon: 'i-lucide-log-out'
+  icon: 'i-lucide-log-out',
+  onSelect: onLogout
 }]]))
 </script>
 
@@ -170,8 +121,8 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   >
     <UButton
       v-bind="{
-        ...user,
-        label: collapsed ? undefined : user?.name,
+        avatar,
+        label: collapsed ? undefined : displayName,
         trailingIcon: collapsed ? undefined : 'i-lucide-chevrons-up-down'
       }"
       color="neutral"
@@ -182,6 +133,7 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
       :ui="{
         trailingIcon: 'text-dimmed'
       }"
+      data-testid="user-menu"
     />
 
     <template #chip-leading="{ item }">
