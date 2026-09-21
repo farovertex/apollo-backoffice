@@ -25,6 +25,16 @@ export function assertSessionPassword(password: unknown): asserts password is st
   }
 }
 
+/** Cookie attributes shared by the session manager and the logout handler (deleting cookie must match name + path). */
+export function sessionCookieOptions(event: H3Event) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: getRequestProtocol(event) === 'https',
+    path: '/'
+  }
+}
+
 /** Session manager for this request: `.data` (unsealed), `.update({...})`, `.clear()`. */
 export function getApiSession(event: H3Event) {
   const config = useRuntimeConfig(event)
@@ -36,12 +46,7 @@ export function getApiSession(event: H3Event) {
     maxAge: SESSION_MAX_AGE_SECONDS,
     // cookie only — never accept the session from a request header
     sessionHeader: false,
-    cookie: {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: getRequestProtocol(event) === 'https',
-      path: '/'
-    }
+    cookie: sessionCookieOptions(event)
   })
 }
 
