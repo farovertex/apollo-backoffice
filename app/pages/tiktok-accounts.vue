@@ -8,11 +8,17 @@
  * FEAT-004: Login → `POST /backend/tiktok-accounts/:id/login` (202 / 409 → `TiktokAccountsLoginModal`, other →
  * toast); the button is disabled while `runningJob` is set; the badge maps `needsHuman` to "Needs OTP" and a
  * `lastLoginError` chip (`ta-login-error`) sits next to it while `loggedOut`. Modal close / success → one refresh.
+ * FEAT-005 (discover advertisers, api-contract.md v1 §5/§7): columns "BC org" (`ta-bc-org` + copy) and "Advertisers"
+ * (`ta-adv-count` opens `TiktokAccountsAdvertisersSlideover`, `ta-adv-synced` / `ta-adv-syncing` / `ta-adv-error`
+ * chip) after Session status; row action Sync (`ta-sync`) → `POST /backend/tiktok-accounts/:id/discover` (202 / 409 →
+ * poll `GET /backend/tiktok-accounts/:id` every 2 s, one loop per account id, until `runningJob === null` → refresh +
+ * toast; other errors → toast, no poll). The latest polled account is merged into its row so "Syncing…" shows live.
  */
 import type { TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
+import type { DiscoverJobResponse } from '#shared/types/advertisers'
 import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
 import PasswordCell from '~/components/tiktok-accounts/PasswordCell.vue'
 
@@ -21,6 +27,9 @@ useSeoMeta({ title: 'TikTok accounts' })
 const UButton = resolveComponent('UButton')
 const UBadge = resolveComponent('UBadge')
 const UTooltip = resolveComponent('UTooltip')
+const UIcon = resolveComponent('UIcon')
+
+const POLL_MS = 2000
 
 const api = useApi()
 const toast = useToast()
@@ -62,17 +71,33 @@ function toggleRevealed(id: string) {
   else next.add(id)
   revealed.value = next
 }
-// a fresh dataset (refresh / after create / after delete) starts fully masked
+// a fresh dataset (refresh / after create / after delete) starts fully masked and drops the per-row poll snapshots
 watch(data, () => {
   revealed.value = new Set()
+  polledById.value = new Map()
 })
 
 // ── relative time ────────────────────────────────────────────────────────────────────────────────────────────────────
-// `useNow` re-renders the Created column every 30 s (same output as `useTimeAgo`, usable inside cell render fns)
+// `useNow` re-renders the Created / Advertisers columns every 30 s (same output as `useTimeAgo`, usable inside cell render fns)
 const now = useNow({ interval: 30_000 })
-function createdAgo(iso: string): string {
+function timeAgo(iso: string): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '—' : formatTimeAgo(d, {}, now.value)
+}
+
+// ── clipboard ────────────────────────────────────────────────────────────────────────────────────────────────────────
+async function copyText(text: string, title: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.add({ title, description: text, color: 'success' })
+  } catch {
+    toast.add({ title: 'Could not copy', description: 'Clipboard access was denied by the browser.', color: 'error' })
+  }
+}
+
+/** `7616636543968673809` → `7616…3809` (full id stays in `title`) */
+function shortId(id: string): string {
+  return id.length > 10 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id
 }
 
 // ── session status badge ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -130,6 +155,116 @@ async function onLogin(account: TikTokAccount) {
 function askDelete(account: TikTokAccount) {
   deleteTarget.value = account
   deleteOpen.value = true
+}
+
+// ── discover / sync advertisers (FEAT-005) ───────────────────────────────────────────────────────────────────────────
+// latest `GET /tiktok-accounts/:id` snapshot per polled account, merged into its row (so "Syncing…" is live without
+// re-fetching the whole list every 2 s); cleared whenever the list itself is refreshed
+const polledById = shallowRef(new Map<string, TikTokAccount>())
+const rows = computed<TikTokAccount[]>(() => filtered.value.map(a => polledById.value.get(a.id) ?? a))
+
+// account id whose POST …/discover is in flight (button spinner + no double click)
+const syncStarting = ref<string | null>(null)
+// one poll loop per account id
+const pollTimers = new Map<string, ReturnType<typeof setInterval>>()
+const pollInFlight = new Set<string>()
+
+function stopDiscoverPoll(id: string) {
+  const t = pollTimers.get(id)
+  if (t) clearInterval(t)
+  pollTimers.delete(id)
+  pollInFlight.delete(id)
+}
+
+async function pollDiscover(id: string) {
+  if (pollInFlight.has(id) || !pollTimers.has(id)) return
+  pollInFlight.add(id)
+  try {
+    // retry: 0 — one request per tick, ofetch must not re-issue it on 5xx
+    const next = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(id)}`, { retry: 0 })
+    if (!pollTimers.has(id)) return // stopped meanwhile (unmount)
+    polledById.value = new Map(polledById.value).set(id, next)
+    if (next.runningJob === null) {
+      stopDiscoverPoll(id)
+      await refresh()
+      const label = next.label ?? next.loginEmail
+      if (next.lastDiscoverError) {
+        toast.add({ title: 'Advertiser sync failed', description: `${label}: ${discoverErrorText(next.lastDiscoverError)}`, color: 'error' })
+      } else {
+        toast.add({ title: `Advertisers synced (${next.advertiserCount})`, description: label, color: 'success' })
+      }
+    }
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    // the account is gone → nothing left to follow; any other error is transient, the next tick retries
+    if (err.statusCode === 404) {
+      stopDiscoverPoll(id)
+      await refresh()
+    }
+  } finally {
+    pollInFlight.delete(id)
+  }
+}
+
+function startDiscoverPoll(id: string) {
+  if (pollTimers.has(id)) return
+  pollTimers.set(id, setInterval(() => {
+    void pollDiscover(id)
+  }, POLL_MS))
+  void pollDiscover(id)
+}
+
+onUnmounted(() => {
+  for (const id of [...pollTimers.keys()]) stopDiscoverPoll(id)
+})
+
+function syncBlockedReason(account: TikTokAccount): string | null {
+  if (account.runningJob) return account.runningJob.type === 'discover' ? 'Sync in progress' : 'Login in progress'
+  if (account.sessionStatus === 'needsHuman') return 'Needs OTP — finish the login first'
+  if (!account.isActive) return 'Account is disabled'
+  return null
+}
+
+async function onSync(account: TikTokAccount) {
+  if (syncStarting.value || syncBlockedReason(account)) return
+  const label = account.label ?? account.loginEmail
+  syncStarting.value = account.id
+  try {
+    // retry: 0 — exactly one POST per click (ofetch would otherwise re-issue it on 5xx)
+    await api<DiscoverJobResponse>(`/tiktok-accounts/${encodeURIComponent(account.id)}/discover`, { method: 'POST', retry: 0 })
+    toast.add({ title: 'Syncing advertisers…', description: label, color: 'info' })
+    startDiscoverPoll(account.id)
+  } catch (e) {
+    const err = e as FetchError<Partial<LoginConflictBody>>
+    if (err.statusCode === 409) {
+      // a login / discover job or a human task already exists for this account → follow it anyway
+      toast.add({ title: 'Already running', description: err.data?.error ?? label, color: 'info' })
+      startDiscoverPoll(account.id)
+    } else {
+      toast.add({
+        title: 'Could not start the sync',
+        description: err.data?.error ?? err.message ?? 'Unexpected error',
+        color: 'error'
+      })
+    }
+  } finally {
+    syncStarting.value = null
+  }
+}
+
+// ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
+const advOpen = ref(false)
+const advTargetId = ref<string | null>(null)
+// resolved from the live rows so the slideover sees the polled `runningJob` / `advertiserCount`
+const advTarget = computed<TikTokAccount | null>(() => {
+  const id = advTargetId.value
+  if (!id) return null
+  return polledById.value.get(id) ?? accounts.value.find(a => a.id === id) ?? null
+})
+
+function openAdvertisers(account: TikTokAccount) {
+  advTargetId.value = account.id
+  advOpen.value = true
 }
 
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -191,18 +326,102 @@ const columns: TableColumn<TikTokAccount>[] = [
     }
   },
   {
+    accessorKey: 'bcOrgId',
+    header: 'BC org',
+    cell: ({ row }) => {
+      const org = row.original.bcOrgId
+      if (!org) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-bc-org' }, '—')
+      return h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [
+        h('span', { 'class': 'font-mono text-xs text-highlighted', 'title': org, 'data-testid': 'ta-bc-org', 'data-org': org }, shortId(org)),
+        h(UButton, {
+          'icon': 'i-lucide-copy',
+          'color': 'neutral',
+          'variant': 'ghost',
+          'size': 'xs',
+          'aria-label': 'Copy BC org id',
+          'data-testid': 'ta-bc-org-copy',
+          'onClick': () => copyText(org, 'BC org id copied')
+        })
+      ])
+    }
+  },
+  {
+    accessorKey: 'advertiserCount',
+    header: 'Advertisers',
+    cell: ({ row }) => {
+      const a = row.original
+      const syncing = a.runningJob?.type === 'discover'
+      const children = [
+        h(UButton, {
+          'label': String(a.advertiserCount),
+          'icon': 'i-lucide-building-2',
+          'color': 'neutral',
+          'variant': 'ghost',
+          'size': 'xs',
+          'class': 'font-medium tabular-nums',
+          'aria-label': `${a.advertiserCount} advertisers — open the list`,
+          'data-testid': 'ta-adv-count',
+          'data-count': a.advertiserCount,
+          'onClick': () => openAdvertisers(a)
+        })
+      ]
+      if (syncing) {
+        children.push(h('span', { 'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted', 'data-testid': 'ta-adv-syncing' }, [
+          h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
+          'Syncing…'
+        ]))
+      } else {
+        children.push(h('span', {
+          'class': 'whitespace-nowrap text-xs text-muted',
+          'title': a.lastDiscoverAt ?? undefined,
+          'data-testid': 'ta-adv-synced'
+        }, a.lastDiscoverAt ? `Synced ${timeAgo(a.lastDiscoverAt)}` : 'Never synced'))
+        if (a.lastDiscoverError && !a.runningJob) {
+          const code = a.lastDiscoverError
+          children.push(h(UTooltip, { text: discoverErrorText(code) }, () => h(UBadge, {
+            'color': 'error',
+            'variant': 'subtle',
+            'size': 'sm',
+            'icon': 'i-lucide-triangle-alert',
+            'class': 'whitespace-nowrap',
+            'title': discoverErrorText(code),
+            'data-testid': 'ta-adv-error',
+            'data-error': code
+          }, () => discoverErrorShort(code))))
+        }
+      }
+      return h('div', { class: 'flex flex-col items-start gap-0.5' }, children)
+    }
+  },
+  {
     accessorKey: 'createdAt',
     header: 'Created',
-    cell: ({ row }) => h('span', { class: 'whitespace-nowrap', title: row.original.createdAt }, createdAgo(row.original.createdAt))
+    cell: ({ row }) => h('span', { class: 'whitespace-nowrap', title: row.original.createdAt }, timeAgo(row.original.createdAt))
   },
   {
     id: 'actions',
     header: 'Actions',
     cell: ({ row }) => {
-      const running = !!row.original.runningJob
+      const job = row.original.runningJob
+      const running = !!job
+      const syncBlocked = syncBlockedReason(row.original)
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
         // the tooltip trigger is a span so it still opens on hover while the button is disabled
-        h(UTooltip, { text: 'Login in progress', disabled: !running }, () => h('span', { class: 'inline-flex' }, [
+        h(UTooltip, { text: syncBlocked ?? '', disabled: !syncBlocked }, () => h('span', { class: 'inline-flex' }, [
+          h(UButton, {
+            'label': 'Sync',
+            'icon': 'i-lucide-refresh-cw',
+            'color': 'neutral',
+            'variant': 'outline',
+            'size': 'xs',
+            'disabled': !!syncBlocked,
+            'loading': syncStarting.value === row.original.id,
+            'aria-label': 'Sync advertisers',
+            'data-testid': 'ta-sync',
+            'onClick': () => onSync(row.original)
+          })
+        ])),
+        h(UTooltip, { text: job?.type === 'discover' ? 'Sync in progress' : 'Login in progress', disabled: !running }, () => h('span', { class: 'inline-flex' }, [
           h(UButton, {
             'label': 'Login',
             'icon': 'i-lucide-log-in',
@@ -329,7 +548,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
 
         <div v-if="showTable" class="overflow-x-auto" data-testid="ta-table">
           <UTable
-            :data="filtered"
+            :data="rows"
             :columns="columns"
             :loading="pending"
             loading-animation="carousel"
@@ -353,7 +572,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
           v-if="!error"
           class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted"
         >
-          <span data-testid="ta-count">{{ filtered.length }} accounts</span>
+          <span data-testid="ta-count">{{ rows.length }} accounts</span>
         </div>
       </div>
 
@@ -369,6 +588,11 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         :account-label="loginTarget?.label ?? loginTarget?.loginEmail ?? null"
         @success="refresh()"
         @close="refresh()"
+      />
+      <TiktokAccountsAdvertisersSlideover
+        v-model:open="advOpen"
+        :account="advTarget"
+        @sync="onSync"
       />
     </template>
   </UDashboardPanel>
