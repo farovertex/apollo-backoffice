@@ -4,6 +4,10 @@
  * `password` is plaintext by human decision (2026-09-22): the BO masks it and never logs / screenshots it.
  * FEAT-004 (login flow, api-contract.md v1): the view gains `loginFailures`, `lastLoginError`, `openHumanTask`,
  * `runningJob`; `POST /tiktok-accounts/:id/login` answers 202 `LoginJobResponse` (named so it does not shadow auth.ts `LoginResponse`) or 409 `LoginConflictBody`.
+ * FEAT-005 (discover advertisers, api-contract.md v1 §5): the view gains `bcOrgId`, `advertiserCount`,
+ * `lastDiscoverAt`, `lastDiscoverError`; `runningJob.type` is `login | discover`, `trigger` may be `afterLogin`,
+ * `step` may be a discover step; `POST /tiktok-accounts/:id/discover` answers 202 `DiscoverJobResponse`
+ * (shared/types/advertisers.ts) or 409 `LoginConflictBody` (+ `jobType`).
  */
 
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
@@ -12,10 +16,19 @@ export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' 
 export type LoginError
   = 'badCredentials' | 'captchaFailed' | 'otpExpired' | 'otpRejected' | 'deviceVerify' | 'blocked' | 'timeout' | 'unknown'
 
-/** Live step of the login job (`jobs.step`), shown by the LoginModal while running. */
-export type JobStep = 'starting' | 'checking' | 'fillingForm' | 'solvingCaptcha' | 'waitingHuman' | 'enteringOtp' | 'finishing'
+/** Reason the last discover job stopped (`tiktokAccounts.lastDiscoverError`); null after a success. */
+export type DiscoverError = 'notLoggedIn' | 'noOrgId' | 'listApiFailed' | 'timeout' | 'unknown'
 
-export type JobTrigger = 'manual' | 'retry' | 'human'
+/**
+ * Live step of a job (`jobs.step`). Login steps are shown by the LoginModal while running; the discover steps
+ * (`openingOverview` … `saving`) only appear on `runningJob.type === 'discover'`.
+ */
+export type JobStep
+  = 'starting' | 'checking' | 'fillingForm' | 'solvingCaptcha' | 'waitingHuman' | 'enteringOtp' | 'finishing'
+    | 'openingOverview' | 'openingAccounts' | 'fetchingPages' | 'saving'
+
+/** `afterLogin` = discover job enqueued automatically by a login success (FEAT-005). */
+export type JobTrigger = 'manual' | 'retry' | 'human' | 'afterLogin'
 
 /** Populated browser profile (subset of BROWSER_PROFILES); `null` on the account view if the profile row is gone. */
 export interface AccountBrowserProfile {
@@ -36,7 +49,7 @@ export interface OpenHumanTask {
 /** Job of the account that is `waiting` or `active`, as embedded in the account view. */
 export interface RunningJob {
   id: string
-  type: 'login'
+  type: 'login' | 'discover'
   status: 'waiting' | 'active'
   step: JobStep | null
   trigger: JobTrigger
@@ -60,6 +73,13 @@ export interface TikTokAccount {
   /** consecutive failed login jobs; 2 stops automatic retries until a human presses Login (reset to 0) */
   loginFailures: number
   lastLoginError: LoginError | null
+  /** Business Center `org_id` read by the discover job; null until the first successful discover */
+  bcOrgId: string | null
+  /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
+  advertiserCount: number
+  /** ISO | null — time of the last discover attempt (success or failure) */
+  lastDiscoverAt: string | null
+  lastDiscoverError: DiscoverError | null
   openHumanTask: OpenHumanTask | null
   runningJob: RunningJob | null
   createdBy: string
@@ -86,9 +106,13 @@ export interface LoginJobResponse {
   jobId: string
 }
 
-/** `POST /tiktok-accounts/:id/login` 409 body: a job is already waiting/active (`jobId`) or a human task is open. */
+/**
+ * `POST /tiktok-accounts/:id/login` and `…/discover` 409 body: a job is already waiting/active (`jobId`, and since
+ * FEAT-005 its `jobType`) or a human task is open (`humanTaskId`).
+ */
 export interface LoginConflictBody {
   error: string
   jobId?: string
+  jobType?: 'login' | 'discover'
   humanTaskId?: string
 }
