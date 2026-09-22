@@ -4,18 +4,23 @@
  * One `GET /backend/tiktok-accounts` per load / Refresh / after create / after delete via `useApi()`; search is
  * client-side (label / loginEmail / profile name / profile id), rows sorted by createdAt desc, no pagination.
  * Password: the table renders the literal mask until the row toggle is on (value never in the DOM while masked);
- * Copy reads it from the row data. Login is a BO-only mock (toast, no request). Delete confirms in a modal.
+ * Copy reads it from the row data. Delete confirms in a modal.
+ * FEAT-004: Login → `POST /backend/tiktok-accounts/:id/login` (202 / 409 → `TiktokAccountsLoginModal`, other →
+ * toast); the button is disabled while `runningJob` is set; the badge maps `needsHuman` to "Needs OTP" and a
+ * `lastLoginError` chip (`ta-login-error`) sits next to it while `loggedOut`. Modal close / success → one refresh.
  */
 import type { TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
+import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { AccountsResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
+import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
 import PasswordCell from '~/components/tiktok-accounts/PasswordCell.vue'
 
 useSeoMeta({ title: 'TikTok accounts' })
 
 const UButton = resolveComponent('UButton')
 const UBadge = resolveComponent('UBadge')
+const UTooltip = resolveComponent('UTooltip')
 
 const api = useApi()
 const toast = useToast()
@@ -75,7 +80,7 @@ const SESSION_BADGE: Record<SessionStatus, { label: string, color: 'neutral' | '
   unknown: { label: 'Unknown', color: 'neutral', variant: 'subtle' },
   loggedIn: { label: 'Logged in', color: 'success', variant: 'subtle' },
   loggedOut: { label: 'Logged out', color: 'warning', variant: 'subtle' },
-  needsHuman: { label: 'Needs human', color: 'error', variant: 'subtle' },
+  needsHuman: { label: 'Needs OTP', color: 'error', variant: 'subtle' },
   disabled: { label: 'Disabled', color: 'neutral', variant: 'outline' }
 }
 function sessionBadge(s: SessionStatus) {
@@ -87,9 +92,39 @@ const addOpen = ref(false)
 const deleteOpen = ref(false)
 const deleteTarget = ref<TikTokAccount | null>(null)
 
-// Login mock (human decision 2026-09-22): toast only — no request, no state change.
-function onLogin() {
-  toast.add({ title: 'Login is not available yet', color: 'neutral' })
+// ── login (FEAT-004) ─────────────────────────────────────────────────────────────────────────────────────────────────
+const loginOpen = ref(false)
+const loginTarget = ref<TikTokAccount | null>(null)
+// account id whose POST …/login is in flight (button spinner + no double click)
+const loginStarting = ref<string | null>(null)
+
+function openLoginModal(account: TikTokAccount) {
+  loginTarget.value = account
+  loginOpen.value = true
+}
+
+async function onLogin(account: TikTokAccount) {
+  if (loginStarting.value || account.runningJob) return
+  loginStarting.value = account.id
+  try {
+    // retry: 0 — exactly one POST per click (ofetch would otherwise re-issue it on 5xx)
+    await api<LoginJobResponse>(`/tiktok-accounts/${encodeURIComponent(account.id)}/login`, { method: 'POST', retry: 0 })
+    openLoginModal(account)
+  } catch (e) {
+    const err = e as FetchError<Partial<LoginConflictBody>>
+    if (err.statusCode === 409) {
+      // a job or human task already exists for this account → follow it in the modal (body: jobId / humanTaskId)
+      openLoginModal(account)
+    } else {
+      toast.add({
+        title: 'Could not start the login',
+        description: err.data?.error ?? err.message ?? 'Unexpected error',
+        color: 'error'
+      })
+    }
+  } finally {
+    loginStarting.value = null
+  }
 }
 
 function askDelete(account: TikTokAccount) {
@@ -138,7 +173,21 @@ const columns: TableColumn<TikTokAccount>[] = [
     header: 'Session status',
     cell: ({ row }) => {
       const b = sessionBadge(row.original.sessionStatus)
-      return h(UBadge, { color: b.color, variant: b.variant, class: 'whitespace-nowrap' }, () => b.label)
+      const err = row.original.lastLoginError
+      const children = [h(UBadge, { color: b.color, variant: b.variant, class: 'whitespace-nowrap' }, () => b.label)]
+      if (row.original.sessionStatus === 'loggedOut' && err) {
+        children.push(h(UBadge, {
+          'color': 'neutral',
+          'variant': 'outline',
+          'size': 'sm',
+          'icon': 'i-lucide-triangle-alert',
+          'class': 'whitespace-nowrap',
+          'title': loginErrorText(err),
+          'data-testid': 'ta-login-error',
+          'data-error': err
+        }, () => loginErrorShort(err)))
+      }
+      return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
     }
   },
   {
@@ -149,26 +198,34 @@ const columns: TableColumn<TikTokAccount>[] = [
   {
     id: 'actions',
     header: 'Actions',
-    cell: ({ row }) => h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
-      h(UButton, {
-        'label': 'Login',
-        'icon': 'i-lucide-log-in',
-        'color': 'neutral',
-        'variant': 'outline',
-        'size': 'xs',
-        'data-testid': 'ta-login',
-        'onClick': onLogin
-      }),
-      h(UButton, {
-        'label': 'Delete',
-        'icon': 'i-lucide-trash-2',
-        'color': 'error',
-        'variant': 'subtle',
-        'size': 'xs',
-        'data-testid': 'ta-delete',
-        'onClick': () => askDelete(row.original)
-      })
-    ])
+    cell: ({ row }) => {
+      const running = !!row.original.runningJob
+      return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
+        // the tooltip trigger is a span so it still opens on hover while the button is disabled
+        h(UTooltip, { text: 'Login in progress', disabled: !running }, () => h('span', { class: 'inline-flex' }, [
+          h(UButton, {
+            'label': 'Login',
+            'icon': 'i-lucide-log-in',
+            'color': 'neutral',
+            'variant': 'outline',
+            'size': 'xs',
+            'disabled': running,
+            'loading': loginStarting.value === row.original.id,
+            'data-testid': 'ta-login',
+            'onClick': () => onLogin(row.original)
+          })
+        ])),
+        h(UButton, {
+          'label': 'Delete',
+          'icon': 'i-lucide-trash-2',
+          'color': 'error',
+          'variant': 'subtle',
+          'size': 'xs',
+          'data-testid': 'ta-delete',
+          'onClick': () => askDelete(row.original)
+        })
+      ])
+    }
   }
 ]
 
@@ -305,6 +362,13 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         v-model:open="deleteOpen"
         :account="deleteTarget"
         @deleted="refresh()"
+      />
+      <TiktokAccountsLoginModal
+        v-model:open="loginOpen"
+        :account-id="loginTarget?.id ?? null"
+        :account-label="loginTarget?.label ?? loginTarget?.loginEmail ?? null"
+        @success="refresh()"
+        @close="refresh()"
       />
     </template>
   </UDashboardPanel>
