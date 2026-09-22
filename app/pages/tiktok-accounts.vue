@@ -16,6 +16,7 @@
  */
 import type { TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
+import type { UseTimeAgoMessages } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { DiscoverJobResponse } from '#shared/types/advertisers'
@@ -84,6 +85,27 @@ function timeAgo(iso: string): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '—' : formatTimeAgo(d, {}, now.value)
 }
+// compact variant for the Advertisers column ("Synced 5 min ago") so the table still fits at 1440 px with the sidebar
+const SHORT_AGO: UseTimeAgoMessages = {
+  justNow: 'just now',
+  past: n => n.match(/\d/) ? `${n} ago` : n,
+  future: n => n.match(/\d/) ? `in ${n}` : n,
+  invalid: '—',
+  second: n => `${n} s`,
+  minute: n => `${n} min`,
+  hour: n => `${n} h`,
+  day: (n, past) => n === 1 ? (past ? 'yesterday' : 'tomorrow') : `${n} d`,
+  week: (n, past) => n === 1 ? (past ? 'last week' : 'next week') : `${n} w`,
+  month: (n, past) => n === 1 ? (past ? 'last month' : 'next month') : `${n} mo`,
+  year: (n, past) => n === 1 ? (past ? 'last year' : 'next year') : `${n} y`
+}
+function shortAgo(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : formatTimeAgo(d, { messages: SHORT_AGO }, now.value)
+}
+// row action buttons show their label only from `2xl` (1536 px); below that they are icon-only with a tooltip
+const wideActions = useMediaQuery('(min-width: 1536px)')
+const ACTION_LABEL_UI = { label: 'hidden 2xl:inline' }
 
 // ── clipboard ────────────────────────────────────────────────────────────────────────────────────────────────────────
 async function copyText(text: string, title: string) {
@@ -375,7 +397,7 @@ const columns: TableColumn<TikTokAccount>[] = [
           'class': 'whitespace-nowrap text-xs text-muted',
           'title': a.lastDiscoverAt ?? undefined,
           'data-testid': 'ta-adv-synced'
-        }, a.lastDiscoverAt ? `Synced ${timeAgo(a.lastDiscoverAt)}` : 'Never synced'))
+        }, a.lastDiscoverAt ? `Synced ${shortAgo(a.lastDiscoverAt)}` : 'Never synced'))
         if (a.lastDiscoverError && !a.runningJob) {
           const code = a.lastDiscoverError
           children.push(h(UTooltip, { text: discoverErrorText(code) }, () => h(UBadge, {
@@ -405,44 +427,54 @@ const columns: TableColumn<TikTokAccount>[] = [
       const job = row.original.runningJob
       const running = !!job
       const syncBlocked = syncBlockedReason(row.original)
+      const loginBlocked = running ? (job.type === 'discover' ? 'Sync in progress' : 'Login in progress') : null
+      const wide = wideActions.value
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
-        // the tooltip trigger is a span so it still opens on hover while the button is disabled
-        h(UTooltip, { text: syncBlocked ?? '', disabled: !syncBlocked }, () => h('span', { class: 'inline-flex' }, [
+        // the tooltip trigger is a span so it still opens on hover while the button is disabled; below 2xl the
+        // buttons are icon-only and the tooltip names the action
+        h(UTooltip, { text: syncBlocked ?? 'Sync advertisers', disabled: wide && !syncBlocked }, () => h('span', { class: 'inline-flex' }, [
           h(UButton, {
             'label': 'Sync',
             'icon': 'i-lucide-refresh-cw',
             'color': 'neutral',
             'variant': 'outline',
             'size': 'xs',
+            'ui': ACTION_LABEL_UI,
             'disabled': !!syncBlocked,
             'loading': syncStarting.value === row.original.id,
-            'aria-label': 'Sync advertisers',
+            'aria-label': 'Sync',
             'data-testid': 'ta-sync',
             'onClick': () => onSync(row.original)
           })
         ])),
-        h(UTooltip, { text: job?.type === 'discover' ? 'Sync in progress' : 'Login in progress', disabled: !running }, () => h('span', { class: 'inline-flex' }, [
+        h(UTooltip, { text: loginBlocked ?? 'Login', disabled: wide && !loginBlocked }, () => h('span', { class: 'inline-flex' }, [
           h(UButton, {
             'label': 'Login',
             'icon': 'i-lucide-log-in',
             'color': 'neutral',
             'variant': 'outline',
             'size': 'xs',
+            'ui': ACTION_LABEL_UI,
             'disabled': running,
             'loading': loginStarting.value === row.original.id,
+            'aria-label': 'Login',
             'data-testid': 'ta-login',
             'onClick': () => onLogin(row.original)
           })
         ])),
-        h(UButton, {
-          'label': 'Delete',
-          'icon': 'i-lucide-trash-2',
-          'color': 'error',
-          'variant': 'subtle',
-          'size': 'xs',
-          'data-testid': 'ta-delete',
-          'onClick': () => askDelete(row.original)
-        })
+        h(UTooltip, { text: 'Delete', disabled: wide }, () => h('span', { class: 'inline-flex' }, [
+          h(UButton, {
+            'label': 'Delete',
+            'icon': 'i-lucide-trash-2',
+            'color': 'error',
+            'variant': 'subtle',
+            'size': 'xs',
+            'ui': ACTION_LABEL_UI,
+            'aria-label': 'Delete',
+            'data-testid': 'ta-delete',
+            'onClick': () => askDelete(row.original)
+          })
+        ]))
       ])
     }
   }
@@ -557,8 +589,8 @@ const showTable = computed(() => !error.value && !isEmpty.value)
               base: 'border-separate border-spacing-0',
               thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
               tbody: '[&>tr]:last:[&>td]:border-b-0',
-              th: 'py-2 first:rounded-l-lg last:rounded-r-lg border-y border-default first:border-l last:border-r whitespace-nowrap',
-              td: 'border-b border-default',
+              th: 'px-3 py-2 first:rounded-l-lg last:rounded-r-lg border-y border-default first:border-l last:border-r whitespace-nowrap',
+              td: 'px-3 border-b border-default',
               separator: 'h-0'
             }"
           >

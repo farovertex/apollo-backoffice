@@ -130,10 +130,11 @@ function reset() {
   error.value = null
 }
 
-// one request per distinct (account, filters) while open; `null` while closed
+// one request per distinct (account, filters) while open; `null` while closed. `lastDiscoverAt` is part of the key
+// so a sync that finishes while the slideover is open (empty-state button / row action) reloads the list once.
 const queryKey = computed<string | null>(() =>
   open.value && props.account
-    ? JSON.stringify([props.account.id, searchDebounced.value.trim(), statusFilter.value, showMissing.value])
+    ? JSON.stringify([props.account.id, props.account.lastDiscoverAt, searchDebounced.value.trim(), statusFilter.value, showMissing.value])
     : null
 )
 watch(queryKey, (key) => {
