@@ -9,10 +9,13 @@
  *              instructions, countdown from `expiresAt`, code input → `POST /backend/human-tasks/:id/resolve`
  *              (202 → running · 410 → expired · 409 → re-poll · other → `ta-otp-error`)
  *   expired  — 410 on resolve or the countdown reached 0 (no request): "Login again" re-POSTs login
- *   success  — `loggedIn` + no running job: toast "Logged in", `success` emitted, modal closes
- *   error    — nothing running and not logged in: `lastLoginError` text (`ta-login-error-text`) + "Try again"
+ *   success  — `loggedIn` + no running *login* job: toast "Logged in", `success` emitted, modal closes
+ *   error    — no login job running and not logged in: `lastLoginError` text (`ta-login-error-text`) + "Try again"
  * Close (`ta-login-close`, Esc, outside click) stops polling; the job continues server-side. The OTP value lives
  * only in the input until submit, is cleared right after, and never reaches a data attribute, log or toast.
+ * FEAT-005 (api-contract.md v1 §7): a login success enqueues a `discover` job right away, so only
+ * `runningJob.type === 'login'` counts as running here; `loggedIn` + a running discover job is a success and
+ * `loggedOut` + a running discover job is an error (the table shows "Syncing…" for that row after the modal closes).
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -97,12 +100,14 @@ function startPolling() {
 const state = computed<LoginState>(() => {
   const a = account.value
   if (!a) return 'running'
-  if (a.sessionStatus === 'loggedIn' && a.runningJob === null) return 'success'
+  // FEAT-005: a `discover` job (auto-enqueued after login) is not a login job — ignore it here
+  const loginRunning = a.runningJob !== null && a.runningJob.type === 'login'
+  if (a.sessionStatus === 'loggedIn' && !loginRunning) return 'success'
   if (expired.value) return 'expired'
   if (forceRunning.value) return 'running'
   if (a.sessionStatus === 'needsHuman' && a.openHumanTask?.kind === 'otp') return 'otp'
-  // nothing running and not logged in: `loggedOut` + `lastLoginError` (spec), or any other status left behind
-  if (a.runningJob === null) return 'error'
+  // no login job running and not logged in: `loggedOut` + `lastLoginError` (spec), or any other status left behind
+  if (!loginRunning) return 'error'
   return 'running'
 })
 
@@ -119,7 +124,8 @@ const TITLE: Record<LoginState, string> = {
 }
 const title = computed(() => TITLE[state.value])
 
-const STEP_TEXT: Record<JobStep, string> = {
+// login steps only: the discover steps never reach this modal (a running discover job is not shown as running)
+const STEP_TEXT: Partial<Record<JobStep, string>> = {
   starting: 'Starting the browser…',
   checking: 'Checking the session…',
   fillingForm: 'Filling the login form…',
@@ -130,7 +136,7 @@ const STEP_TEXT: Record<JobStep, string> = {
 }
 const stepText = computed<string>(() => {
   const job = account.value?.runningJob
-  if (!job) return 'Starting…'
+  if (!job || job.type !== 'login') return 'Starting…'
   const base = job.step ? (STEP_TEXT[job.step] ?? job.step) : job.status === 'waiting' ? 'Queued…' : 'Starting…'
   return job.trigger === 'retry' ? `Retrying (2/2)… ${base}` : base
 })
