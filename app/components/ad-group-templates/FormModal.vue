@@ -116,7 +116,8 @@ function configStateFrom(config: AdGroupConfig): ConfigState {
     gender: config.gender,
     budget: {
       type: config.budget?.type ?? '',
-      amount: config.budget?.amount === undefined ? '' : String(config.budget.amount),
+      // money is always shown with 2 decimals ("300.00"); `Number()` on submit makes it 300 again
+      amount: Number.isFinite(config.budget?.amount) ? config.budget.amount.toFixed(2) : '',
       currency: config.budget?.currency ?? ''
     },
     schedule: {
@@ -241,7 +242,8 @@ function makeSchema(minBudget: Record<string, number>) {
       ctx.addIssue({
         code: 'custom',
         path: amountPath,
-        message: `Minimum budget is ${min} ${data.config.budget.currency}`
+        // same wording as the API's own message (api.md "Needs BO"), so the user sees one sentence either way
+        message: `งบประมาณขั้นต่ำ ${min} ${data.config.budget.currency}`
       })
     }
 
@@ -399,6 +401,23 @@ const visibleFieldNames = computed(() => {
   return new Set(names)
 })
 
+/**
+ * The visible `UFormField` an API issue belongs to, or `null` for the form-level alert.
+ * Array-item paths are folded onto their field (`config.locations.0` → `config.locations`,
+ * `config.ageGroups.1` → `config.ageGroups`), so an item error lands on the control that owns the array.
+ * An empty path (empty PATCH body) never matches and goes to `agt-form-error`.
+ */
+function resolveFieldName(path: string): string | null {
+  let candidate = path
+  while (candidate !== '') {
+    if (visibleFieldNames.value.has(candidate)) return candidate
+    const cut = candidate.lastIndexOf('.')
+    if (cut === -1) return null
+    candidate = candidate.slice(0, cut)
+  }
+  return null
+}
+
 function showApiError(e: unknown, fallback: string) {
   const err = e as FetchError<Partial<ApiErrorBody>>
   const status = err.response?.status ?? err.statusCode
@@ -412,10 +431,15 @@ function showApiError(e: unknown, fallback: string) {
 
   const issues = data?.issues ?? []
   if (issues.length) {
-    const matched = issues.filter(i => visibleFieldNames.value.has(i.path))
-    const unmatched = issues.filter(i => !visibleFieldNames.value.has(i.path))
+    const matched: { name: string, message: string }[] = []
+    const unmatched: { path: string, message: string }[] = []
+    for (const issue of issues) {
+      const name = resolveFieldName(issue.path)
+      if (name) matched.push({ name, message: issue.message })
+      else unmatched.push(issue)
+    }
     if (matched.length) {
-      formRef.value?.setErrors(matched.map(i => ({ name: i.path, message: i.message })))
+      formRef.value?.setErrors(matched)
     }
     if (unmatched.length) {
       submitError.value = {
