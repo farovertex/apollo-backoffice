@@ -5,6 +5,10 @@
  * the DB and applies per-workspace visibility; search, group and status filters, sort and pagination are client-side
  * on the returned list (AdsPower Local API is throttled to ~1 req/s).
  * No claim / start / stop / delete here — those are later features.
+ * FEAT-006 (functions 2.3 + 2.10, api-contract.md v1): header buttons "Default settings"
+ * (`BrowserProfilesDefaultsSlideover`) and "Create profile" (`BrowserProfilesCreateModal`, one extra
+ * `GET …/available` after a 201); the Proxy column prefers `proxyRef.label` over the FEAT-002 provider snapshot and
+ * rows created from the BO carry a fingerprint icon.
  */
 import type { TableColumn } from '@nuxt/ui'
 import { getPaginationRowModel } from '@tanstack/table-core'
@@ -14,6 +18,8 @@ useSeoMeta({ title: 'Browser profiles' })
 
 const UButton = resolveComponent('UButton')
 const UBadge = resolveComponent('UBadge')
+const UIcon = resolveComponent('UIcon')
+const UTooltip = resolveComponent('UTooltip')
 
 const api = useApi()
 
@@ -106,6 +112,21 @@ function boundLabel(p: AvailableProfile): string {
   return account ? `Bound · ${account.label ?? account.loginEmail}` : 'Bound'
 }
 
+/** FEAT-006 — tooltip of the fingerprint icon: `Chrome ua_auto · Windows · WebRTC disabled · Noise on` */
+function fingerprintText(fp: NonNullable<AvailableProfile['fingerprint']>): string {
+  return `Chrome ${fp.browser.version} · ${fp.os} · WebRTC ${fp.webrtc} · Noise ${fp.hardwareNoise.enabled ? 'on' : 'off'}`
+}
+
+// ── create / defaults (FEAT-006) ─────────────────────────────────────────────────────────────────────────────────────
+const defaultsOpen = ref(false)
+const createOpen = ref(false)
+
+/** 201 from the Create modal → drop the client-side filters (so the new row is visible) + exactly one re-GET */
+function onCreated() {
+  clearFilters()
+  return refresh()
+}
+
 const columns: TableColumn<AvailableProfile>[] = [
   {
     accessorKey: 'name',
@@ -125,7 +146,23 @@ const columns: TableColumn<AvailableProfile>[] = [
       })
     },
     sortingFn: (a, b) => a.original.name.localeCompare(b.original.name, undefined, { sensitivity: 'base' }),
-    cell: ({ row }) => h('span', { class: 'font-medium text-highlighted' }, row.original.name)
+    // FEAT-006: a profile created from the BO carries its fingerprint → info icon next to the name; synced rows
+    // (`fingerprint: null`) show nothing
+    cell: ({ row }) => {
+      const fp = row.original.fingerprint
+      const children = [h('span', { class: 'font-medium text-highlighted' }, row.original.name)]
+      if (fp) {
+        const text = fingerprintText(fp)
+        children.push(h(UTooltip, { text }, () => h(UIcon, {
+          'name': 'i-lucide-fingerprint',
+          'class': 'size-4 shrink-0 text-muted',
+          'title': text,
+          'aria-label': text,
+          'data-testid': 'bp-fingerprint'
+        })))
+      }
+      return h('div', { class: 'flex items-center gap-1' }, children)
+    }
   },
   {
     accessorKey: 'providerProfileId',
@@ -143,7 +180,20 @@ const columns: TableColumn<AvailableProfile>[] = [
     id: 'proxy',
     header: 'Proxy',
     enableSorting: false,
-    cell: ({ row }) => h('span', { class: 'whitespace-nowrap' }, formatProxy(row.original.proxy))
+    // FEAT-006: the proxy row chosen at create time (`proxyRef`) wins over the provider snapshot (FEAT-002)
+    cell: ({ row }) => {
+      const ref = row.original.proxyRef
+      if (!ref) {
+        return h('span', { 'class': 'whitespace-nowrap', 'data-testid': 'bp-proxy' }, formatProxy(row.original.proxy))
+      }
+      const endpoint = `${ref.type} ${ref.host}:${ref.port}`
+      return h(UTooltip, { text: endpoint }, () => h('span', {
+        'class': 'font-medium whitespace-nowrap text-highlighted',
+        'title': endpoint,
+        'data-testid': 'bp-proxy',
+        'data-proxy-id': ref.id
+      }, ref.label))
+    }
   },
   {
     accessorKey: 'status',
@@ -197,14 +247,36 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
         </template>
 
         <template #right>
+          <!-- three labelled buttons clip the H1 (`truncate`) at 390 px → icon-only below `sm`, aria-label keeps the name -->
           <UButton
             label="Refresh"
+            aria-label="Refresh"
             icon="i-lucide-refresh-cw"
             color="neutral"
             variant="outline"
             :loading="pending"
+            :ui="{ label: 'hidden sm:inline' }"
             data-testid="bp-refresh"
             @click="refresh()"
+          />
+          <UButton
+            label="Default settings"
+            aria-label="Default settings"
+            icon="i-lucide-sliders-horizontal"
+            color="neutral"
+            variant="outline"
+            :ui="{ label: 'hidden sm:inline' }"
+            data-testid="bp-defaults"
+            @click="defaultsOpen = true"
+          />
+          <UButton
+            label="Create profile"
+            aria-label="Create profile"
+            icon="i-lucide-plus"
+            color="primary"
+            :ui="{ label: 'hidden sm:inline' }"
+            data-testid="bp-create"
+            @click="createOpen = true"
           />
         </template>
       </UDashboardNavbar>
@@ -351,6 +423,9 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
           />
         </div>
       </div>
+
+      <BrowserProfilesDefaultsSlideover v-model:open="defaultsOpen" />
+      <BrowserProfilesCreateModal v-model:open="createOpen" @created="onCreated" />
     </template>
   </UDashboardPanel>
 </template>

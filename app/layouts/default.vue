@@ -43,6 +43,14 @@ const links = [[{
     open.value = false
   }
 }, {
+  // FEAT-006 — proxy list (function 2.9), directly under TikTok accounts; Settings stays last
+  label: 'Proxies',
+  icon: 'i-lucide-network',
+  to: '/proxies',
+  onSelect: () => {
+    open.value = false
+  }
+}, {
   label: 'Settings',
   to: '/settings',
   icon: 'i-lucide-settings',

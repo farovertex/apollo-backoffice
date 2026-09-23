@@ -21,7 +21,7 @@ import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { DiscoverJobResponse } from '#shared/types/advertisers'
 import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
-import PasswordCell from '~/components/tiktok-accounts/PasswordCell.vue'
+import PasswordCell from '~/components/PasswordCell.vue'
 
 useSeoMeta({ title: 'TikTok accounts' })
 

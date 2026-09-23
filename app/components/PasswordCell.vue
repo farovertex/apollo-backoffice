@@ -1,13 +1,21 @@
 <script setup lang="ts">
 /**
- * FEAT-003 — Password cell of the accounts table. Masked by default: the DOM holds only the literal mask, never the
- * value (no hidden input). `shown` is owned by the page (keyed by account id) so a filtered / re-sorted table can
- * never reuse a revealed cell for another account. Copy reads the value from the row data via the Clipboard API.
+ * Password cell of a table. Masked by default: the DOM holds only the literal mask, never the value (no hidden
+ * input). `shown` is owned by the page (keyed by row id) so a filtered / re-sorted table can never reuse a revealed
+ * cell for another row. Copy reads the value from the row data via the Clipboard API.
+ *
+ * FEAT-003 — TikTok accounts (`ta-password*`, the default prefix).
+ * FEAT-006 — generalised with `testIdPrefix` and reused by `/proxies` (`px-password*`); moved from
+ * `components/tiktok-accounts/PasswordCell.vue` (the FEAT-003 test ids are unchanged).
  */
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   value: string
   shown: boolean
-}>()
+  /** test-id prefix: `<prefix>-password`, `<prefix>-password-toggle`, `<prefix>-password-copy` */
+  testIdPrefix?: string
+}>(), {
+  testIdPrefix: 'ta'
+})
 
 const emit = defineEmits<{
   toggle: []
@@ -31,7 +39,7 @@ async function copy() {
     <span
       class="font-mono text-sm"
       :class="shown ? 'text-highlighted' : 'text-muted'"
-      data-testid="ta-password"
+      :data-testid="`${testIdPrefix}-password`"
       :data-shown="shown ? 'true' : 'false'"
     >{{ shown ? value : MASK }}</span>
     <UButton
@@ -41,7 +49,7 @@ async function copy() {
       size="xs"
       :aria-label="shown ? 'Hide password' : 'Show password'"
       :aria-pressed="shown"
-      data-testid="ta-password-toggle"
+      :data-testid="`${testIdPrefix}-password-toggle`"
       @click="emit('toggle')"
     />
     <UButton
@@ -50,7 +58,7 @@ async function copy() {
       variant="ghost"
       size="xs"
       aria-label="Copy password"
-      data-testid="ta-password-copy"
+      :data-testid="`${testIdPrefix}-password-copy`"
       @click="copy"
     />
   </div>

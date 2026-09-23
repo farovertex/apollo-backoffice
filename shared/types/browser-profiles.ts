@@ -2,6 +2,8 @@
  * FEAT-002 — `GET /browser-profiles/available` (apollo-api, functions 2.1 + 2.2 automatic). Mirrors
  * mission-control/.ai/features/FEAT-002-browser-profiles-menu/api-contract.md v2 (listing syncs into
  * BROWSER_PROFILES; visibility per workspace is applied server-side) + FEAT-003 v1 (`boundAccount` on each item).
+ * FEAT-006 v1 (functions 2.3 + 2.10): every item gains `proxyId` / `proxyRef` / `fingerprint`; this file also holds
+ * `GET /browser-profiles/options`, `/browser-profile-defaults/me` and `POST /browser-profiles/create`.
  */
 
 export interface AvailableProfileProxy {
@@ -29,6 +31,12 @@ export interface AvailableProfile {
   name: string
   groupName: string | null
   proxy: AvailableProfileProxy | null
+  /** FEAT-006 — `proxies._id` chosen when the profile was created from the BO; null when synced or after a delete */
+  proxyId: string | null
+  /** FEAT-006 — joined from `proxies` by `proxyId` (never username/password); display source of truth */
+  proxyRef: ProxyRef | null
+  /** FEAT-006 — what was sent to the provider at create time; null for profiles that were only synced */
+  fingerprint: ProfileFingerprint | null
   /** `null` = system-synced, shared with every admin; a string = claimed by that workspace */
   workspaceId: string | null
   status: AvailableProfileStatus
@@ -55,4 +63,102 @@ export interface AvailableResponse {
 export interface ProviderErrorBody {
   error: string
   kind: 'busy' | 'unreachable' | 'permanent'
+}
+
+// ── FEAT-006 — fingerprint, options, defaults, create ─────────────────────────────────────────────────────────────────
+
+/** desktop only (provider-neutral `ProfileOs`) */
+export type ProfileOs = 'Windows' | 'Mac OS X' | 'Linux'
+export type ProfileWebrtc = 'disabled' | 'proxy' | 'forward' | 'local'
+/** `'default'` | a core count as a string — the exact list comes from `GET /browser-profiles/options` */
+export type ProfileCpu = string
+/** `'default'` | GB as a string — the exact list comes from `GET /browser-profiles/options` */
+export type ProfileRam = string
+
+export interface ProfileBrowser {
+  kernel: 'chrome'
+  /** `'ua_auto'` or a Chrome major version as a string */
+  version: string
+}
+
+export interface ProfileHardwareNoise {
+  enabled: boolean
+  audio: boolean
+  cpu: ProfileCpu
+  ram: ProfileRam
+}
+
+/** What the API sends to the provider and stores on `browserProfiles.fingerprint`. */
+export interface ProfileFingerprint {
+  browser: ProfileBrowser
+  os: ProfileOs
+  webrtc: ProfileWebrtc
+  hardwareNoise: ProfileHardwareNoise
+}
+
+/** `proxies` row as joined onto a profile / defaults view — never username or password. */
+export interface ProxyRef {
+  id: string
+  label: string
+  type: string
+  host: string
+  port: number
+  country: string | null
+}
+
+/** fingerprint + proxy choice: the body of `PUT /browser-profile-defaults/me` and `options.systemDefault`. */
+export interface ProfileSettings extends ProfileFingerprint {
+  proxyId: string | null
+}
+
+/** `GET /browser-profiles/options` 200 body — the BO hard-codes none of these lists. */
+export interface ProfileOptions {
+  browserVersions: string[]
+  os: ProfileOs[]
+  webrtc: ProfileWebrtc[]
+  cpu: ProfileCpu[]
+  ram: ProfileRam[]
+  systemDefault: ProfileSettings
+}
+
+/** AdsPower group of the admin (named after `ADMINS.username`); `providerGroupId` null = not created yet. */
+export interface ProfileDefaultsGroup {
+  name: string
+  providerGroupId: string | null
+}
+
+/** `GET /browser-profile-defaults/me` 200 body (function 2.10). */
+export interface ProfileDefaults extends ProfileSettings {
+  /** `system` = no saved row yet (values = system default), `saved` = the admin saved their own set */
+  source: 'system' | 'saved'
+  /** resolved `proxyId` (no credentials); null when no proxy or it is gone / not accessible */
+  proxy: ProxyRef | null
+  group: ProfileDefaultsGroup
+  /** ISO of the saved row, null for `source: 'system'` */
+  updatedAt: string | null
+}
+
+/** `PUT /browser-profile-defaults/me` body — full replacement. */
+export type PutDefaultsBody = ProfileSettings
+
+/** `POST /browser-profiles/create` body — the BO always sends every key (spec AC-9). */
+export interface CreateProfileBody extends ProfileSettings {
+  name: string
+}
+
+/** `POST /browser-profiles/create` 201 body = the `/available` item + `createdBy` / `createdAt`. */
+export interface CreatedProfile extends AvailableProfile {
+  createdBy: string
+  createdAt: string
+}
+
+/**
+ * Error body of the create path: 400 (`error: 'validation'` + `issues`), 404, 422 / 429 / 502 (`kind`),
+ * 500 (`providerProfileId` — the provider created the profile but the DB write failed).
+ */
+export interface CreateProfileErrorBody {
+  error: string
+  kind?: 'busy' | 'unreachable' | 'permanent'
+  issues?: { path: string, message: string }[]
+  providerProfileId?: string
 }
