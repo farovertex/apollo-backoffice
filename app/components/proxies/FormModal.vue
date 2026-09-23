@@ -285,9 +285,11 @@ function errorState(e: unknown, fallback: string): { title: string, description?
 
         <div class="grid gap-4 sm:grid-cols-2">
           <UFormField label="Port" name="port" required>
+            <!-- text + inputmode instead of type="number": a non-numeric value must reach the zod schema
+                 (an `input[type=number]` silently drops it) so "Port must be a number" can be shown -->
             <UInput
               v-model="state.port"
-              type="number"
+              type="text"
               inputmode="numeric"
               placeholder="8080"
               class="w-full"
@@ -297,10 +299,10 @@ function errorState(e: unknown, fallback: string): { title: string, description?
           </UFormField>
 
           <UFormField label="Country" name="country" hint="Optional">
+            <!-- no maxlength: a 3-letter value must reach the schema so "Country must be 2 letters" can be shown -->
             <UInput
               v-model="state.country"
               placeholder="TH"
-              maxlength="2"
               autocomplete="off"
               class="w-full"
               :disabled="submitting"

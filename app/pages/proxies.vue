@@ -247,7 +247,7 @@ function onDeleted(_res: DeleteProxyResponse) {
         <UEmpty
           v-else-if="isNoMatch"
           icon="i-lucide-search-x"
-          title="No proxy matches your search"
+          title="No proxies match your search"
           data-testid="px-no-match"
         >
           <template #actions>
@@ -301,10 +301,12 @@ function onDeleted(_res: DeleteProxyResponse) {
                   Loading proxies…
                 </td>
               </tr>
+              <!-- `data-slot="tr"` mirrors UTable's rows so a row locator works the same on every table of the BO -->
               <tr
                 v-for="proxy in items"
                 :key="proxy.id"
                 :data-id="proxy.id"
+                data-slot="tr"
                 data-testid="px-row"
               >
                 <td class="border-b border-default px-3 py-2">
