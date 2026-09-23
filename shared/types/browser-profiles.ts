@@ -4,6 +4,9 @@
  * BROWSER_PROFILES; visibility per workspace is applied server-side) + FEAT-003 v1 (`boundAccount` on each item).
  * FEAT-006 v1 (functions 2.3 + 2.10): every item gains `proxyId` / `proxyRef` / `fingerprint`; this file also holds
  * `GET /browser-profiles/options`, `/browser-profile-defaults/me` and `POST /browser-profiles/create`.
+ * FEAT-007 v1: every item + the 201 body gain `tags` (display only, from the AdsPower `remark`); the admin's
+ * per-profile "group" (FEAT-006) is replaced by one system-wide `ADSPOWER_GROUP_NAME` + a display-only tag =
+ * username (`ProfileDefaultsGroup`).
  */
 
 export interface AvailableProfileProxy {
@@ -45,6 +48,8 @@ export interface AvailableProfile {
   boundAccount: BoundAccountRef | null
   /** ISO — last time this profile was seen in the provider list */
   syncedAt: string
+  /** FEAT-007 — display only, from the AdsPower `remark`; `[]` = none. Never used for search/filter. */
+  tags: string[]
 }
 
 /**
@@ -121,10 +126,14 @@ export interface ProfileOptions {
   systemDefault: ProfileSettings
 }
 
-/** AdsPower group of the admin (named after `ADMINS.username`); `providerGroupId` null = not created yet. */
+/**
+ * FEAT-007 — the one AdsPower group the system works with + the display-only tag of the caller.
+ * `name` = `ADSPOWER_GROUP_NAME` (trimmed) or `null` when unset (BO shows "Ungrouped"); `tag` = `ADMINS.username`
+ * of the caller, never empty for a logged-in admin.
+ */
 export interface ProfileDefaultsGroup {
-  name: string
-  providerGroupId: string | null
+  name: string | null
+  tag: string
 }
 
 /** `GET /browser-profile-defaults/me` 200 body (function 2.10). */

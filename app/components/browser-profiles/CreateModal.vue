@@ -9,6 +9,9 @@
  * `created` (the page re-requests `/browser-profiles/available` once).
  * 400 / 404 / 422 / 429 / 502 / 500 → `bp-create-error` with the API `error` text (500 also shows the
  * `providerProfileId` the provider created), the modal stays open and every typed value is kept.
+ * FEAT-007 — the description (`bp-create-description`, rendered through UModal's `#description` slot so QA has a
+ * precise locator) names the one configured AdsPower group (or "ungrouped") and the tag the API will derive
+ * server-side (`ADMINS.username`); the create body never carries a group or a tag key.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -45,9 +48,12 @@ const state = reactive<{ name: string }>({ name: '' })
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
 
-const groupName = computed(() => defaults.value?.group.name ?? '')
+const groupName = computed(() => defaults.value?.group.name ?? null)
+const tag = computed(() => defaults.value?.group.tag ?? '')
 const description = computed(() =>
-  groupName.value ? `Created in AdsPower group ${groupName.value}` : 'Created in your own AdsPower group'
+  groupName.value
+    ? `Created in AdsPower group ${groupName.value} · tagged ${tag.value}`
+    : `Created ungrouped in AdsPower · tagged ${tag.value}`
 )
 
 watch(open, (isOpen) => {
@@ -94,11 +100,14 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   <UModal
     v-model:open="open"
     title="Create profile"
-    :description="description"
     :dismissible="!submitting"
     :ui="{ content: 'max-w-xl' }"
     :content="modalContent"
   >
+    <template #description>
+      <span data-testid="bp-create-description">{{ description }}</span>
+    </template>
+
     <template #body>
       <div v-if="loading" class="space-y-3" data-testid="bp-create-loading">
         <USkeleton v-for="n in 6" :key="n" class="h-12 w-full" />

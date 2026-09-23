@@ -5,6 +5,9 @@
  * Every list is rendered from `GET /browser-profiles/options` — the BO hard-codes no browser version, OS, WebRTC
  * mode, CPU or RAM value. While "Hardware noise" is off, Audio / CPU / RAM are disabled but keep their values
  * (the API stores them so re-enabling the switch restores the choice — spec assumption A4).
+ * FEAT-007 — the "AdsPower group" field is now two read-only values: Group (= `group.name`, or the literal
+ * "Ungrouped" when null) and Tag (= `group.tag`, the caller's username, rendered as a badge). The FEAT-006
+ * "Will be created on first profile" / "Exists" badge is removed — there is no per-admin group left to create.
  */
 import type { SelectMenuItem } from '@nuxt/ui'
 import type { ProfileDefaultsGroup, ProfileOptions } from '#shared/types/browser-profiles'
@@ -16,7 +19,7 @@ const props = defineProps<{
   options: ProfileOptions | null
   /** "No proxy" + the proxies grouped by workspace (built by `useProfileSettings`) */
   proxyItems: SelectMenuItem[]
-  /** AdsPower group of the admin (= username) + whether it exists already */
+  /** the one configured AdsPower group (or null = Ungrouped) + the caller's display-only tag */
   group: ProfileDefaultsGroup | null
   disabled?: boolean
 }>()
@@ -47,7 +50,6 @@ const versionItems = computed(() =>
 
 const noiseOff = computed(() => !model.value.noise)
 const subDisabled = computed(() => props.disabled || noiseOff.value)
-const groupExists = computed(() => !!props.group?.providerGroupId)
 </script>
 
 <template>
@@ -150,15 +152,20 @@ const groupExists = computed(() => !!props.group?.providerGroupId)
 
     <UFormField label="AdsPower group" :name="`${testIdPrefix}-group`">
       <div class="flex flex-wrap items-center gap-2">
-        <span class="font-medium text-highlighted" :data-testid="`${testIdPrefix}-group`">{{ group?.name ?? '—' }}</span>
+        <span
+          class="font-medium"
+          :class="group?.name ? 'text-highlighted' : 'text-muted'"
+          :data-testid="`${testIdPrefix}-group`"
+        >{{ group?.name ?? 'Ungrouped' }}</span>
         <UBadge
-          :color="groupExists ? 'success' : 'neutral'"
+          color="neutral"
           variant="subtle"
+          icon="i-lucide-tag"
           class="whitespace-nowrap"
-          :data-testid="`${testIdPrefix}-group-badge`"
-          :data-exists="groupExists ? 'true' : 'false'"
+          :data-testid="`${testIdPrefix}-tag`"
+          :data-tag="group?.tag ?? ''"
         >
-          {{ groupExists ? 'Exists' : 'Will be created on first profile' }}
+          {{ group?.tag ?? '—' }}
         </UBadge>
       </div>
     </UFormField>

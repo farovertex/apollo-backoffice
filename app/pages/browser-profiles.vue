@@ -9,6 +9,8 @@
  * (`BrowserProfilesDefaultsSlideover`) and "Create profile" (`BrowserProfilesCreateModal`, one extra
  * `GET …/available` after a 201); the Proxy column prefers `proxyRef.label` over the FEAT-002 provider snapshot and
  * rows created from the BO carry a fingerprint icon.
+ * FEAT-007: every item gains `tags` (display only, from the AdsPower `remark`) — the Group column shows one small
+ * badge per tag next to the group name; tags are never part of the client-side search or the group filter.
  */
 import type { TableColumn } from '@nuxt/ui'
 import { getPaginationRowModel } from '@tanstack/table-core'
@@ -174,7 +176,24 @@ const columns: TableColumn<AvailableProfile>[] = [
     accessorKey: 'groupName',
     header: 'Group',
     enableSorting: false,
-    cell: ({ row }) => row.original.groupName ?? '—'
+    // FEAT-007: the group text is followed by one small badge per tag (display only — not searched/filtered)
+    cell: ({ row }) => {
+      const tags = row.original.tags
+      const children = [h('span', {}, row.original.groupName ?? '—')]
+      if (tags.length) {
+        children.push(h('span', { 'class': 'flex flex-wrap items-center gap-1', 'data-testid': 'bp-tags' },
+          tags.map(tag => h(UBadge, {
+            'key': tag,
+            'color': 'neutral',
+            'variant': 'subtle',
+            'icon': 'i-lucide-tag',
+            'class': 'whitespace-nowrap',
+            'data-testid': 'bp-tag',
+            'data-tag': tag
+          }, () => tag))))
+      }
+      return h('div', { class: 'flex flex-wrap items-center gap-1.5' }, children)
+    }
   },
   {
     id: 'proxy',
