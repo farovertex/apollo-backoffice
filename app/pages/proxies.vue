@@ -308,7 +308,7 @@ function onDeleted(_res: DeleteProxyResponse) {
                 data-testid="px-row"
               >
                 <td class="border-b border-default px-3 py-2">
-                  <span class="font-medium text-highlighted" data-testid="px-label">{{ proxy.label }}</span>
+                  <span class="font-medium whitespace-nowrap text-highlighted" data-testid="px-label">{{ proxy.label }}</span>
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <UBadge

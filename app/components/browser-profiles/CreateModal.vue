@@ -12,7 +12,7 @@
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
-import type { FormSubmitEvent, ModalProps } from '@nuxt/ui'
+import type { Form, FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { CreatedProfile, CreateProfileBody, CreateProfileErrorBody } from '#shared/types/browser-profiles'
 
 const emit = defineEmits<{
@@ -37,6 +37,9 @@ const schema = z.object({
 })
 
 type Schema = z.output<typeof schema>
+
+// the Create button sits in the modal footer, outside the <form> → submit through the exposed api
+const formRef = useTemplateRef<Form<Schema>>('formRef')
 
 const state = reactive<{ name: string }>({ name: '' })
 const submitting = ref(false)
@@ -103,6 +106,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
       <UForm
         v-else
+        ref="formRef"
         :schema="schema"
         :state="state"
         class="space-y-4"
@@ -153,28 +157,32 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             />
           </template>
         </UAlert>
-
-        <div class="flex flex-wrap justify-end gap-2">
-          <UButton
-            label="Cancel"
-            color="neutral"
-            variant="subtle"
-            :disabled="submitting"
-            data-testid="bp-create-cancel"
-            @click="open = false"
-          />
-          <UButton
-            label="Create"
-            icon="i-lucide-plus"
-            color="primary"
-            variant="solid"
-            type="submit"
-            :disabled="!loaded"
-            :loading="submitting"
-            data-testid="bp-create-submit"
-          />
-        </div>
       </UForm>
+    </template>
+
+    <!-- the form is long: the actions live in the modal footer so they stay reachable while the body scrolls
+         (390x844 shows ~2/3 of the field set) -->
+    <template #footer>
+      <div class="flex w-full flex-wrap justify-end gap-2">
+        <UButton
+          label="Cancel"
+          color="neutral"
+          variant="subtle"
+          :disabled="submitting"
+          data-testid="bp-create-cancel"
+          @click="open = false"
+        />
+        <UButton
+          label="Create"
+          icon="i-lucide-plus"
+          color="primary"
+          variant="solid"
+          :disabled="!loaded"
+          :loading="submitting"
+          data-testid="bp-create-submit"
+          @click="formRef?.submit()"
+        />
+      </div>
     </template>
   </UModal>
 </template>

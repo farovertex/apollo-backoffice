@@ -152,7 +152,8 @@ export function useProfileSettings() {
       if (list) list.push(proxy)
       else groups.set(key, [proxy])
     }
-    const items: SelectMenuItem[] = [{ label: 'No proxy', value: NO_PROXY, icon: 'i-lucide-ban' }]
+    // the option texts are exactly "No proxy" and `<label> · <host>:<port>` (QA matches them literally)
+    const items: SelectMenuItem[] = [{ label: 'No proxy', value: NO_PROXY }]
     for (const [workspace, list] of groups) {
       items.push({ label: workspace, type: 'label' })
       for (const proxy of list) {

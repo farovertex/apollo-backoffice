@@ -11,7 +11,7 @@
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
-import type { FormSubmitEvent, ModalProps } from '@nuxt/ui'
+import type { Form, FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { CreateProxyBody, PatchProxyBody, Proxy, ProxyType } from '#shared/types/proxies'
 
@@ -106,6 +106,9 @@ function stateFrom(proxy: Proxy | null): FormState {
     note: proxy.note ?? ''
   }
 }
+
+// the submit button sits in the modal footer, outside the <form> → submit through the exposed api
+const formRef = useTemplateRef<Form<Schema>>('formRef')
 
 const state = reactive<FormState>(emptyState())
 const showPassword = ref(false)
@@ -235,6 +238,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
   >
     <template #body>
       <UForm
+        ref="formRef"
         :schema="schema"
         :state="state"
         class="space-y-4"
@@ -376,27 +380,30 @@ function errorState(e: unknown, fallback: string): { title: string, description?
           role="alert"
           data-testid="px-form-error"
         />
-
-        <div class="flex flex-wrap justify-end gap-2">
-          <UButton
-            label="Cancel"
-            color="neutral"
-            variant="subtle"
-            :disabled="submitting"
-            data-testid="px-form-cancel"
-            @click="open = false"
-          />
-          <UButton
-            :label="isEdit ? 'Save changes' : 'Add proxy'"
-            :icon="isEdit ? 'i-lucide-check' : 'i-lucide-plus'"
-            color="primary"
-            variant="solid"
-            type="submit"
-            :loading="submitting"
-            data-testid="px-form-submit"
-          />
-        </div>
       </UForm>
+    </template>
+
+    <!-- actions in the footer so they stay reachable while the body scrolls (390x844 with an error alert) -->
+    <template #footer>
+      <div class="flex w-full flex-wrap justify-end gap-2">
+        <UButton
+          label="Cancel"
+          color="neutral"
+          variant="subtle"
+          :disabled="submitting"
+          data-testid="px-form-cancel"
+          @click="open = false"
+        />
+        <UButton
+          :label="isEdit ? 'Save changes' : 'Add proxy'"
+          :icon="isEdit ? 'i-lucide-check' : 'i-lucide-plus'"
+          color="primary"
+          variant="solid"
+          :loading="submitting"
+          data-testid="px-form-submit"
+          @click="formRef?.submit()"
+        />
+      </div>
     </template>
   </UModal>
 </template>

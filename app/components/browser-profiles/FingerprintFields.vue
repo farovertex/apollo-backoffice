@@ -78,13 +78,14 @@ const groupExists = computed(() => !!props.group?.providerGroupId)
     </div>
 
     <UFormField label="Operating system" :name="`${testIdPrefix}-os`">
+      <!-- default variant on purpose: it renders `<label :for>` per option, so each `role=radio` keeps the option
+           value ("Windows" / "Mac OS X" / "Linux") as its accessible name -->
       <URadioGroup
         v-model="os"
         :items="options?.os ?? []"
         orientation="horizontal"
-        variant="card"
         :disabled="disabled"
-        :ui="{ fieldset: 'flex-wrap gap-2' }"
+        :ui="{ fieldset: 'flex-wrap gap-x-5 gap-y-2' }"
         :data-testid="`${testIdPrefix}-os`"
       />
     </UFormField>
