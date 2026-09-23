@@ -3,10 +3,20 @@ import type { NavigationMenuItem } from '@nuxt/ui'
 
 const route = useRoute()
 const toast = useToast()
+const auth = useAuth()
 
 const open = ref(false)
 
-const links = [[{
+/**
+ * FEAT-008 — display-only role filter for the nav (the API is the authority; a Payment-only admin that
+ * types the URL still gets the 403 state on the page). Items without a role rule are always visible.
+ */
+const isTemplateManager = computed(() => {
+  const roles = auth.admin.value?.roles ?? []
+  return roles.includes('GOD') || roles.includes('Admin')
+})
+
+const links = computed(() => [[{
   label: 'Home',
   icon: 'i-lucide-house',
   to: '/',
@@ -42,7 +52,18 @@ const links = [[{
   onSelect: () => {
     open.value = false
   }
-}, {
+}, ...(isTemplateManager.value
+  ? [{
+      // FEAT-008 — ad group templates (function 6.8), directly under TikTok accounts, above Proxies;
+      // hidden when the admin has neither GOD nor Admin (Payment-only)
+      label: 'Ad group templates',
+      icon: 'i-lucide-layout-template',
+      to: '/ad-group-templates',
+      onSelect: () => {
+        open.value = false
+      }
+    }]
+  : []), {
   // FEAT-006 — proxy list (function 2.9), directly under TikTok accounts; Settings stays last
   label: 'Proxies',
   icon: 'i-lucide-network',
@@ -92,12 +113,12 @@ const links = [[{
   icon: 'i-lucide-info',
   to: 'https://github.com/nuxt-ui-templates/dashboard',
   target: '_blank'
-}]] satisfies NavigationMenuItem[][]
+}]] satisfies NavigationMenuItem[][])
 
 const groups = computed(() => [{
   id: 'links',
   label: 'Go to',
-  items: links.flat()
+  items: links.value.flat()
 }, {
   id: 'code',
   label: 'Code',
