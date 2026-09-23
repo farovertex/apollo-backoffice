@@ -10,7 +10,7 @@
  *
  * The template's mock endpoints stay under /api/** (Nitro handlers); this prefix is reserved for apollo-api.
  */
-const FORWARDED_REQUEST_HEADERS = ['accept', 'accept-language', 'content-type', 'user-agent'] as const
+const FORWARDED_REQUEST_HEADERS = ['accept', 'accept-language', 'user-agent'] as const
 const NOT_PROXIED = new Set(['auth/login'])
 
 export default defineEventHandler(async (event) => {
@@ -26,12 +26,21 @@ export default defineEventHandler(async (event) => {
   const method = event.method
   const incoming = getRequestHeaders(event)
 
+  const body = method === 'GET' || method === 'HEAD'
+    ? undefined
+    : await readBody(event).catch(() => undefined)
+
   const headers: Record<string, string> = {}
   for (const name of FORWARDED_REQUEST_HEADERS) {
     const value = incoming[name]
     if (value) {
       headers[name] = value
     }
+  }
+  // `content-type` only travels with a body: Fastify answers 400 to a body-less request that still declares
+  // `application/json` (apollo-api FEAT-006 note) — DELETE /proxies/:id and DELETE /browser-profile-defaults/me
+  if (body !== undefined && incoming['content-type']) {
+    headers['content-type'] = incoming['content-type']
   }
   const ip = getRequestIP(event, { xForwardedFor: true })
   if (ip) {
@@ -40,10 +49,6 @@ export default defineEventHandler(async (event) => {
   if (session.data.token) {
     headers.authorization = `Bearer ${session.data.token}`
   }
-
-  const body = method === 'GET' || method === 'HEAD'
-    ? undefined
-    : await readBody(event).catch(() => undefined)
 
   try {
     const res = await $fetch.raw(path, {
