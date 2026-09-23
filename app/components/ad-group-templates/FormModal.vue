@@ -98,6 +98,28 @@ function localInputToIso(local: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString()
 }
 
+/**
+ * BUG-008 — the picker only has minute resolution, so rebuilding an ISO from it drops the seconds/milliseconds a
+ * stored value may carry (`new Date().toISOString()`). That made an untouched schedule look changed, which both
+ * broke "changed keys only" (AC-9) and made a template with a past start time unsavable (the API re-checks
+ * `startTime >= now` whenever `schedule` is sent).
+ * The instant the value came from is therefore kept and re-emitted **unchanged** while the picker still shows the
+ * same minute; only a real edit produces a new ISO.
+ */
+const originalTimes = reactive<{ startTime: string | null, endTime: string | null }>({ startTime: null, endTime: null })
+
+function rememberTimes(config: AdGroupConfig) {
+  const start = config.schedule?.startTime
+  originalTimes.startTime = typeof start === 'string' && start !== 'now' ? start : null
+  originalTimes.endTime = config.schedule?.mode === 'dateRange' ? config.schedule.endTime ?? null : null
+}
+
+/** the ISO to send for a picker value: the stored instant while the minute is unchanged, a fresh one otherwise */
+function isoFromPicker(local: string, original: string | null): string {
+  if (original && isoToLocalInput(original) === local) return original
+  return localInputToIso(local)
+}
+
 /** the config part of the state, from any `AdGroupConfig` (the system default on create, the row on edit) */
 function configStateFrom(config: AdGroupConfig): ConfigState {
   const named = config.dataConnection?.mode === 'named'
@@ -135,6 +157,7 @@ function configStateFrom(config: AdGroupConfig): ConfigState {
 
 function stateFrom(template: AdGroupTemplate | null): FormState {
   const config = template ? template.config : props.options.systemDefault
+  rememberTimes(config)
   return {
     name: template?.name ?? '',
     description: template?.description ?? '',
@@ -146,6 +169,22 @@ const state = reactive<FormState>(stateFrom(null))
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
 
+/**
+ * BUG-007 — errors that came from the API, by `UFormField` name. They are bound to each field's `error` prop
+ * instead of going through `UForm.setErrors()`, because `UForm` re-validates a field 300 ms after the last
+ * keystroke in it and that debounced pass overwrites anything `setErrors()` put there (submitting inside the
+ * window left the user with no message at all). Owning the state means no timing can drop it; it is cleared as
+ * soon as the user edits anything, and before every submit.
+ */
+const serverErrors = ref<Record<string, string>>({})
+
+function clearServerErrors() {
+  serverErrors.value = {}
+}
+
+// any edit invalidates what the server said about the form
+watch(state, clearServerErrors, { deep: true })
+
 // the submit button sits in the modal footer, outside the <form> → submit through the exposed api
 const formRef = useTemplateRef<Form<Schema>>('formRef')
 
@@ -153,6 +192,7 @@ function resetForm() {
   Object.assign(state, stateFrom(props.template))
   submitting.value = false
   submitError.value = null
+  clearServerErrors()
   formRef.value?.clear()
 }
 
@@ -162,8 +202,10 @@ watch(open, (isOpen) => {
 
 /** "Reset to TikTok defaults" — config controls only, name/description untouched, no request */
 function resetToDefaults() {
+  rememberTimes(props.options.systemDefault)
   state.config = configStateFrom(props.options.systemDefault)
   submitError.value = null
+  clearServerErrors()
   formRef.value?.clear()
 }
 
@@ -315,9 +357,12 @@ function configFromState(): AdGroupConfig {
     ? { mode: 'named', name: c.dataConnection.name.trim() }
     : { mode: 'first' }
 
-  const startTime = c.schedule.startMode === 'scheduled' ? localInputToIso(c.schedule.startTime) : 'now'
+  // BUG-008: an untouched picker re-emits the instant it was filled from, seconds included
+  const startTime = c.schedule.startMode === 'scheduled'
+    ? isoFromPicker(c.schedule.startTime, originalTimes.startTime)
+    : 'now'
   const schedule: AdGroupSchedule = c.schedule.mode === 'dateRange'
-    ? { mode: 'dateRange', startTime, endTime: localInputToIso(c.schedule.endTime) }
+    ? { mode: 'dateRange', startTime, endTime: isoFromPicker(c.schedule.endTime, originalTimes.endTime) }
     : { mode: 'continuous', startTime }
 
   const costCap = c.costCap.trim()
@@ -425,21 +470,17 @@ function showApiError(e: unknown, fallback: string) {
 
   // 409 duplicate name → always at the name field
   if (status === 409) {
-    formRef.value?.setErrors([{ name: 'name', message: data?.error ?? 'Name already used in this workspace' }])
+    serverErrors.value.name = data?.error ?? 'Name already used in this workspace'
     return
   }
 
   const issues = data?.issues ?? []
   if (issues.length) {
-    const matched: { name: string, message: string }[] = []
     const unmatched: { path: string, message: string }[] = []
     for (const issue of issues) {
       const name = resolveFieldName(issue.path)
-      if (name) matched.push({ name, message: issue.message })
+      if (name) serverErrors.value[name] = issue.message
       else unmatched.push(issue)
-    }
-    if (matched.length) {
-      formRef.value?.setErrors(matched)
     }
     if (unmatched.length) {
       submitError.value = {
@@ -457,6 +498,7 @@ function showApiError(e: unknown, fallback: string) {
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   submitError.value = null
+  clearServerErrors()
 
   const name = event.data.name
   const description = event.data.description === '' ? null : event.data.description
@@ -528,7 +570,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             กลุ่มโฆษณา
           </h3>
 
-          <UFormField label="Name" name="name" required>
+          <UFormField
+            label="Name"
+            name="name"
+            required
+            :error="serverErrors['name']"
+          >
             <UInput
               v-model="state.name"
               placeholder="Sales TH default"
@@ -538,7 +585,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             />
           </UFormField>
 
-          <UFormField label="Description" name="description" hint="Optional">
+          <UFormField
+            label="Description"
+            name="description"
+            hint="Optional"
+            :error="serverErrors['description']"
+          >
             <UTextarea
               v-model="state.description"
               :rows="2"
@@ -554,6 +606,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             name="config.adGroupNamePrefix"
             hint="Optional"
             help="Leave empty to let TikTok name the ad group automatically."
+            :error="serverErrors['config.adGroupNamePrefix']"
           >
             <UInput
               v-model="state.config.adGroupNamePrefix"
@@ -571,7 +624,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             ตำแหน่งการเพิ่มประสิทธิภาพ
           </h3>
 
-          <UFormField label="Placement" name="config.placement" required>
+          <UFormField
+            label="Placement"
+            name="config.placement"
+            required
+            :error="serverErrors['config.placement']"
+          >
             <URadioGroup
               v-model="state.config.placement"
               :items="options.placement"
@@ -582,7 +640,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             />
           </UFormField>
 
-          <UFormField label="Data connection" name="config.dataConnection.mode" required>
+          <UFormField
+            label="Data connection"
+            name="config.dataConnection.mode"
+            required
+            :error="serverErrors['config.dataConnection.mode']"
+          >
             <URadioGroup
               v-model="state.config.dataConnection.mode"
               :items="options.dataConnectionMode"
@@ -598,6 +661,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             label="Connection name"
             name="config.dataConnection.name"
             required
+            :error="serverErrors['config.dataConnection.name']"
           >
             <UInput
               v-model="state.config.dataConnection.name"
@@ -608,7 +672,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             />
           </UFormField>
 
-          <UFormField label="Optimization event" name="config.optimizationEvent" required>
+          <UFormField
+            label="Optimization event"
+            name="config.optimizationEvent"
+            required
+            :error="serverErrors['config.optimizationEvent']"
+          >
             <USelect
               v-model="state.config.optimizationEvent"
               :items="options.optimizationEvent"
@@ -626,7 +695,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             การกำหนดเป้าหมายผู้ชม
           </h3>
 
-          <UFormField label="Locations" name="config.locations" required>
+          <UFormField
+            label="Locations"
+            name="config.locations"
+            required
+            :error="serverErrors['config.locations']"
+          >
             <USelectMenu
               v-model="state.config.locations"
               multiple
@@ -643,6 +717,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             label="Age"
             name="config.ageGroups"
             :help="state.config.ageGroups.length === 0 ? options.ageGroupsUnlimitedLabel : undefined"
+            :error="serverErrors['config.ageGroups']"
           >
             <UCheckboxGroup
               v-model="state.config.ageGroups"
@@ -654,7 +729,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             />
           </UFormField>
 
-          <UFormField label="Gender" name="config.gender" required>
+          <UFormField
+            label="Gender"
+            name="config.gender"
+            required
+            :error="serverErrors['config.gender']"
+          >
             <URadioGroup
               v-model="state.config.gender"
               :items="options.gender"
@@ -673,7 +753,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </h3>
 
           <div class="grid gap-4 sm:grid-cols-3">
-            <UFormField label="Budget type" name="config.budget.type" required>
+            <UFormField
+              label="Budget type"
+              name="config.budget.type"
+              required
+              :error="serverErrors['config.budget.type']"
+            >
               <USelect
                 v-model="state.config.budget.type"
                 :items="options.budgetType"
@@ -688,6 +773,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               label="Amount"
               name="config.budget.amount"
               required
+              :error="serverErrors['config.budget.amount']"
             >
               <!-- text + inputmode instead of type="number": `1,5x` must reach the zod schema so the
                    "Amount must be a number" message can be shown -->
@@ -705,7 +791,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               </template>
             </UFormField>
 
-            <UFormField label="Currency" name="config.budget.currency" required>
+            <UFormField
+              label="Currency"
+              name="config.budget.currency"
+              required
+              :error="serverErrors['config.budget.currency']"
+            >
               <USelect
                 v-model="state.config.budget.currency"
                 :items="options.currency"
@@ -717,7 +808,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             </UFormField>
           </div>
 
-          <UFormField label="Schedule" name="config.schedule.mode" required>
+          <UFormField
+            label="Schedule"
+            name="config.schedule.mode"
+            required
+            :error="serverErrors['config.schedule.mode']"
+          >
             <URadioGroup
               v-model="state.config.schedule.mode"
               :items="options.scheduleMode"
@@ -727,7 +823,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             />
           </UFormField>
 
-          <UFormField label="Start" name="config.schedule.startMode" required>
+          <UFormField
+            label="Start"
+            name="config.schedule.startMode"
+            required
+            :error="serverErrors['config.schedule.startMode']"
+          >
             <URadioGroup
               v-model="state.config.schedule.startMode"
               :items="options.startTimeMode"
@@ -744,6 +845,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               label="Start time"
               name="config.schedule.startTime"
               required
+              :error="serverErrors['config.schedule.startTime']"
             >
               <UInput
                 v-model="state.config.schedule.startTime"
@@ -759,6 +861,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               label="End time"
               name="config.schedule.endTime"
               required
+              :error="serverErrors['config.schedule.endTime']"
             >
               <UInput
                 v-model="state.config.schedule.endTime"
@@ -771,7 +874,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
 
           <div class="grid gap-4 sm:grid-cols-2">
-            <UFormField label="Timezone" name="config.timezone" required>
+            <UFormField
+              label="Timezone"
+              name="config.timezone"
+              required
+              :error="serverErrors['config.timezone']"
+            >
               <USelect
                 v-model="state.config.timezone"
                 :items="options.timezone"
@@ -782,7 +890,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </UFormField>
 
-            <UFormField label="Dayparting" name="config.dayparting" required>
+            <UFormField
+              label="Dayparting"
+              name="config.dayparting"
+              required
+              :error="serverErrors['config.dayparting']"
+            >
               <URadioGroup
                 v-model="state.config.dayparting"
                 :items="options.dayparting"
@@ -802,7 +915,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </h3>
 
           <div class="grid gap-4 sm:grid-cols-2">
-            <UFormField label="Optimization goal" name="config.optimizationGoal" required>
+            <UFormField
+              label="Optimization goal"
+              name="config.optimizationGoal"
+              required
+              :error="serverErrors['config.optimizationGoal']"
+            >
               <USelect
                 v-model="state.config.optimizationGoal"
                 :items="options.optimizationGoal"
@@ -818,6 +936,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               name="config.costCap"
               hint="Optional"
               :help="costCapSuffix"
+              :error="serverErrors['config.costCap']"
             >
               <UInput
                 v-model="state.config.costCap"
