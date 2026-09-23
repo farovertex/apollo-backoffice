@@ -25,3 +25,6 @@ logs
 
 # VSC
 .history
+
+# personal scratch / manual test files (never read by agents, never committed) — AGENTS.md §5
+*.local.*
