@@ -1,11 +1,19 @@
 /**
- * FEAT-009 — one-shot "flash" message that survives a redirect, including an **SSR** redirect.
+ * FEAT-009 — the one-shot "Not allowed" message a redirecting middleware leaves behind, on both rendering paths.
  *
- * Why a cookie and not `useState`: a middleware that returns `navigateTo()` during the server render aborts that
- * render, so the payload (and `useCookie`, which only writes on the `app:rendered` hook) never reaches the
- * browser — the user would land on `/` with no explanation. A `Set-Cookie` written straight onto the response
- * event survives the 302, and a client-side navigation writes the same cookie through `document.cookie`.
- * `app/layouts/default.vue` takes and clears it on mount and on every route change and turns it into a toast.
+ * Two paths, because they have opposite constraints (BUG-009):
+ *  - **client navigation** — the layout and its toaster are already mounted, so `notifyRedirect()` adds the toast
+ *    straight away. No cookie is written, which is what makes a stale flash impossible: the previous version
+ *    round-tripped through the cookie and the layout only consumed it on mount / on a `route.fullPath` change, so a
+ *    redirect that lands back on the route the user is already on (`/` → `/admins` → `/`) consumed nothing and the
+ *    cookie then popped on the next page they opened.
+ *  - **server (direct URL load)** — a middleware that returns `navigateTo()` during the server render aborts that
+ *    render, so there is no toaster and no payload; `useCookie()` is useless too (it only flushes on the
+ *    `app:rendered` hook, which never runs). A `Set-Cookie` written straight onto the response event survives the
+ *    302, and `app/layouts/default.vue` turns it into the toast when the redirect target mounts.
+ *
+ * The layout consumes the cookie on mount **and** in `router.afterEach` (which also fires for a redirect to the
+ * current route), so whatever queued it, it is shown once and cleared once.
  */
 
 export const FLASH_COOKIE = 'bo-flash'
@@ -18,13 +26,29 @@ export interface FlashMessage {
   color?: 'error' | 'warning' | 'success' | 'info' | 'neutral'
 }
 
-function cookieValue(message: FlashMessage): string {
-  return `${FLASH_COOKIE}=${encodeURIComponent(JSON.stringify(message))}; Path=/; Max-Age=${FLASH_MAX_AGE}; SameSite=Lax`
+/**
+ * Tell the user why they were redirected: toast now on the client, `Set-Cookie` for the server render.
+ * Call it right before `return navigateTo(...)` in a middleware.
+ */
+export function notifyRedirect(message: FlashMessage): void {
+  if (import.meta.client) {
+    // middleware runs inside the Nuxt app context, so the app-level toast state is reachable from here
+    useToast().add({
+      title: message.title,
+      description: message.description,
+      color: message.color ?? 'info'
+    })
+    return
+  }
+  setFlash(message)
 }
 
-/** Queue a message for the next page the user lands on. Safe to call on the server and on the client. */
+/**
+ * Queue a message for the page the browser lands on next.
+ * Server-side this is the only way to carry it across the redirect; on the client prefer `notifyRedirect()`.
+ */
 export function setFlash(message: FlashMessage): void {
-  const cookie = cookieValue(message)
+  const cookie = `${FLASH_COOKIE}=${encodeURIComponent(JSON.stringify(message))}; Path=/; Max-Age=${FLASH_MAX_AGE}; SameSite=Lax`
 
   if (import.meta.client) {
     document.cookie = cookie
