@@ -16,6 +16,12 @@ const isTemplateManager = computed(() => {
   return roles.includes('GOD') || roles.includes('Admin')
 })
 
+/**
+ * FEAT-009 — same display-only filter for the GOD-only Admin Management item; `middleware/god-only.ts` and the
+ * API's `@Roles('GOD')` are what actually protect the page.
+ */
+const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
+
 const links = computed(() => [[{
   label: 'Home',
   icon: 'i-lucide-house',
@@ -71,7 +77,17 @@ const links = computed(() => [[{
   onSelect: () => {
     open.value = false
   }
-}, {
+}, ...(isGod.value
+  ? [{
+      // FEAT-009 — Admin Management (functions 0.2–0.5), after Proxies; GOD only, Settings stays last
+      label: 'Admin Management',
+      icon: 'i-lucide-shield-check',
+      to: '/admins',
+      onSelect: () => {
+        open.value = false
+      }
+    }]
+  : []), {
   label: 'Settings',
   to: '/settings',
   icon: 'i-lucide-settings',
@@ -131,7 +147,22 @@ const groups = computed(() => [{
   }]
 }])
 
+/**
+ * FEAT-009 — one-shot flash messages (`app/utils/flash.ts`). A middleware that redirects can leave a message in
+ * the `bo-flash` cookie; it is shown once here and cleared. Checked on mount (direct URL load → SSR redirect →
+ * fresh page) and after every navigation (client-side redirect → this layout is already mounted).
+ */
+function showFlash() {
+  const flash = takeFlash()
+  if (!flash) return
+  toast.add({ title: flash.title, description: flash.description, color: flash.color ?? 'info' })
+}
+
+watch(() => route.fullPath, () => showFlash())
+
 onMounted(async () => {
+  showFlash()
+
   const cookie = useCookie('cookie-consent')
   if (cookie.value === 'accepted') {
     return
