@@ -115,10 +115,12 @@ export function filterSortAdmins(rows: AdminListItem[], query: AdminListQuery): 
   })
 }
 
-/** `4 admins` / `1 of 4 admins` — the count line of the page header */
+/**
+ * `4 admins` / `1 of 4 admins` — the count line of the page header.
+ * The noun is always plural (spec.md "UI behaviour" / qa.md expectation 7), including `1 admins`.
+ */
 export function adminCountLabel(shown: number, total: number, filtered: boolean): string {
-  const noun = total === 1 ? 'admin' : 'admins'
-  return filtered ? `${shown} of ${total} ${noun}` : `${total} ${noun}`
+  return filtered ? `${shown} of ${total} admins` : `${total} admins`
 }
 
 const PASSWORD_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
