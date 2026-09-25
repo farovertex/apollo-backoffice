@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * FEAT-008 + FEAT-011 — Create / Edit ad group template (function 6.8; api-contract.md **v2**
+ * FEAT-008 + FEAT-011 + FEAT-013 — Create / Edit ad group template (function 6.8; api-contract.md **v2.2**
  * `POST /ad-group-templates`, `PATCH /ad-group-templates/:id`).
  *
  * One component for both modes: `template === null` → create (`POST` with a **complete 19-key** config prefilled
@@ -8,22 +8,33 @@
  * changed top-level `config` key is sent whole — assumption A3).
  *
  * Every select / radio / checkbox list is built from `options` (`{ value, label }`), so no enum label is
- * hard-coded in the BO (the six section headings and the min-budget wording are the only Thai strings here).
+ * hard-coded in the BO (the five section headings, the advanced sub-heading and the min-budget wording are the only
+ * Thai strings here).
  * The form state mirrors the API body (`name`, `description`, `config.*`), which makes a zod issue path and an API
  * `issues[].path` land on the same `UFormField` name (`config.budget.amount`, `config.interests`, …).
  * `config.schedule.startMode` is the only UI-only key: it decides whether `startTime` is the literal `'now'` or
  * the ISO value of the `datetime-local` picker (assumption A9, browser-local time).
  *
- * FEAT-011 layout: six sections in the TikTok page order as an **accordion**. `adgroup` is always open and has no
- * toggle; `placement` / `audience` / `budget` / `bidding` / `advanced` sit behind `agt-sec-<id>-toggle`, are
- * collapsed while every control in them equals `options.systemDefault` (badge `agt-sec-<id>-default` = `Default`,
- * live) and auto-expand when one of their fields carries a client or API error.
+ * Layout: **five** sections in the TikTok page order as an **accordion** (FEAT-013 removed the sixth, `advanced`).
+ * `adgroup` is always open and has no toggle; `placement` / `audience` / `budget` / `bidding` sit behind
+ * `agt-sec-<id>-toggle`, are collapsed while every control in them equals `options.systemDefault` (badge
+ * `agt-sec-<id>-default` = `Default`, live) and auto-expand when one of their fields carries a client or API error.
  * The collapsed body is hidden with `v-show` (never unmounted) so every value is still submitted and an error can
  * be rendered the moment its section opens — `UCollapsible`'s `unmountOnHide: false` only sets
  * `hidden="until-found"`, which is not reliably "hidden" for a test runner, and unmounting would drop the field an
  * error has to land on.
- * The tri-state advanced-placement toggles map `inherit ↔ null`, `on ↔ true`, `off ↔ false` (A3); the four
- * free-text lists are `UInputTags` validated against `options.listLimits`.
+ * The five tri-state advanced-placement toggles (`inherit ↔ null`, `on ↔ true`, `off ↔ false` — A3) now sit at the
+ * bottom of `bidding` under the sub-heading `agt-form-advanced-heading`; the two remaining free-text lists
+ * (`interests`, `languages`) are `UInputTags` validated against `options.listLimits`.
+ *
+ * FEAT-013 — what the form no longer shows (spec.md "UI behaviour", assumptions A4/A5):
+ * - `placement`: the `website` item of `options.placement` is filtered out (by **value**, never by index); a stored
+ *   `website` row keeps its value with no radio selected and only PATCHes `placement` when the user picks the
+ *   instant page.
+ * - **pass-through keys** `savedAudience` and `audiences`: read from the row (edit) or `options.systemDefault`
+ *   (create), sent unchanged in the POST body, never in a PATCH unless `Reset to TikTok defaults` changed them
+ *   (A8). No control edits them, they are not part of any section's badge keys, they have no client validation, and
+ *   an API issue at `config.savedAudience.*` / `config.audiences.*` lands in `agt-form-error`.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -91,8 +102,9 @@ interface ConfigState {
   dayparting: string
   optimizationGoal: string
   costCap: string
-  /** v2 — `name` is kept while `mode === 'none'` so switching back restores what was typed */
+  /** v2, FEAT-013 pass-through: no control edits it; kept as read so the POST/PATCH round-trip is lossless */
   savedAudience: { mode: string, name: string }
+  /** v2, FEAT-013 pass-through (see `savedAudience`) */
   audiences: { include: string[], exclude: string[] }
   interests: string[]
   languages: string[]
@@ -266,12 +278,14 @@ function fieldError(name: string): string | undefined {
 // the submit button sits in the modal footer, outside the <form> → submit through the exposed api
 const formRef = useTemplateRef<Form<Schema>>('formRef')
 
-// ── accordion (six sections in the TikTok page order) ────────────────────────────────────────────────────────────────
-type SectionId = 'adgroup' | 'placement' | 'audience' | 'budget' | 'bidding' | 'advanced'
+// ── accordion (five sections in the TikTok page order) ───────────────────────────────────────────────────────────────
+type SectionId = 'adgroup' | 'placement' | 'audience' | 'budget' | 'bidding'
 
 /**
  * The collapsible sections and the `config` keys each one owns. The Thai heading is the section's TikTok title —
- * together with the min-budget hint the only Thai text the BO spells out itself.
+ * together with the advanced sub-heading and the min-budget hint the only Thai text the BO spells out itself.
+ * FEAT-013: `savedAudience` / `audiences` belong to no section (pass-through, never edited → never a badge reason)
+ * and `advancedPlacement` moved into `bidding` together with its five toggles.
  */
 const SECTIONS = [
   {
@@ -282,9 +296,7 @@ const SECTIONS = [
   {
     id: 'audience' as const,
     heading: 'การกำหนดเป้าหมายผู้ชม',
-    keys: [
-      'savedAudience', 'locations', 'ageGroups', 'gender', 'audiences', 'interests', 'languages', 'spendingPower'
-    ] as const
+    keys: ['locations', 'ageGroups', 'gender', 'interests', 'languages', 'spendingPower'] as const
   },
   {
     id: 'budget' as const,
@@ -294,14 +306,12 @@ const SECTIONS = [
   {
     id: 'bidding' as const,
     heading: 'การเสนอราคาและการเพิ่มประสิทธิภาพ',
-    keys: ['optimizationGoal', 'costCap'] as const
-  },
-  {
-    id: 'advanced' as const,
-    heading: 'ตำแหน่งโฆษณาที่เข้าเกณฑ์ › การตั้งค่าขั้นสูง',
-    keys: ['advancedPlacement'] as const
+    keys: ['optimizationGoal', 'costCap', 'advancedPlacement'] as const
   }
 ] satisfies readonly { id: SectionId, heading: string, keys: readonly (keyof AdGroupConfig)[] }[]
+
+/** FEAT-013 — the removed section's TikTok title, kept as the sub-heading of the toggles inside `bidding` (A9) */
+const ADVANCED_HEADING = 'ตำแหน่งโฆษณาที่เข้าเกณฑ์ › การตั้งค่าขั้นสูง'
 
 const COLLAPSIBLE_IDS = SECTIONS.map(section => section.id)
 
@@ -338,10 +348,12 @@ const showConnectionName = computed(() => state.config.dataConnection.mode === '
 const showStartTime = computed(() => state.config.schedule.startMode === 'scheduled')
 const showEndTime = computed(() => state.config.schedule.mode === 'dateRange')
 const isInstantPage = computed(() => state.config.placement === 'instantPage')
-const isSavedNamed = computed(() => state.config.savedAudience.mode === 'named')
-/** only for `named` — Lead ruling: an API issue at `config.savedAudience.name` while the control is hidden goes to
- *  the form alert (`agt-form-error`), it does not make the field appear */
-const showSavedName = computed(() => isSavedNamed.value)
+/**
+ * FEAT-013 — the `website` choice is hidden in the BO (the API still accepts and stores it, A4/A5). Filtered by
+ * **value**, never by index, so any other item `/options` serves still renders. A stored `website` row therefore
+ * shows no selected radio; its value is kept and only leaves the form when the user picks the instant page.
+ */
+const placementOptions = computed(() => (props.options.placement ?? []).filter(item => item.value !== 'website'))
 
 // ── "Default" badges (live) ──────────────────────────────────────────────────────────────────────────────────────────
 /** the config the current state would send — the single source for the badges and for the POST/PATCH bodies */
@@ -410,7 +422,7 @@ const costCapSuffix = computed(() =>
   `${state.config.budget.currency} / ${labelOf(props.options.optimizationGoal, state.config.optimizationGoal)}`
 )
 
-// ── tag inputs (`audiences.include` / `audiences.exclude` / `interests` / `languages`) ───────────────────────────────
+// ── tag inputs (`interests` / `languages` — FEAT-013 removed the two `audiences` lists) ──────────────────────────────
 const DEFAULT_LIST_LIMITS: AdGroupListLimits = { maxItems: 50, maxLength: 100 }
 /** the API's own numbers (A5) — never hard-coded when `/options` serves them */
 const listLimits = computed<AdGroupListLimits>(() => ({
@@ -424,8 +436,6 @@ const listLimits = computed<AdGroupListLimits>(() => ({
  * existing array in place would leave a rejected tag on screen.
  */
 const LIST_FIELDS = {
-  'config.audiences.include': (v: string[]) => { state.config.audiences.include = v },
-  'config.audiences.exclude': (v: string[]) => { state.config.audiences.exclude = v },
   'config.interests': (v: string[]) => { state.config.interests = v },
   'config.languages': (v: string[]) => { state.config.languages = v }
 } as const
@@ -504,14 +514,10 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
       dayparting: z.string().min(1, 'Dayparting is required'),
       optimizationGoal: z.string().min(1, 'Optimization goal is required'),
       costCap: z.string().trim(),
-      savedAudience: z.object({
-        mode: z.string().min(1, 'Saved audience is required'),
-        name: z.string().trim().max(limits.maxLength, `Name must be at most ${limits.maxLength} characters`)
-      }),
-      audiences: z.object({
-        include: z.array(z.string()),
-        exclude: z.array(z.string())
-      }),
+      // FEAT-013 pass-through: no control can produce a value, so nothing is validated client-side (an API issue at
+      // `config.savedAudience.*` / `config.audiences.*` goes to `agt-form-error`)
+      savedAudience: z.object({ mode: z.string(), name: z.string() }),
+      audiences: z.object({ include: z.array(z.string()), exclude: z.array(z.string()) }),
       interests: z.array(z.string()),
       languages: z.array(z.string()),
       spendingPower: z.string().min(1, 'Spending power is required'),
@@ -588,19 +594,10 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
       }
     }
 
-    // FEAT-011 — a named saved audience needs a name
-    if (data.config.savedAudience.mode === 'named' && data.config.savedAudience.name === '') {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['config', 'savedAudience', 'name'],
-        message: 'Saved audience name is required'
-      })
-    }
-
-    // FEAT-011 — the four free-text lists (the tag inputs already refuse these; zod is the backstop)
+    // FEAT-011 — the two free-text lists (the tag inputs already refuse these; zod is the backstop).
+    // FEAT-013 dropped the `savedAudience.name` rule and the `audiences.include / exclude` rules (count, length,
+    // duplicates, include∩exclude): those keys are pass-through, no control can make them invalid.
     const lists: { path: string[], items: string[] }[] = [
-      { path: ['config', 'audiences', 'include'], items: data.config.audiences.include },
-      { path: ['config', 'audiences', 'exclude'], items: data.config.audiences.exclude },
       { path: ['config', 'interests'], items: data.config.interests },
       { path: ['config', 'languages'], items: data.config.languages }
     ]
@@ -614,17 +611,6 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
       if (new Set(items).size !== items.length) {
         ctx.addIssue({ code: 'custom', path, message: 'Entries must be unique' })
       }
-    }
-
-    // FEAT-011 — the same name cannot be included and excluded (API path: config.audiences.exclude)
-    const included = new Set(data.config.audiences.include)
-    const both = data.config.audiences.exclude.filter(item => included.has(item))
-    if (both.length) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['config', 'audiences', 'exclude'],
-        message: `${both.join(', ')} cannot be included and excluded at the same time`
-      })
     }
   })
 }
@@ -654,8 +640,9 @@ function configFromState(): AdGroupConfig {
 
   const costCap = c.costCap.trim()
 
-  // hidden is not cleared: an `instantPage` placement / a named saved audience still sends the values below (A: the
-  // job decides what to use)
+  // hidden is not cleared: an `instantPage` placement still sends the website-only values below (the job decides
+  // what to use). FEAT-013 — `savedAudience` / `audiences` are pass-through: rebuilt exactly as they were read, so
+  // the diff never marks them changed unless `Reset to TikTok defaults` replaced them (A8).
   const savedAudience: AdGroupSavedAudience = c.savedAudience.mode === 'named'
     ? { mode: 'named', name: c.savedAudience.name.trim() }
     : { mode: 'none' }
@@ -756,9 +743,9 @@ function patchBodyFrom(original: AdGroupTemplate, name: string, description: str
 // ── API errors → the right field ─────────────────────────────────────────────────────────────────────────────────────
 /**
  * `UFormField` names an API issue can land on. Everything a collapsed section holds counts: the section is
- * expanded before the message is shown (a collapsed body is hidden, not unmounted). Only fields that do not exist at
- * all (`v-if`: connection name, start/end time, saved audience name) are left out, so their issue goes to the form
- * alert.
+ * expanded before the message is shown (a collapsed body is hidden, not unmounted). Fields that do not exist at
+ * all are left out, so their issue goes to the form alert: the `v-if` ones (connection name, start/end time) and,
+ * since FEAT-013, every path under the pass-through keys `config.savedAudience` / `config.audiences`.
  */
 const visibleFieldNames = computed(() => {
   const names = [
@@ -768,13 +755,11 @@ const visibleFieldNames = computed(() => {
     'config.budget.type', 'config.budget.amount', 'config.budget.currency',
     'config.schedule.mode', 'config.schedule.startMode',
     'config.timezone', 'config.dayparting', 'config.optimizationGoal', 'config.costCap',
-    'config.savedAudience.mode',
-    'config.audiences.include', 'config.audiences.exclude', 'config.interests', 'config.languages',
+    'config.interests', 'config.languages',
     'config.spendingPower',
     ...ADVANCED_KEYS.map(key => `config.advancedPlacement.${key}`)
   ]
   // rendered with `v-if`: while it does not exist, its issue belongs in the form alert (Lead ruling 2026-09-25)
-  if (showSavedName.value) names.push('config.savedAudience.name')
   if (showConnectionName.value) names.push('config.dataConnection.name')
   if (showStartTime.value) names.push('config.schedule.startTime')
   if (showEndTime.value) names.push('config.schedule.endTime')
@@ -784,9 +769,10 @@ const visibleFieldNames = computed(() => {
 /**
  * The `UFormField` an API issue belongs to, or `null` for the form-level alert.
  * Array-item paths are folded onto their field (`config.locations.0` → `config.locations`,
- * `config.interests.3` → `config.interests`, `config.audiences.include.0` → `config.audiences.include`), so an item
- * error lands on the control that owns the array. `catalogVersion` matches nothing (the BO never sends it) and goes
- * to `agt-form-error`, as does an empty path (empty PATCH body).
+ * `config.interests.3` → `config.interests`), so an item error lands on the control that owns the array.
+ * `catalogVersion` matches nothing (the BO never sends it) and goes to `agt-form-error`, as do the pass-through
+ * paths `config.savedAudience.name` / `config.audiences.include.0` (FEAT-013: no control owns them any more) and an
+ * empty path (empty PATCH body).
  */
 function resolveFieldName(path: string): string | null {
   let candidate = path
@@ -1011,9 +997,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               required
               :error="serverErrors['config.placement']"
             >
+              <!-- FEAT-013: `website` is filtered out; a stored `website` value shows no selected radio -->
               <URadioGroup
                 v-model="state.config.placement"
-                :items="options.placement"
+                :items="placementOptions"
                 value-key="value"
                 :disabled="submitting"
                 data-testid="agt-form-placement"
@@ -1115,187 +1102,110 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             class="mt-4 space-y-4"
             data-testid="agt-sec-audience"
           >
+            <!-- FEAT-013: saved audience (radio, name, hint) and the include/exclude lists are gone; the six
+                 targeting controls below are always visible, `savedAudience` / `audiences` are passed through -->
             <UFormField
-              label="Saved audience"
-              name="config.savedAudience.mode"
+              label="Locations"
+              name="config.locations"
               required
-              :error="serverErrors['config.savedAudience.mode']"
+              :error="serverErrors['config.locations']"
             >
-              <URadioGroup
-                v-model="state.config.savedAudience.mode"
-                :items="options.savedAudienceMode"
+              <USelectMenu
+                v-model="state.config.locations"
+                multiple
+                :items="options.locations"
+                value-key="value"
+                placeholder="Select at least one location"
+                class="w-full sm:max-w-xs"
+                :disabled="submitting"
+                data-testid="agt-form-locations"
+              />
+            </UFormField>
+
+            <UFormField
+              label="Age"
+              name="config.ageGroups"
+              :help="state.config.ageGroups.length === 0 ? options.ageGroupsUnlimitedLabel : undefined"
+              :error="serverErrors['config.ageGroups']"
+            >
+              <UCheckboxGroup
+                v-model="state.config.ageGroups"
+                :items="options.ageGroups"
                 value-key="value"
                 orientation="horizontal"
                 :disabled="submitting"
-                data-testid="agt-form-saved-mode"
+                data-testid="agt-form-ages"
               />
             </UFormField>
 
             <UFormField
-              v-if="showSavedName"
-              label="Saved audience name"
-              name="config.savedAudience.name"
+              label="Gender"
+              name="config.gender"
               required
-              :error="fieldError('config.savedAudience.name')"
+              :error="serverErrors['config.gender']"
             >
-              <UInput
-                v-model="state.config.savedAudience.name"
-                placeholder="VIP buyers"
-                class="w-full"
+              <URadioGroup
+                v-model="state.config.gender"
+                :items="options.gender"
+                value-key="value"
+                orientation="horizontal"
                 :disabled="submitting"
-                data-testid="agt-form-saved-name"
+                data-testid="agt-form-gender"
               />
             </UFormField>
 
-            <!-- a named saved audience wins on TikTok; the targeting below is kept and still sent -->
-            <p
-              v-if="isSavedNamed"
-              class="text-sm text-muted"
-              data-testid="agt-form-saved-hint"
+            <UFormField
+              label="Interests & behaviors"
+              name="config.interests"
+              hint="Optional"
+              :error="fieldError('config.interests')"
             >
-              The saved audience replaces the targeting below when the job runs
-            </p>
+              <!-- the test id lands on the inner `<input data-slot="input">` (UInputTags has
+                   inheritAttrs: false); the tags are `[data-slot="item"]` of its parent `[data-slot="root"]` -->
+              <UInputTags
+                :model-value="state.config.interests"
+                :duplicate="true"
+                placeholder="Add a category, press Enter"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="agt-form-interests"
+                @update:model-value="(v: string[]) => onTagsUpdate('config.interests', v)"
+              />
+            </UFormField>
 
-            <div v-show="!isSavedNamed" class="space-y-4" data-testid="agt-form-targeting">
-              <UFormField
-                label="Locations"
-                name="config.locations"
-                required
-                :error="serverErrors['config.locations']"
-              >
-                <USelectMenu
-                  v-model="state.config.locations"
-                  multiple
-                  :items="options.locations"
-                  value-key="value"
-                  placeholder="Select at least one location"
-                  class="w-full sm:max-w-xs"
-                  :disabled="submitting"
-                  data-testid="agt-form-locations"
-                />
-              </UFormField>
+            <UFormField
+              label="Languages"
+              name="config.languages"
+              hint="Optional"
+              :help="state.config.languages.length === 0 ? options.unlimitedLabel : undefined"
+              :error="fieldError('config.languages')"
+            >
+              <UInputTags
+                :model-value="state.config.languages"
+                :duplicate="true"
+                placeholder="Add a language, press Enter"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="agt-form-languages"
+                @update:model-value="(v: string[]) => onTagsUpdate('config.languages', v)"
+              />
+            </UFormField>
 
-              <UFormField
-                label="Age"
-                name="config.ageGroups"
-                :help="state.config.ageGroups.length === 0 ? options.ageGroupsUnlimitedLabel : undefined"
-                :error="serverErrors['config.ageGroups']"
-              >
-                <UCheckboxGroup
-                  v-model="state.config.ageGroups"
-                  :items="options.ageGroups"
-                  value-key="value"
-                  orientation="horizontal"
-                  :disabled="submitting"
-                  data-testid="agt-form-ages"
-                />
-              </UFormField>
-
-              <UFormField
-                label="Gender"
-                name="config.gender"
-                required
-                :error="serverErrors['config.gender']"
-              >
-                <URadioGroup
-                  v-model="state.config.gender"
-                  :items="options.gender"
-                  value-key="value"
-                  orientation="horizontal"
-                  :disabled="submitting"
-                  data-testid="agt-form-gender"
-                />
-              </UFormField>
-
-              <div class="grid gap-4 sm:grid-cols-2">
-                <UFormField
-                  label="Include audiences"
-                  name="config.audiences.include"
-                  hint="Optional"
-                  :error="fieldError('config.audiences.include')"
-                >
-                  <!-- the test id lands on the inner `<input data-slot="input">` (UInputTags has
-                       inheritAttrs: false); the tags are `[data-slot="item"]` of its parent `[data-slot="root"]` -->
-                  <UInputTags
-                    :model-value="state.config.audiences.include"
-                    :duplicate="true"
-                    placeholder="Add a name, press Enter"
-                    class="w-full"
-                    :disabled="submitting"
-                    data-testid="agt-form-aud-include"
-                    @update:model-value="(v: string[]) => onTagsUpdate('config.audiences.include', v)"
-                  />
-                </UFormField>
-
-                <UFormField
-                  label="Exclude audiences"
-                  name="config.audiences.exclude"
-                  hint="Optional"
-                  :error="fieldError('config.audiences.exclude')"
-                >
-                  <UInputTags
-                    :model-value="state.config.audiences.exclude"
-                    :duplicate="true"
-                    placeholder="Add a name, press Enter"
-                    class="w-full"
-                    :disabled="submitting"
-                    data-testid="agt-form-aud-exclude"
-                    @update:model-value="(v: string[]) => onTagsUpdate('config.audiences.exclude', v)"
-                  />
-                </UFormField>
-              </div>
-
-              <UFormField
-                label="Interests & behaviors"
-                name="config.interests"
-                hint="Optional"
-                :error="fieldError('config.interests')"
-              >
-                <UInputTags
-                  :model-value="state.config.interests"
-                  :duplicate="true"
-                  placeholder="Add a category, press Enter"
-                  class="w-full"
-                  :disabled="submitting"
-                  data-testid="agt-form-interests"
-                  @update:model-value="(v: string[]) => onTagsUpdate('config.interests', v)"
-                />
-              </UFormField>
-
-              <UFormField
-                label="Languages"
-                name="config.languages"
-                hint="Optional"
-                :help="state.config.languages.length === 0 ? options.unlimitedLabel : undefined"
-                :error="fieldError('config.languages')"
-              >
-                <UInputTags
-                  :model-value="state.config.languages"
-                  :duplicate="true"
-                  placeholder="Add a language, press Enter"
-                  class="w-full"
-                  :disabled="submitting"
-                  data-testid="agt-form-languages"
-                  @update:model-value="(v: string[]) => onTagsUpdate('config.languages', v)"
-                />
-              </UFormField>
-
-              <UFormField
-                label="Spending power"
-                name="config.spendingPower"
-                required
-                :error="serverErrors['config.spendingPower']"
-              >
-                <URadioGroup
-                  v-model="state.config.spendingPower"
-                  :items="options.spendingPower"
-                  value-key="value"
-                  orientation="horizontal"
-                  :disabled="submitting"
-                  data-testid="agt-form-spending"
-                />
-              </UFormField>
-            </div>
+            <UFormField
+              label="Spending power"
+              name="config.spendingPower"
+              required
+              :error="serverErrors['config.spendingPower']"
+            >
+              <URadioGroup
+                v-model="state.config.spendingPower"
+                :items="options.spendingPower"
+                value-key="value"
+                orientation="horizontal"
+                :disabled="submitting"
+                data-testid="agt-form-spending"
+              />
+            </UFormField>
           </div>
         </section>
 
@@ -1559,43 +1469,15 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 />
               </UFormField>
             </div>
-          </div>
-        </section>
 
-        <!-- 6. eligible placements › advanced settings (five tri-state toggles) -->
-        <section class="border-t border-default pt-4">
-          <h3 class="text-sm font-semibold text-highlighted">
-            <button
-              type="button"
-              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
-              :aria-expanded="expanded.advanced"
-              aria-controls="agt-sec-advanced"
-              data-testid="agt-sec-advanced-toggle"
-              @click="toggleSection('advanced')"
+            <!-- FEAT-013: the former `advanced` section — five tri-state toggles under their TikTok sub-heading -->
+            <h4
+              class="border-t border-default pt-4 text-sm font-semibold text-highlighted"
+              data-testid="agt-form-advanced-heading"
             >
-              <UIcon
-                :name="expanded.advanced ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
-                class="size-4 shrink-0 text-muted"
-              />
-              <span>ตำแหน่งโฆษณาที่เข้าเกณฑ์ › การตั้งค่าขั้นสูง</span>
-              <UBadge
-                v-if="sectionIsDefault.advanced"
-                color="neutral"
-                variant="subtle"
-                size="sm"
-                data-testid="agt-sec-advanced-default"
-              >
-                Default
-              </UBadge>
-            </button>
-          </h3>
+              {{ ADVANCED_HEADING }}
+            </h4>
 
-          <div
-            v-show="expanded.advanced"
-            id="agt-sec-advanced"
-            class="mt-4 space-y-4"
-            data-testid="agt-sec-advanced"
-          >
             <UFormField
               v-for="item in options.advancedPlacementKey"
               :key="item.value"
@@ -1629,7 +1511,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       </UForm>
     </template>
 
-    <!-- actions in the footer so they stay reachable while the 6 sections scroll (390x844) -->
+    <!-- actions in the footer so they stay reachable while the 5 sections scroll (390x844) -->
     <template #footer>
       <div class="flex w-full flex-wrap items-center justify-end gap-2">
         <UButton
