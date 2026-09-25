@@ -62,6 +62,14 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-012 — ad templates (function 6.9), directly under Ad group templates; same role gate
+      label: 'Ad templates',
+      icon: 'i-lucide-clapperboard',
+      to: '/ad-templates',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), {
   // FEAT-006 — proxy list (function 2.9), directly under TikTok accounts; Settings stays last
