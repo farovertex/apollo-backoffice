@@ -241,7 +241,9 @@ function onDeleted() {
             data-testid="adt-refresh"
             @click="reload()"
           />
+          <!-- a Payment-only admin that typed the URL gets 403 on the list: no Create at all (spec "AC-8") -->
           <UButton
+            v-if="!forbidden"
             label="Create template"
             aria-label="Create template"
             icon="i-lucide-plus"
