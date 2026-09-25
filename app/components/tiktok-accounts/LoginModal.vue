@@ -226,7 +226,7 @@ watch(remainingSeconds, (s) => {
 const schema = z.object({
   otpInput: z.string({ error: 'Enter the code' })
     .trim()
-    .regex(/^\d{4,8}$/, 'Enter the 4 to 8 digit code')
+    .regex(/^[A-Za-z0-9]{4,8}$/, 'Enter the 4 to 8 character code (letters and digits)')
 })
 type Schema = z.output<typeof schema>
 
@@ -414,10 +414,9 @@ onUnmounted(() => {
               <UInput
                 v-model="otpForm.otpInput"
                 type="text"
-                inputmode="numeric"
                 autocomplete="one-time-code"
                 maxlength="8"
-                placeholder="4 to 8 digits"
+                placeholder="4 to 8 letters or digits"
                 icon="i-lucide-key-round"
                 class="w-full"
                 :disabled="submitting"
