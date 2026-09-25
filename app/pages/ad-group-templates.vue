@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * FEAT-008 — Ad group templates (function 6.8; api-contract.md v1 `GET/POST/PATCH/DELETE /ad-group-templates`).
+ * FEAT-008 + FEAT-011 — Ad group templates (function 6.8; api-contract.md **v2**
+ * `GET/POST/PATCH/DELETE /ad-group-templates`).
  *
  * Server-side list: exactly one `GET /backend/ad-group-templates?page=<n>&limit=20[&q=<q>]` per load / Refresh /
  * page change / 300 ms-debounced search / after create / edit / delete (`q` is omitted while the search box is
@@ -8,6 +9,9 @@
  * `GET /backend/ad-group-templates/options` is issued **once per page lifetime**; the form modal receives the
  * result as a prop and never re-fetches it. Every enum is rendered with the Thai label from that response —
  * the BO hard-codes no enum label.
+ * FEAT-011 adds two read-only columns: **Targeting** (the saved audience name, or `Custom` when the template
+ * uses its own targeting) and **Catalog** (the `v<N>` part of `catalogVersion`, `–` when the document predates
+ * FEAT-011), with an `Older catalog` badge whenever the row's version differs from the one `/options` announces.
  * A 403 on the list (a Payment-only admin that typed the URL) renders `agt-forbidden` with the API text; no
  * redirect, the sidebar item is hidden for that admin anyway (display-only, the API is the authority).
  * The table is plain markup (not `UTable`) so every `<tr>` can carry `data-id`.
@@ -168,6 +172,27 @@ function scheduleCell(template: AdGroupTemplate): string {
     ? labelOf(options.value?.startTimeMode, 'now')
     : shortDateTime(String(schedule.startTime))
   return `${mode} · ${start} → ${shortDateTime(schedule.endTime)}`
+}
+
+/** Targeting cell: the saved audience name when one is named, else the English word `Custom` (A8) */
+function targetingCell(template: AdGroupTemplate): string {
+  const saved = template.config?.savedAudience
+  return saved?.mode === 'named' ? saved.name : 'Custom'
+}
+
+/** Catalog cell: the part after `/` of `catalogVersion` (`v1`), `–` for a document written before FEAT-011 */
+function catalogCell(template: AdGroupTemplate): string {
+  const version = template.catalogVersion
+  if (!version) return '–'
+  return version.split('/')[1] ?? version
+}
+
+/** the row was authored against another catalog version than the one the API serves now (null included) */
+function isStaleCatalog(template: AdGroupTemplate): boolean {
+  const current = options.value?.catalogVersion
+  // without `/options` there is nothing to compare against — never cry wolf
+  if (!current) return false
+  return template.catalogVersion !== current
 }
 
 // row actions show their label only from `2xl` (1536 px); below that they are icon-only with a tooltip (FEAT-003)
@@ -356,6 +381,12 @@ function onDeleted() {
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Goal
                 </th>
+                <th class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  Targeting
+                </th>
+                <th class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  Catalog
+                </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Workspace
                 </th>
@@ -372,7 +403,7 @@ function onDeleted() {
             </thead>
             <tbody :class="pending ? 'opacity-60' : ''">
               <tr v-if="pending && items.length === 0" data-testid="agt-loading">
-                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="9">
+                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="11">
                   Loading templates…
                 </td>
               </tr>
@@ -406,6 +437,26 @@ function onDeleted() {
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <span class="whitespace-nowrap" data-testid="agt-goal">{{ labelOf(options?.optimizationGoal, template.config.optimizationGoal) }}</span>
+                </td>
+                <td class="border-b border-default px-2 py-2">
+                  <span class="line-clamp-2 max-w-32" :title="targetingCell(template)" data-testid="agt-targeting">{{ targetingCell(template) }}</span>
+                </td>
+                <td class="border-b border-default px-2 py-2">
+                  <!-- stacked: the badge under the version keeps the two new columns inside the 1440 table width -->
+                  <div class="flex flex-col items-start gap-1">
+                    <span class="whitespace-nowrap" data-testid="agt-catalog">{{ catalogCell(template) }}</span>
+                    <UBadge
+                      v-if="isStaleCatalog(template)"
+                      color="warning"
+                      variant="subtle"
+                      size="sm"
+                      icon="i-lucide-triangle-alert"
+                      class="whitespace-nowrap"
+                      data-testid="agt-catalog-stale"
+                    >
+                      Older catalog
+                    </UBadge>
+                  </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <UBadge
