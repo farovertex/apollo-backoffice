@@ -5,6 +5,8 @@
  * Raw Business Center ints/strings are stored as-is (`raw` is never returned); `status` is the only derived field:
  * `suspended` when `rejectReason` is non-empty or `showPunishLink`, otherwise `unknown` (no confirmed mapping to
  * `active` yet).
+ * FEAT-016 (api-contract.md v1 §1): the view gains `bcOrder`, the 0-based position of the advertiser in the
+ * Business Center list API, written by every successful discover run.
  */
 
 export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
@@ -42,6 +44,12 @@ export interface Advertiser {
   isSmb: boolean
   /** `account_relation_infos[account_id]` verbatim (upstream snake_case inside) */
   relationInfo: Record<string, unknown> | null
+  /**
+   * FEAT-016 — 0-based position in the Business Center list of the last discover round that saw the row
+   * ("BC order"); null for rows written before the field existed. Sort rule everywhere: `bcOrder` asc with
+   * nulls last, then `discoveredAt` asc, then `name`.
+   */
+  bcOrder: number | null
   /** ISO — first discover round that listed it */
   discoveredAt: string
   /** ISO — last discover round that listed it */

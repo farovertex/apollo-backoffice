@@ -70,6 +70,22 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-016 — launch ads (functions 6.2–6.4), directly under Ad templates; same role gate
+      label: 'Launch ads',
+      icon: 'i-lucide-rocket',
+      to: '/launch-ads',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
+      // FEAT-016 — campaign orders report (functions 6.5, 6.6); no badge here (no polling in the layout, A7)
+      label: 'Orders',
+      icon: 'i-lucide-list-checks',
+      to: '/orders',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), {
   // FEAT-006 — proxy list (function 2.9), directly under TikTok accounts; Settings stays last
