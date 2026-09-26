@@ -1160,9 +1160,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               hint="Optional"
               :error="fieldError('config.interests')"
             > -->
-              <!-- the test id lands on the inner `<input data-slot="input">` (UInputTags has
+            <!-- the test id lands on the inner `<input data-slot="input">` (UInputTags has
                    inheritAttrs: false); the tags are `[data-slot="item"]` of its parent `[data-slot="root"]` -->
-              <!-- <UInputTags
+            <!-- <UInputTags
                 :model-value="state.config.interests"
                 :duplicate="true"
                 placeholder="Add a category, press Enter"
