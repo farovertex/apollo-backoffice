@@ -592,6 +592,16 @@ function accountName(account: LaunchAccount): string {
   return account.label ?? account.loginEmail
 }
 
+/** the row's email line is dropped when the label already is the email (label null) */
+function accountEmail(account: LaunchAccount): string {
+  return account.label ? account.loginEmail : ''
+}
+
+function advertiserCountLabel(account: LaunchAccount): string {
+  const n = account.advertisers.length
+  return `${n} advertiser${n === 1 ? '' : 's'}`
+}
+
 const hasAccountSearch = computed(() => accountSearch.value.trim() !== '' || workspaceFilter.value !== 'all')
 const showAccountsEmpty = computed(() =>
   targetsLoaded.value && !targetsError.value && !forbidden.value && availableAccounts.value.length === 0
@@ -847,7 +857,7 @@ onUnmounted(() => {
                           <td class="border-b border-default px-3 py-2">
                             <div class="flex flex-col">
                               <span class="font-medium text-highlighted" data-testid="la-acc-name">{{ accountName(account) }}</span>
-                              <span class="text-xs text-muted">{{ account.loginEmail }}</span>
+                              <span v-if="accountEmail(account)" class="text-xs text-muted">{{ accountEmail(account) }}</span>
                             </div>
                           </td>
                           <td class="border-b border-default px-3 py-2">
@@ -882,7 +892,7 @@ onUnmounted(() => {
                           </td>
                           <td class="border-b border-default px-3 py-2 text-right">
                             <UButton
-                              :label="`${account.advertisers.length} advertisers`"
+                              :label="advertiserCountLabel(account)"
                               :icon="expanded.includes(account.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
                               color="neutral"
                               variant="ghost"
@@ -955,7 +965,7 @@ onUnmounted(() => {
                       class="flex flex-wrap items-center gap-2 rounded-lg border border-default px-3 py-2 text-sm"
                     >
                       <span class="font-medium text-highlighted">{{ accountName(account) }}</span>
-                      <span class="text-xs text-muted">{{ account.loginEmail }}</span>
+                      <span v-if="accountEmail(account)" class="text-xs text-muted">{{ accountEmail(account) }}</span>
                       <UBadge color="neutral" variant="outline" size="sm">
                         {{ account.workspace?.name ?? '—' }}
                       </UBadge>

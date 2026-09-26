@@ -33,8 +33,6 @@ const toast = useToast()
 
 const orderId = computed(() => String(route.params.id ?? ''))
 
-useSeoMeta({ title: () => order.value?.name ?? 'Order' })
-
 // ── data ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const order = ref<OrderDetail | null>(null)
 const builds = ref<BuildView[]>([])
@@ -46,6 +44,8 @@ const notFound = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 // bumped on every request so a late response (or a poll tick after unmount) is dropped
 let session = 0
+
+useSeoMeta({ title: () => order.value?.name ?? 'Order' })
 
 function apply(res: OrderDetailResponse) {
   order.value = res.order ?? null
@@ -267,9 +267,22 @@ function shortDateTime(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/**
+ * The current (or last) step of a build. `stepCount` is the API's own number of recorded steps — the total
+ * number of steps a build will have is not part of this contract, so the cell shows the name only and the
+ * count lives on the expander (see "Contract questions" in bo.md).
+ */
 function stepCell(build: BuildView): string {
-  if (!build.step) return '—'
-  return build.stepCount > 0 ? `${build.step} · ${build.steps.length}/${build.stepCount}` : build.step
+  return build.step ?? '—'
+}
+
+function stepCountOf(build: BuildView): number {
+  return build.stepCount || build.steps.length
+}
+
+function stepsLabel(build: BuildView): string {
+  const n = stepCountOf(build)
+  return `${n} step${n === 1 ? '' : 's'}`
 }
 
 const budgetText = computed(() =>
@@ -526,13 +539,13 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                     <td class="border-b border-default px-3 py-2">
                       <div class="flex flex-col">
                         <span class="font-medium text-highlighted">{{ build.account?.label ?? build.account?.loginEmail ?? '—' }}</span>
-                        <span class="text-xs text-muted">{{ build.account?.loginEmail ?? '' }}</span>
+                        <span v-if="build.account?.label" class="text-xs text-muted">{{ build.account.loginEmail }}</span>
                       </div>
                     </td>
                     <td class="border-b border-default px-3 py-2">
                       <div class="flex flex-col">
                         <span class="text-highlighted">{{ build.advertiser?.name ?? '—' }}</span>
-                        <span class="text-xs text-muted">{{ build.advertiser?.tiktokAdvertiserId ?? '' }}</span>
+                        <span v-if="build.advertiser" class="text-xs text-muted">{{ build.advertiser.tiktokAdvertiserId }}</span>
                       </div>
                     </td>
                     <td class="border-b border-default px-3 py-2">
@@ -605,7 +618,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                         />
                         <UButton
                           :icon="expanded.includes(build.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-                          :label="`${build.steps.length} steps`"
+                          :label="stepsLabel(build)"
                           color="neutral"
                           variant="ghost"
                           size="xs"
