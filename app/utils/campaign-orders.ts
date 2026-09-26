@@ -19,7 +19,7 @@ export const ORDER_STATUS_BADGE: Record<OrderStatus, StatusBadge> = {
   queued: { label: 'Queued', color: 'neutral' },
   running: { label: 'Running', color: 'info' },
   done: { label: 'Done', color: 'success' },
-  partialFailed: { label: 'Partly failed', color: 'warning' },
+  partialFailed: { label: 'Partial', color: 'warning' },
   failed: { label: 'Failed', color: 'error' },
   cancelled: { label: 'Cancelled', color: 'neutral' }
 }

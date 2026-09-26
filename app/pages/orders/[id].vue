@@ -214,8 +214,9 @@ async function runAction() {
     const current409 = err.data?.status
     const text = status === 409 && current409 ? `${message} (now: ${buildStatusBadge(current409).label})` : message
     confirmOpen.value = false
+    // the alert adds the build's current status; the toast keeps the API text verbatim
     actionError.value = text
-    toast.add({ title: 'Action refused', description: text, color: status === 409 ? 'warning' : 'error' })
+    toast.add({ title: 'Action refused', description: message, color: status === 409 ? 'warning' : 'error' })
     // the state the button was based on is stale — read it again
     if (status === 409) void load(true)
   } finally {
@@ -288,9 +289,12 @@ function stepsLabel(build: BuildView): string {
 const budgetText = computed(() =>
   order.value?.budget ? formatBudgetAmount(order.value.budget.amount, order.value.budget) : '—'
 )
-const capText = computed(() =>
-  order.value ? formatBudgetCap(order.value.budget, order.value.adGroupCopies, order.value.targetCount) : '—'
-)
+/** cap = budget × copies × builds (the build rows are the advertisers the order really runs on) */
+const capText = computed(() => {
+  const current = order.value
+  if (!current) return '—'
+  return formatBudgetCap(current.budget, current.adGroupCopies, builds.value.length || current.targetCount)
+})
 const modalContent = { 'data-testid': 'od-confirm' } as Record<string, string>
 const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
 </script>
@@ -442,7 +446,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                 Campaign
               </dt>
               <dd class="text-highlighted" data-testid="od-preset">
-                Sales · cashback offer → website conversions
+                Sales cashback → Website conversions
               </dd>
               <dt class="text-muted">
                 Ad group template
@@ -530,11 +534,14 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
               </thead>
               <tbody>
                 <template v-for="build in builds" :key="build.id">
+                  <!-- the whole row toggles its steps; the action buttons stop the click so they never expand it -->
                   <tr
                     :data-id="build.id"
                     :data-status="build.status"
                     data-slot="tr"
                     data-testid="od-build"
+                    class="cursor-pointer"
+                    @click="toggleExpanded(build.id)"
                   >
                     <td class="border-b border-default px-3 py-2">
                       <div class="flex flex-col">
@@ -604,7 +611,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                           variant="subtle"
                           size="xs"
                           data-testid="od-build-cancel"
-                          @click="askCancelBuild(build)"
+                          @click.stop="askCancelBuild(build)"
                         />
                         <UButton
                           v-if="canStopBuild(build)"
@@ -614,7 +621,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                           variant="subtle"
                           size="xs"
                           data-testid="od-build-stop"
-                          @click="askStopBuild(build)"
+                          @click.stop="askStopBuild(build)"
                         />
                         <UButton
                           :icon="expanded.includes(build.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
@@ -623,7 +630,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                           variant="ghost"
                           size="xs"
                           data-testid="od-build-expand"
-                          @click="toggleExpanded(build.id)"
+                          @click.stop="toggleExpanded(build.id)"
                         />
                       </div>
                     </td>

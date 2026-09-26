@@ -1000,14 +1000,14 @@ onUnmounted(() => {
                     <dt class="text-muted">
                       Objective
                     </dt>
-                    <dd class="text-highlighted">
-                      Sales · cashback offer
+                    <dd class="text-highlighted" data-testid="la-campaign-objective">
+                      Sales cashback
                     </dd>
                     <dt class="text-muted">
                       Destination
                     </dt>
-                    <dd class="text-highlighted">
-                      Website · website conversions
+                    <dd class="text-highlighted" data-testid="la-campaign-destination">
+                      Website conversions
                     </dd>
                     <dt class="text-muted">
                       Campaign name
@@ -1222,8 +1222,8 @@ onUnmounted(() => {
                     <dt class="text-muted">
                       Campaign
                     </dt>
-                    <dd class="text-highlighted">
-                      Sales · cashback offer → website conversions
+                    <dd class="text-highlighted" data-testid="la-review-campaign">
+                      Sales cashback → Website conversions
                     </dd>
                     <dt class="text-muted">
                       Ad group template

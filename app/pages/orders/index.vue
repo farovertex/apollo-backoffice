@@ -37,7 +37,7 @@ const statusItems: { label: string, value: 'all' | OrderStatus }[] = [
   { label: 'Queued', value: 'queued' },
   { label: 'Running', value: 'running' },
   { label: 'Done', value: 'done' },
-  { label: 'Partly failed', value: 'partialFailed' },
+  { label: 'Partial', value: 'partialFailed' },
   { label: 'Failed', value: 'failed' },
   { label: 'Cancelled', value: 'cancelled' }
 ]
