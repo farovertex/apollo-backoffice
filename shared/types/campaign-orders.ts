@@ -138,7 +138,11 @@ export interface OrderDetail extends OrderView {
   adConfig: AdConfigSnapshot
 }
 
-/** One entry of `builds[].steps` — written by the future build worker (empty in this feature). */
+/**
+ * One entry of `builds[].steps` — written by the build worker (FEAT-017).
+ * `screenshotUrl` is **API-relative** (`/builds/<buildId>/screenshots/<no>`), so the BO passes it to
+ * `useApi()` unchanged and the proxy prefix `/backend` is added by the client.
+ */
 export interface BuildStep {
   no: number
   name: string
@@ -146,6 +150,15 @@ export interface BuildStep {
   message: string | null
   screenshotUrl: string | null
   at: string
+}
+
+/**
+ * `GET /builds/:id/screenshots/:no` 200 body (FEAT-017 api-contract §6) — the PNG inline, base64 without a
+ * data-URI prefix. 404 `{ error: 'ไม่พบ screenshot' }` when the step has none or the file is gone.
+ */
+export interface BuildScreenshotResponse {
+  mimeType: string
+  base64: string
 }
 
 /** api-contract §6 "BuildView" — one build = one advertiser of the order. */

@@ -30,54 +30,97 @@ export type AdDestinationMode = 'instantPage'
  * One call-to-action in the Ads Manager tree. Stored key is stable; the BO shows the Thai `label`
  * from `/options`. The runner clicks the tree node id that the key maps to.
  */
-export type AdCtaValue =
-  | 'applyNow'
-  | 'interested'
-  | 'visitStore'
-  | 'watchNow'
-  | 'register'
-  | 'orderNow'
-  | 'checkItOut'
-  | 'viewNow'
-  | 'readMore'
-  | 'learnMore'
-  | 'download'
-  | 'shopNow'
-  | 'contactUs'
-  | 'bookNow'
-  | 'playGame'
-  | 'getQuote'
-  | 'installNow'
-  | 'getShowtimes'
-  | 'listenNow'
-  | 'subscribe'
-  | 'getTickets'
-  | 'experienceNow'
-  | 'preorderNow'
-  | 'donateNow'
+export type AdCtaValue
+  = | 'applyNow'
+    | 'interested'
+    | 'visitStore'
+    | 'watchNow'
+    | 'register'
+    | 'orderNow'
+    | 'checkItOut'
+    | 'viewNow'
+    | 'readMore'
+    | 'learnMore'
+    | 'download'
+    | 'shopNow'
+    | 'contactUs'
+    | 'bookNow'
+    | 'playGame'
+    | 'getQuote'
+    | 'installNow'
+    | 'getShowtimes'
+    | 'listenNow'
+    | 'subscribe'
+    | 'getTickets'
+    | 'experienceNow'
+    | 'preorderNow'
+    | 'donateNow'
 export type AdSelectionMode = 'first' | 'named'
+
+/** FEAT-017 — `destination.page.tone` of the new instant page (labels from `/options.instantPageTone`). */
+export type AdInstantPageTone = 'light' | 'dark' | 'custom'
+/** FEAT-017 — `destination.page.language` of the new instant page (labels from `/options.instantPageLanguage`). */
+export type AdInstantPageLanguage = 'th' | 'en'
 
 /** `allowOnTiktokPlatforms`: `null` = leave TikTok's own default (spec Q7, same shape as FEAT-011 A3). */
 export type TriState = boolean | null
 
-/** `config.identity.post` — discriminated union, strict on the API side; `text` trim 1..100. */
+/**
+ * `config.identity.post` **as sent to the API** (FEAT-017 api-contract §2.1, §2.4) — discriminated union,
+ * strict on the API side.
+ * - `first` / `named` are legacy: still storable, still returned for existing templates, but the form no
+ *   longer offers them (a build with them fails at `checking`).
+ * - `authCode` carries the **secret** Spark authorization code (trim 1..500). On `POST` the `code` is
+ *   required; on `PATCH` sending `{ selection: 'authCode' }` **without** `code` keeps the stored one.
+ *   The masked view keys (`hasCode`, `codeLast4`) are never sent back (the API is strict).
+ */
 export type AdPostSelection
   = | { selection: 'first' }
     | { selection: 'named', text: string }
+    | { selection: 'authCode', code?: string }
 
-/** `config.destination.page` — discriminated union, strict on the API side; `name` trim 1..100. */
+/**
+ * `config.identity.post` **as served by the API** (FEAT-017 api-contract §2.3): the code itself never leaves
+ * the API. `codeLast4` = last 4 characters of the stored code, `null` when it is shorter than 5 characters.
+ */
+export type AdPostSelectionView
+  = | { selection: 'first' }
+    | { selection: 'named', text: string }
+    | { selection: 'authCode', hasCode: boolean, codeLast4: string | null }
+
+/**
+ * `config.destination.page` — discriminated union, strict on the API side; `name` trim 1..100.
+ * `create` (FEAT-017 api-contract §2.2) describes the instant page the build **creates**: `buttonText`
+ * trim 1..`limits.textMaxLength`, `url` `https://` only ≤ `limits.urlMaxLength`.
+ * `first` / `named` are legacy (see `AdPostSelection`).
+ */
 export type AdPageSelection
   = | { selection: 'first' }
     | { selection: 'named', name: string }
+    | {
+      selection: 'create'
+      buttonText: string
+      url: string
+      tone: AdInstantPageTone
+      language: AdInstantPageLanguage
+      showHandCursor: boolean
+    }
 
-/** `config.identity` — Spark Ads on the authorized-posts tab, plus which post to pick. */
+/** `config.identity` as served by the API — Spark Ads on the authorized-posts tab, plus which post to pick. */
 export interface AdIdentity {
+  mode: AdIdentityMode
+  source: AdIdentitySource
+  post: AdPostSelectionView
+}
+
+/** `config.identity` as sent to the API (the `authCode` request shape instead of the masked view). */
+export interface AdIdentityRequest {
   mode: AdIdentityMode
   source: AdIdentitySource
   post: AdPostSelection
 }
 
-/** `config.destination` — an instant page from the library, plus which page to pick. */
+/** `config.destination` — the instant page the ad points at (library page or a newly created one). */
 export interface AdDestination {
   mode: AdDestinationMode
   page: AdPageSelection
@@ -94,7 +137,10 @@ export interface AdTracking {
   clickUrl: string | null
 }
 
-/** The 6 config keys of an ad template (strict on the API side, in `CONFIG_KEYS` order). */
+/**
+ * The 6 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
+ * `identity.post` is the masked view (`AdPostSelectionView`) — the Spark code is never in a response.
+ */
 export interface AdConfig {
   /** null = let TikTok auto-name the ad; the job appends the date to the prefix */
   adNamePrefix: string | null
@@ -104,6 +150,11 @@ export interface AdConfig {
   allowOnTiktokPlatforms: TriState
   cta: AdCta
   tracking: AdTracking
+}
+
+/** The same 6 keys **as sent to the API** (`identity.post` carries the code, never `hasCode`/`codeLast4`). */
+export interface AdConfigRequest extends Omit<AdConfig, 'identity'> {
+  identity: AdIdentityRequest
 }
 
 /** Exact key set of the API's template view (`catalogVersion` after `config`). */
@@ -136,34 +187,43 @@ export interface AdTemplatesResponse {
 
 /** `options.limits` — the API's own numbers, so the BO validates with the same maxima (spec A2). */
 export interface AdTemplateLimits {
-  /** `identity.post.text` and `destination.page.name` */
+  /** `identity.post.text`, `destination.page.name` and `destination.page.buttonText` */
   textMaxLength: number
-  /** `tracking.impressionUrl` and `tracking.clickUrl` */
+  /** `tracking.impressionUrl`, `tracking.clickUrl` and `destination.page.url` */
   urlMaxLength: number
 }
 
 /**
- * `GET /ad-templates/options` 200 body — exactly 11 keys: the 7 label lists plus the BO helpers
- * (`allowOnTiktokPlatformsLabel`, `systemDefault`, `catalogVersion`, `limits`).
+ * `GET /ad-templates/options` 200 body — exactly 13 keys (FEAT-017 api-contract §2.5): the 9 label lists plus
+ * the BO helpers (`allowOnTiktokPlatformsLabel`, `systemDefault`, `catalogVersion`, `limits`).
  */
 export interface AdTemplateOptions {
   /** 1 item (`spark`) — rendered as a one-item radio group, never hard-coded (spec A3) */
   identityMode: OptionItem[]
   /** 1 item (`authorizedPosts`) */
   identitySource: OptionItem[]
-  /** `first`, `named` */
+  /** `first`, `named`, `authCode` (FEAT-017; only `authCode` is offered by the form) */
   postSelection: OptionItem[]
   /** 1 item (`instantPage`) */
   destinationMode: OptionItem[]
-  /** `first`, `named` */
+  /** `first`, `named`, `create` (FEAT-017; only `create` is offered by the form) */
   pageSelection: OptionItem[]
+  /** FEAT-017 — `light`, `dark`, `custom` (the same label rows the build worker clicks in the editor) */
+  instantPageTone: OptionItem[]
+  /** FEAT-017 — `th`, `en` */
+  instantPageLanguage: OptionItem[]
   /** `inherit` ↔ `null`, `on` ↔ `true`, `off` ↔ `false` (spec A4) */
   triState: OptionItem[]
   /** every call-to-action in the Ads Manager dropdown, Thai label, dropdown order */
   ctaValue: OptionItem[]
   /** the long TikTok consent sentence, served so the BO shows it without a Thai literal */
   allowOnTiktokPlatformsLabel: string
-  /** TikTok's values on a fresh page — the create form's starting point, never stored */
+  /**
+   * TikTok's values on a fresh page — the starting point for everything except the two FEAT-017 unions:
+   * it stays `post: first` / `page: first` (spec L-10, a valid shape is required and `authCode` needs a
+   * code), and the form seeds `post = authCode` (empty code) + `page = create` (tone `dark`, language `th`,
+   * hand cursor on) itself. Never stored.
+   */
   systemDefault: AdConfig
   /** the catalog version the API writes on every save (`advertising/v1`) */
   catalogVersion: string
@@ -171,22 +231,27 @@ export interface AdTemplateOptions {
   limits: AdTemplateLimits
 }
 
-/** `POST /ad-templates` body — `config` is complete (all 6 keys), never `catalogVersion`. */
+/**
+ * `POST /ad-templates` body — `config` is complete (all 6 keys), never `catalogVersion`.
+ * `config.identity.post.code` is required here (FEAT-017 §2.4 "POST always requires `code`").
+ */
 export interface CreateAdTemplateBody {
   name: string
   description?: string | null
-  config: AdConfig
+  config: AdConfigRequest
 }
 
 /**
  * `PATCH /ad-templates/:id` body — **only the changed keys**. `config` is a partial at the top
  * level: each present key carries its complete value and replaces the stored one wholesale (no deep
  * merge). `catalogVersion` is never sent (the API rewrites it on every successful PATCH).
+ * FEAT-017: when `config.identity` is sent for an `authCode` template whose code was **not** retyped, its
+ * `post` is `{ selection: 'authCode' }` (no `code`) and the API keeps the stored code (§2.4).
  */
 export interface PatchAdTemplateBody {
   name?: string
   description?: string | null
-  config?: Partial<AdConfig>
+  config?: Partial<AdConfigRequest>
 }
 
 /** `DELETE /ad-templates/:id` 200 body. */
