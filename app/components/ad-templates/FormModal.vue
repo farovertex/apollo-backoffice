@@ -17,6 +17,18 @@
  * `config.tracking.clickUrl`, …). The one deviation is `config.allowOnTiktokPlatforms`, which holds the radio
  * value (`inherit` / `on` / `off`) and is mapped to `null` / `true` / `false` when the body is built.
  *
+ * **FEAT-017** (api-contract v1 §2, §8 · spec AC-28, AC-29): the two unions the build worker needs are the only
+ * ones the form offers any more — `identity.post` is always `authCode` (the **secret** Spark authorization code)
+ * and `destination.page` is always `create` (the instant page the build makes: button text, landing URL, tone,
+ * language, hand cursor). The `first` / `named` variants stay valid on the API side for templates that were
+ * saved earlier, but they can no longer be chosen here: such a template opens with `adt-legacy-notice`, an empty
+ * code and the defaulted instant-page fields, and saving it converts it.
+ * The code is write-only: it is never in a response (the view carries `hasCode` / `codeLast4` instead), so the
+ * input starts empty and lives only in the component state. On edit of a template that has one, the field is
+ * replaced by the masked hint `••••<last4>` + **Change code**; while the hint is shown the PATCH body sends
+ * `identity.post = { selection: 'authCode' }` and the API keeps the stored code (§2.4). It is never logged, never
+ * put in a toast and never rendered outside the password input.
+ *
  * Layout: five sections in the TikTok page order as an **accordion**. `adname` is always open and has no toggle;
  * `identity` / `destination` / `cta` / `tracking` sit behind `adt-sec-<id>-toggle`, are collapsed while every
  * control in them equals `options.systemDefault` (badge `adt-sec-<id>-default` = `Default`, live) and auto-expand
@@ -33,14 +45,18 @@ import type { ApiErrorBody } from '#shared/types/auth'
 import { ctaValuesFrom } from '~/utils/ad-cta'
 import type {
   AdConfig,
+  AdConfigRequest,
   AdCta,
   AdCtaValue,
+  AdInstantPageLanguage,
+  AdInstantPageTone,
   AdPageSelection,
   AdPostSelection,
   AdTemplate,
   AdTemplateLimits,
   AdTemplateOptions,
   CreateAdTemplateBody,
+  OptionItem,
   PatchAdTemplateBody,
   TriState
 } from '#shared/types/ad-templates'
@@ -67,12 +83,34 @@ const toast = useToast()
 
 const isEdit = computed(() => props.template !== null)
 
+// ── FEAT-017 fixed selections and instant-page defaults (spec L-10; `/options` only supplies their labels) ───────────
+const POST_AUTH_CODE = 'authCode'
+const PAGE_CREATE = 'create'
+/** the two variants that can still be stored but are not offered any more → `adt-legacy-notice` */
+const LEGACY_SELECTIONS: ReadonlySet<string> = new Set(['first', 'named'])
+const DEFAULT_TONE = 'dark'
+const DEFAULT_LANGUAGE = 'th'
+const DEFAULT_HAND_CURSOR = true
+/** api-contract §2.1 — `code` trim 1..500; `/options.limits` does not serve this one (see bo.md) */
+const CODE_MAX_LENGTH = 500
+
 // ── form state (mirrors the API body; every enum is a plain string so an unknown option value still renders) ─────────
 interface ConfigState {
   adNamePrefix: string
-  /** `post.text` is kept while `post.selection === 'first'` so switching back restores what was typed */
-  identity: { mode: string, source: string, post: { selection: string, text: string } }
-  destination: { mode: string, page: { selection: string, name: string } }
+  /** `post` is always `authCode`; `code` is empty unless the user typed one (create, or after "Change code") */
+  identity: { mode: string, source: string, post: { selection: string, code: string } }
+  /** `page` is always `create` — the five values of the instant page the build makes */
+  destination: {
+    mode: string
+    page: {
+      selection: string
+      buttonText: string
+      url: string
+      tone: string
+      language: string
+      showHandCursor: boolean
+    }
+  }
   /** UI-only encoding of the tri-state: `inherit` ↔ null, `on` ↔ true, `off` ↔ false */
   allowOnTiktokPlatforms: string
   /** selected call-to-action keys, in dropdown order */
@@ -103,10 +141,15 @@ function radioToTri(value: string | undefined): TriState {
   return null
 }
 
-/** the config part of the state, from any `AdConfig` (the system default on create, the row on edit) */
+/**
+ * The config part of the state, from any `AdConfig` (the system default on create, the row on edit).
+ * The two selections are forced to `authCode` / `create`; a stored `create` page keeps its five values, anything
+ * else (a legacy `first` / `named` page, or the system default) starts from the defaults of spec L-10.
+ * The code is never seeded — it is not in the response and an untouched field means "keep what is stored".
+ */
 function configStateFrom(config: AdConfig): ConfigState {
-  const post = config?.identity?.post
   const page = config?.destination?.page
+  const createPage = page?.selection === PAGE_CREATE ? page : null
   const cta = config?.cta
   return {
     adNamePrefix: config?.adNamePrefix ?? '',
@@ -114,15 +157,19 @@ function configStateFrom(config: AdConfig): ConfigState {
       mode: config?.identity?.mode ?? '',
       source: config?.identity?.source ?? '',
       post: {
-        selection: post?.selection ?? 'first',
-        text: post?.selection === 'named' ? post.text ?? '' : ''
+        selection: POST_AUTH_CODE,
+        code: ''
       }
     },
     destination: {
       mode: config?.destination?.mode ?? '',
       page: {
-        selection: page?.selection ?? 'first',
-        name: page?.selection === 'named' ? page.name ?? '' : ''
+        selection: PAGE_CREATE,
+        buttonText: createPage?.buttonText ?? '',
+        url: createPage?.url ?? '',
+        tone: createPage?.tone ?? DEFAULT_TONE,
+        language: createPage?.language ?? DEFAULT_LANGUAGE,
+        showHandCursor: createPage?.showHandCursor ?? DEFAULT_HAND_CURSOR
       }
     },
     allowOnTiktokPlatforms: triToRadio(config?.allowOnTiktokPlatforms),
@@ -215,18 +262,60 @@ function expandSectionsOf(names: (string | undefined)[]) {
   }
 }
 
-// ── conditional controls ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── the Spark authorization code (write-only secret) ─────────────────────────────────────────────────────────────────
+/** the label `/options` gives a fixed selection (`authCode` / `create`); the value itself if the list is older */
+function labelOf(items: OptionItem[] | undefined, value: string): string {
+  return items?.find(item => item.value === value)?.label ?? value
+}
+
+const postSelectionLabel = computed(() => labelOf(props.options.postSelection, POST_AUTH_CODE))
+const pageSelectionLabel = computed(() => labelOf(props.options.pageSelection, PAGE_CREATE))
+
+/** the loaded template already has a stored code (its masked view says so) → the hint can be offered */
+const hasStoredCode = computed(() => {
+  const post = props.template?.config?.identity?.post
+  return post?.selection === POST_AUTH_CODE && post.hasCode === true
+})
+
+/** `••••<last4>`, or `••••` when the stored code is shorter than 5 characters (spec L-11) */
+const codeHint = computed(() => {
+  const post = props.template?.config?.identity?.post
+  const last4 = post?.selection === POST_AUTH_CODE ? post.codeLast4 : null
+  return `••••${last4 ?? ''}`
+})
+
 /**
- * A conditional control is also rendered while the API complained about it: a message has to be readable, and the
- * control is what the user has to fix. Editing anything clears the server errors, so it disappears again as soon
- * as the selection really says `first` / `dynamic`.
+ * `keep` = the hint is shown and the body carries `{ selection: 'authCode' }` (the API keeps the stored code);
+ * `new` = the password input is shown and its value is sent. Create and a legacy template always start at `new`.
  */
-const showPostText = computed(() =>
-  state.config.identity.post.selection === 'named' || serverErrors.value['config.identity.post.text'] !== undefined
-)
-const showPageName = computed(() =>
-  state.config.destination.page.selection === 'named' || serverErrors.value['config.destination.page.name'] !== undefined
-)
+const codeMode = ref<'keep' | 'new'>('new')
+
+function resetCodeMode() {
+  codeMode.value = hasStoredCode.value ? 'keep' : 'new'
+}
+
+/** the input is shown (and therefore required) whenever the stored code is not being kept */
+const codeIsRequired = computed(() => codeMode.value === 'new')
+
+function changeCode() {
+  state.config.identity.post.code = ''
+  codeMode.value = 'new'
+  clearServerErrors()
+}
+
+function keepCode() {
+  state.config.identity.post.code = ''
+  codeMode.value = 'keep'
+  clearServerErrors()
+}
+
+/** a template stored before FEAT-017 (post or page still `first` / `named`) has to be completed before it builds */
+const isLegacyTemplate = computed(() => {
+  const config = props.template?.config
+  if (!config) return false
+  return LEGACY_SELECTIONS.has(config.identity?.post?.selection ?? '')
+    || LEGACY_SELECTIONS.has(config.destination?.page?.selection ?? '')
+})
 
 // ── "Default" badges (live) ──────────────────────────────────────────────────────────────────────────────────────────
 /** the config the current state would send — the single source for the badges and for the POST/PATCH bodies */
@@ -250,6 +339,7 @@ function syncExpanded() {
 
 function resetForm() {
   Object.assign(state, stateFrom(props.template))
+  resetCodeMode()
   submitting.value = false
   submitError.value = null
   clearServerErrors()
@@ -261,9 +351,14 @@ watch(open, (isOpen) => {
   if (isOpen) resetForm()
 })
 
-/** "Reset to TikTok defaults" — config controls only, name/description untouched, no request */
+/**
+ * "Reset to TikTok defaults" — config controls only, name/description untouched, no request.
+ * The stored Spark code is **not** a TikTok default: an edit goes back to the hint (`keep`) instead of forcing
+ * the secret to be retyped; a create / legacy template keeps the empty required input.
+ */
 function resetToDefaults() {
   state.config = configStateFrom(props.options.systemDefault)
+  resetCodeMode()
   submitError.value = null
   clearServerErrors()
   formRef.value?.clear()
@@ -280,7 +375,16 @@ const limits = computed<AdTemplateLimits>(() => ({
 
 const HTTP_URL_RE = /^https?:\/\//i
 
-function makeSchema(max: AdTemplateLimits) {
+/** api-contract §2.2 — the landing URL must parse **and** use `https:` (`ต้องเป็น URL ที่ขึ้นต้นด้วย https://`) */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
   return z.object({
     name: z.string().trim().min(1, 'Name is required').max(100, 'Name must be at most 100 characters'),
     description: z.string().trim().max(500, 'Description must be at most 500 characters'),
@@ -291,9 +395,9 @@ function makeSchema(max: AdTemplateLimits) {
         source: z.string().min(1, 'Identity source is required'),
         post: z.object({
           selection: z.string().min(1, 'Post selection is required'),
-          text: z.string().trim().max(
-            max.textMaxLength,
-            `Post text must be at most ${max.textMaxLength} characters`
+          code: z.string().trim().max(
+            CODE_MAX_LENGTH,
+            `Code must be at most ${CODE_MAX_LENGTH} characters`
           )
         })
       }),
@@ -301,10 +405,17 @@ function makeSchema(max: AdTemplateLimits) {
         mode: z.string().min(1, 'Destination is required'),
         page: z.object({
           selection: z.string().min(1, 'Page selection is required'),
-          name: z.string().trim().max(
+          buttonText: z.string().trim().max(
             max.textMaxLength,
-            `Page name must be at most ${max.textMaxLength} characters`
-          )
+            `Button text must be at most ${max.textMaxLength} characters`
+          ),
+          url: z.string().trim().max(
+            max.urlMaxLength,
+            `URL must be at most ${max.urlMaxLength} characters`
+          ),
+          tone: z.string().min(1, 'Tone is required'),
+          language: z.string().min(1, 'Language is required'),
+          showHandCursor: z.boolean()
         })
       }),
       allowOnTiktokPlatforms: z.string().min(1, 'Consent is required'),
@@ -317,21 +428,36 @@ function makeSchema(max: AdTemplateLimits) {
       })
     })
   }).superRefine((data, ctx) => {
-    // a named post needs its caption text
-    if (data.config.identity.post.selection === 'named' && data.config.identity.post.text === '') {
+    // the Spark code is required whenever the input is on screen (create, legacy template, or "Change code")
+    if (requireCode && data.config.identity.post.code === '') {
       ctx.addIssue({
         code: 'custom',
-        path: ['config', 'identity', 'post', 'text'],
-        message: 'Post text is required'
+        path: ['config', 'identity', 'post', 'code'],
+        message: 'Spark post code is required'
       })
     }
 
-    // a named instant page needs its name
-    if (data.config.destination.page.selection === 'named' && data.config.destination.page.name === '') {
+    // the new instant page needs a button text and an https landing URL (api-contract §2.2)
+    if (data.config.destination.page.buttonText === '') {
       ctx.addIssue({
         code: 'custom',
-        path: ['config', 'destination', 'page', 'name'],
-        message: 'Page name is required'
+        path: ['config', 'destination', 'page', 'buttonText'],
+        message: 'Button text is required'
+      })
+    }
+
+    const pageUrl = data.config.destination.page.url
+    if (pageUrl === '') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['config', 'destination', 'page', 'url'],
+        message: 'Landing page URL is required'
+      })
+    } else if (pageUrl.length <= max.urlMaxLength && !isHttpsUrl(pageUrl)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['config', 'destination', 'page', 'url'],
+        message: 'URL must start with https://'
       })
     }
 
@@ -362,22 +488,31 @@ function makeSchema(max: AdTemplateLimits) {
 
 type Schema = z.output<ReturnType<typeof makeSchema>>
 
-// rebuilt when `/options` announces other limits
-const schema = computed(() => makeSchema(limits.value))
+// rebuilt when `/options` announces other limits, and when the code input appears / disappears
+const schema = computed(() => makeSchema(limits.value, codeIsRequired.value))
 
 // ── body building ────────────────────────────────────────────────────────────────────────────────────────────────────
-/** the complete 6-key `AdConfig` the API expects, from the current state */
-function configFromState(): AdConfig {
+/**
+ * The complete 6-key config the API expects, from the current state (api-contract §8 "Request rules").
+ * `post` carries the code only while the input is on screen — keeping the hint sends the bare
+ * `{ selection: 'authCode' }` and never the view's `hasCode` / `codeLast4`.
+ */
+function configFromState(): AdConfigRequest {
   const c = state.config
   const prefix = c.adNamePrefix.trim()
 
-  const post: AdPostSelection = c.identity.post.selection === 'named'
-    ? { selection: 'named', text: c.identity.post.text.trim() }
-    : { selection: 'first' }
+  const post: AdPostSelection = codeIsRequired.value
+    ? { selection: 'authCode', code: c.identity.post.code.trim() }
+    : { selection: 'authCode' }
 
-  const page: AdPageSelection = c.destination.page.selection === 'named'
-    ? { selection: 'named', name: c.destination.page.name.trim() }
-    : { selection: 'first' }
+  const page: AdPageSelection = {
+    selection: 'create',
+    buttonText: c.destination.page.buttonText.trim(),
+    url: c.destination.page.url.trim(),
+    tone: c.destination.page.tone as AdInstantPageTone,
+    language: c.destination.page.language as AdInstantPageLanguage,
+    showHandCursor: c.destination.page.showHandCursor
+  }
 
   // dropdown order, only keys the options list still knows
   const picked = new Set(c.cta.values)
@@ -393,12 +528,12 @@ function configFromState(): AdConfig {
   return {
     adNamePrefix: prefix === '' ? null : prefix,
     identity: {
-      mode: c.identity.mode as AdConfig['identity']['mode'],
-      source: c.identity.source as AdConfig['identity']['source'],
+      mode: c.identity.mode as AdConfigRequest['identity']['mode'],
+      source: c.identity.source as AdConfigRequest['identity']['source'],
       post
     },
     destination: {
-      mode: c.destination.mode as AdConfig['destination']['mode'],
+      mode: c.destination.mode as AdConfigRequest['destination']['mode'],
       page
     },
     allowOnTiktokPlatforms: radioToTri(c.allowOnTiktokPlatforms),
@@ -431,6 +566,22 @@ const CONFIG_KEYS = [
   'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking'
 ] as const satisfies readonly (keyof AdConfig)[]
 
+/**
+ * The stored config in the shape the form would send it back, so the diff below does not report a change that
+ * is not one: the masked `authCode` post (`hasCode`, `codeLast4`) becomes the keep-code request shape
+ * `{ selection: 'authCode' }`, which is exactly what `configFromState()` builds while the hint is shown.
+ */
+function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
+  const config = original.config
+  if (!config) return {}
+  const post = config.identity?.post
+  if (post?.selection !== POST_AUTH_CODE) return config as unknown as Partial<AdConfigRequest>
+  return {
+    ...config,
+    identity: { ...config.identity, post: { selection: POST_AUTH_CODE } }
+  }
+}
+
 /** only the keys whose value really changed; each changed `config` key is sent whole */
 function patchBodyFrom(original: AdTemplate, name: string, description: string | null): PatchAdTemplateBody {
   const body: PatchAdTemplateBody = {}
@@ -438,10 +589,11 @@ function patchBodyFrom(original: AdTemplate, name: string, description: string |
   if (description !== original.description) body.description = description
 
   const next = configFromState()
-  const changed: Partial<AdConfig> = {}
+  const base = diffBaseFrom(original)
+  const changed: Partial<AdConfigRequest> = {}
   let hasConfigChange = false
   for (const key of CONFIG_KEYS) {
-    if (!deepEqual(next[key], original.config?.[key])) {
+    if (!deepEqual(next[key], base[key])) {
       // each key carries its complete value — the API replaces it wholesale
       Object.assign(changed, { [key]: next[key] })
       hasConfigChange = true
@@ -454,16 +606,19 @@ function patchBodyFrom(original: AdTemplate, name: string, description: string |
 // ── API errors → the right field ─────────────────────────────────────────────────────────────────────────────────────
 /**
  * Every `UFormField` name an API issue can land on. A collapsed section counts: it is expanded before the message
- * is shown (a collapsed body is hidden, not unmounted), and a conditional control is rendered while it carries a
- * server error.
+ * is shown (a collapsed body is hidden, not unmounted); an issue on `config.identity.post.code` additionally
+ * brings the password input back (see `showApiError`).
  */
 const FIELD_NAMES: ReadonlySet<string> = new Set([
   'name', 'description',
   'config.adNamePrefix',
   'config.identity.mode', 'config.identity.source',
-  'config.identity.post.selection', 'config.identity.post.text',
+  'config.identity.post.selection', 'config.identity.post.code',
   'config.destination.mode',
-  'config.destination.page.selection', 'config.destination.page.name',
+  'config.destination.page.selection',
+  'config.destination.page.buttonText', 'config.destination.page.url',
+  'config.destination.page.tone', 'config.destination.page.language',
+  'config.destination.page.showHandCursor',
   'config.allowOnTiktokPlatforms',
   'config.cta.values',
   'config.tracking.impressionUrl', 'config.tracking.clickUrl'
@@ -526,6 +681,8 @@ function showApiError(e: unknown, fallback: string) {
     serverErrors.value = next
     // the field has to be on screen for its message to be read
     expandSectionsOf(matched)
+    // the API refused the code (e.g. the stored post was not `authCode` after all) → the input has to come back
+    if (next['config.identity.post.code'] !== undefined) codeMode.value = 'new'
     if (unmatched.length) {
       submitError.value = {
         title: data?.error ?? fallback,
@@ -615,6 +772,17 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         @submit="onSubmit"
         @error="onFormError"
       >
+        <!-- a template saved before FEAT-017 still points at a library post / page → it cannot build yet -->
+        <UAlert
+          v-if="isLegacyTemplate"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          title="This template was saved with the old post and page settings"
+          description="Builds need a Spark post code and the values of the instant page they create. Fill in the code and the instant page fields below, then save — the old settings are replaced."
+          data-testid="adt-legacy-notice"
+        />
+
         <!-- 1. ad name — always open, no toggle -->
         <section class="space-y-4" data-testid="adt-sec-adname">
           <h3 class="text-sm font-semibold text-highlighted">
@@ -733,38 +901,76 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </UFormField>
 
+            <!-- the post source is fixed (`authCode`); only its label comes from `/options` -->
             <UFormField
               label="Post"
               name="config.identity.post.selection"
-              required
               :error="serverErrors['config.identity.post.selection']"
             >
-              <URadioGroup
-                v-model="state.config.identity.post.selection"
-                :items="options.postSelection"
-                value-key="value"
-                orientation="horizontal"
-                :ui="{ fieldset: 'flex-wrap' }"
-                :disabled="submitting"
-                data-testid="adt-form-post-selection"
-              />
+              <p class="text-sm text-highlighted" data-testid="adt-form-post-selection">
+                {{ postSelectionLabel }}
+              </p>
             </UFormField>
 
             <UFormField
-              v-if="showPostText"
-              label="Post text"
-              name="config.identity.post.text"
+              v-if="codeIsRequired"
+              label="Spark post code"
+              name="config.identity.post.code"
               required
-              help="The caption or hashtag the job matches in the authorized posts list."
-              :error="serverErrors['config.identity.post.text']"
+              help="The authorization code of the TikTok post. Stored for the build; never shown again."
+              :error="serverErrors['config.identity.post.code']"
             >
               <UInput
-                v-model="state.config.identity.post.text"
-                placeholder="#fyp"
+                v-model="state.config.identity.post.code"
+                type="password"
+                autocomplete="new-password"
+                autocapitalize="off"
+                spellcheck="false"
+                placeholder="Paste the code"
                 class="w-full"
+                :maxlength="500"
                 :disabled="submitting"
-                data-testid="adt-form-post-text"
+                data-testid="adt-post-code"
               />
+              <template v-if="hasStoredCode" #hint>
+                <UButton
+                  label="Keep the saved code"
+                  color="neutral"
+                  variant="link"
+                  size="xs"
+                  class="p-0"
+                  :disabled="submitting"
+                  data-testid="adt-post-code-keep"
+                  @click="keepCode"
+                />
+              </template>
+            </UFormField>
+
+            <UFormField
+              v-else
+              label="Spark post code"
+              name="config.identity.post.code"
+              :error="serverErrors['config.identity.post.code']"
+            >
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  class="font-mono text-sm text-highlighted"
+                  data-testid="adt-post-code-hint"
+                >{{ codeHint }}</span>
+                <UButton
+                  label="Change code"
+                  icon="i-lucide-key-round"
+                  color="neutral"
+                  variant="outline"
+                  size="xs"
+                  :disabled="submitting"
+                  data-testid="adt-post-code-change"
+                  @click="changeCode"
+                />
+              </div>
+              <template #help>
+                The saved code is kept unless you change it.
+              </template>
             </UFormField>
           </div>
         </section>
@@ -818,37 +1024,96 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </UFormField>
 
+            <!-- the destination is fixed (`create`); only its label comes from `/options` -->
             <UFormField
               label="Instant page"
               name="config.destination.page.selection"
-              required
               :error="serverErrors['config.destination.page.selection']"
             >
-              <URadioGroup
-                v-model="state.config.destination.page.selection"
-                :items="options.pageSelection"
-                value-key="value"
-                orientation="horizontal"
-                :ui="{ fieldset: 'flex-wrap' }"
+              <p class="text-sm text-highlighted" data-testid="adt-form-page-selection">
+                {{ pageSelectionLabel }}
+              </p>
+            </UFormField>
+
+            <UFormField
+              label="Button text"
+              name="config.destination.page.buttonText"
+              required
+              help="The call-to-action button on the instant page the build creates."
+              :error="serverErrors['config.destination.page.buttonText']"
+            >
+              <UInput
+                v-model="state.config.destination.page.buttonText"
+                placeholder="Shop now"
+                class="w-full"
+                :maxlength="limits.textMaxLength"
                 :disabled="submitting"
-                data-testid="adt-form-page-selection"
+                data-testid="adt-page-button-text"
               />
             </UFormField>
 
             <UFormField
-              v-if="showPageName"
-              label="Instant page name"
-              name="config.destination.page.name"
+              label="Landing page URL"
+              name="config.destination.page.url"
               required
-              help="The job picks the library page whose name contains this text."
-              :error="serverErrors['config.destination.page.name']"
+              help="Where the button sends the viewer. https:// only."
+              :error="serverErrors['config.destination.page.url']"
             >
               <UInput
-                v-model="state.config.destination.page.name"
-                placeholder="Promo page"
+                v-model="state.config.destination.page.url"
+                type="text"
+                inputmode="url"
+                placeholder="https://shop.example/promo"
                 class="w-full"
                 :disabled="submitting"
-                data-testid="adt-form-page-name"
+                data-testid="adt-page-url"
+              />
+            </UFormField>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+              <UFormField
+                label="Tone"
+                name="config.destination.page.tone"
+                required
+                :error="serverErrors['config.destination.page.tone']"
+              >
+                <USelect
+                  v-model="state.config.destination.page.tone"
+                  :items="options.instantPageTone"
+                  value-key="value"
+                  class="w-full"
+                  :disabled="submitting"
+                  data-testid="adt-page-tone"
+                />
+              </UFormField>
+
+              <UFormField
+                label="Language"
+                name="config.destination.page.language"
+                required
+                :error="serverErrors['config.destination.page.language']"
+              >
+                <USelect
+                  v-model="state.config.destination.page.language"
+                  :items="options.instantPageLanguage"
+                  value-key="value"
+                  class="w-full"
+                  :disabled="submitting"
+                  data-testid="adt-page-language"
+                />
+              </UFormField>
+            </div>
+
+            <UFormField
+              name="config.destination.page.showHandCursor"
+              :error="serverErrors['config.destination.page.showHandCursor']"
+            >
+              <UCheckbox
+                v-model="state.config.destination.page.showHandCursor"
+                label="Show hand cursor"
+                description="The animated hand pointing at the button."
+                :disabled="submitting"
+                data-testid="adt-page-hand-cursor"
               />
             </UFormField>
 
