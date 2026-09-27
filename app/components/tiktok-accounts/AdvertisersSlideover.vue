@@ -328,7 +328,7 @@ function onSync() {
                 >
                   Not seen since {{ formatDate(adv.missingSince) }}
                 </UBadge>
-                <UTooltip :text="`account_status ${adv.accountStatus ?? '—'}`">
+                <UTooltip :text="accountStatusTip(adv.accountStatus)">
                   <UBadge
                     :color="statusBadge(adv.status).color"
                     variant="subtle"
