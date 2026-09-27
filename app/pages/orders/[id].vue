@@ -12,14 +12,17 @@
  * order, because the state the button was based on is stale by definition. 404 → `od-notfound`, 403 (a
  * Payment-only admin that typed the URL) → `od-forbidden` with the API text, no redirect.
  *
- * Builds have no `steps[]` yet (the build worker is not part of this feature) → the expanded row shows
- * `No steps yet`; a step that carries a screenshot opens it in a modal.
+ * A build without `steps[]` shows `No steps yet` in its expanded row. FEAT-017 (AC-30): a step that carries a
+ * `screenshotUrl` gets `od-step-shot`, and one click issues exactly one
+ * `GET /backend/builds/:id/screenshots/:no` whose `{ mimeType, base64 }` body becomes `od-shot-img`
+ * (`od-shot-loading` while it runs, `od-shot-error` with the API text on 404 / any failure).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type {
   BuildConflictBody,
+  BuildScreenshotResponse,
   BuildView,
   OrderDetail,
   OrderDetailResponse
@@ -243,13 +246,53 @@ function canStopBuild(build: BuildView): boolean {
   return build.status === 'running' && order.value?.publishMode === 'publish' && !build.stopBeforePublish
 }
 
-const screenshot = ref<string | null>(null)
+// ── step screenshot (FEAT-017 AC-30 · api-contract §6) ───────────────────────────────────────────────────────────────
+/**
+ * One `GET /backend<step.screenshotUrl>` per click on `od-step-shot` (`screenshotUrl` is API-relative, so the
+ * `useApi()` base `/backend` is the whole prefix). The 200 body is `{ mimeType, base64 }` → the image is rendered
+ * from a data URI; a 404 (no screenshot / other workspace) or any other failure shows the API's `error` text
+ * inside the modal. Closing it drops the image so the next click always fetches again.
+ */
 const screenshotOpen = ref(false)
+const shotSrc = ref<string | null>(null)
+const shotLoading = ref(false)
+const shotError = ref<string | null>(null)
+let shotSession = 0
 
-function openScreenshot(url: string) {
-  screenshot.value = url
+async function openScreenshot(url: string) {
+  const s = ++shotSession
+  shotSrc.value = null
+  shotError.value = null
+  shotLoading.value = true
   screenshotOpen.value = true
+  try {
+    // retry: 0 — exactly one request per click
+    const res = await api<BuildScreenshotResponse>(url, { retry: 0 })
+    if (s !== shotSession) return
+    shotSrc.value = res.base64 ? `data:${res.mimeType};base64,${res.base64}` : null
+    if (!shotSrc.value) shotError.value = 'The screenshot came back empty'
+  } catch (e) {
+    if (s !== shotSession) return
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    shotError.value = err.data?.error ?? err.message ?? 'Unexpected error'
+  } finally {
+    if (s === shotSession) shotLoading.value = false
+  }
 }
+
+/** the click handler (the request itself is awaited inside `openScreenshot`) */
+function showScreenshot(url: string) {
+  void openScreenshot(url)
+}
+
+watch(screenshotOpen, (isOpen) => {
+  if (isOpen) return
+  // a request still in flight must not land in a closed modal
+  shotSession++
+  shotSrc.value = null
+  shotError.value = null
+  shotLoading.value = false
+})
 
 // ── presentation ─────────────────────────────────────────────────────────────────────────────────────────────────────
 const now = useNow({ interval: 30_000 })
@@ -669,7 +712,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                             variant="link"
                             size="xs"
                             data-testid="od-step-shot"
-                            @click="openScreenshot(stepEntry.screenshotUrl)"
+                            @click="showScreenshot(stepEntry.screenshotUrl)"
                           />
                         </li>
                       </ol>
@@ -718,11 +761,32 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
         :content="shotContent"
       >
         <template #body>
+          <div
+            v-if="shotLoading"
+            class="flex items-center gap-2 py-6 text-sm text-muted"
+            data-testid="od-shot-loading"
+          >
+            <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
+            <span>Loading the screenshot…</span>
+          </div>
+
+          <UAlert
+            v-else-if="shotError"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="Could not load the screenshot"
+            :description="shotError"
+            role="alert"
+            data-testid="od-shot-error"
+          />
+
           <img
-            v-if="screenshot"
-            :src="screenshot"
+            v-else-if="shotSrc"
+            :src="shotSrc"
             alt="Build step screenshot"
             class="w-full rounded-lg"
+            data-testid="od-shot-img"
           >
         </template>
       </UModal>
