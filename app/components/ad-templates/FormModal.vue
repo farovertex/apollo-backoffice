@@ -30,6 +30,7 @@ import * as z from 'zod'
 import type { FetchError } from 'ofetch'
 import type { Form, FormErrorEvent, FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
+import { ctaValuesFrom } from '~/utils/ad-cta'
 import type {
   AdConfig,
   AdCta,
@@ -74,8 +75,8 @@ interface ConfigState {
   destination: { mode: string, page: { selection: string, name: string } }
   /** UI-only encoding of the tri-state: `inherit` ↔ null, `on` ↔ true, `off` ↔ false */
   allowOnTiktokPlatforms: string
-  /** `value` is kept while `mode === 'dynamic'`; empty means "nothing picked yet" */
-  cta: { mode: string, value: string }
+  /** selected call-to-action keys, in dropdown order */
+  cta: { values: string[] }
   tracking: { impressionUrl: string, clickUrl: string }
 }
 
@@ -126,8 +127,7 @@ function configStateFrom(config: AdConfig): ConfigState {
     },
     allowOnTiktokPlatforms: triToRadio(config?.allowOnTiktokPlatforms),
     cta: {
-      mode: cta?.mode ?? 'dynamic',
-      value: cta?.mode === 'standard' ? cta.value ?? '' : ''
+      values: [...ctaValuesFrom(cta, props.options.systemDefault?.cta?.values ?? [])]
     },
     tracking: {
       impressionUrl: config?.tracking?.impressionUrl ?? '',
@@ -227,9 +227,6 @@ const showPostText = computed(() =>
 const showPageName = computed(() =>
   state.config.destination.page.selection === 'named' || serverErrors.value['config.destination.page.name'] !== undefined
 )
-const showCtaValue = computed(() =>
-  state.config.cta.mode === 'standard' || serverErrors.value['config.cta.value'] !== undefined
-)
 
 // ── "Default" badges (live) ──────────────────────────────────────────────────────────────────────────────────────────
 /** the config the current state would send — the single source for the badges and for the POST/PATCH bodies */
@@ -312,8 +309,7 @@ function makeSchema(max: AdTemplateLimits) {
       }),
       allowOnTiktokPlatforms: z.string().min(1, 'Consent is required'),
       cta: z.object({
-        mode: z.string().min(1, 'Call to action is required'),
-        value: z.string()
+        values: z.array(z.string())
       }),
       tracking: z.object({
         impressionUrl: z.string().trim(),
@@ -339,12 +335,11 @@ function makeSchema(max: AdTemplateLimits) {
       })
     }
 
-    // a standard CTA needs a value
-    if (data.config.cta.mode === 'standard' && data.config.cta.value === '') {
+    if (data.config.cta.values.length === 0) {
       ctx.addIssue({
         code: 'custom',
-        path: ['config', 'cta', 'value'],
-        message: 'Select a call to action'
+        path: ['config', 'cta', 'values'],
+        message: 'Select at least one call to action'
       })
     }
 
@@ -384,10 +379,13 @@ function configFromState(): AdConfig {
     ? { selection: 'named', name: c.destination.page.name.trim() }
     : { selection: 'first' }
 
-  // `dynamic` never carries a value (the API rejects it as an unknown key)
-  const cta: AdCta = c.cta.mode === 'standard'
-    ? { mode: 'standard', value: c.cta.value as AdCtaValue }
-    : { mode: 'dynamic' }
+  // dropdown order, only keys the options list still knows
+  const picked = new Set(c.cta.values)
+  const cta: AdCta = {
+    values: props.options.ctaValue
+      .map(item => item.value)
+      .filter((value): value is AdCtaValue => picked.has(value))
+  }
 
   const impressionUrl = c.tracking.impressionUrl.trim()
   const clickUrl = c.tracking.clickUrl.trim()
@@ -467,7 +465,7 @@ const FIELD_NAMES: ReadonlySet<string> = new Set([
   'config.destination.mode',
   'config.destination.page.selection', 'config.destination.page.name',
   'config.allowOnTiktokPlatforms',
-  'config.cta.mode', 'config.cta.value',
+  'config.cta.values',
   'config.tracking.impressionUrl', 'config.tracking.clickUrl'
 ])
 
@@ -480,7 +478,7 @@ const ISSUE_FOLD: Readonly<Record<string, string>> = {
   'config.identity.post': 'config.identity.post.selection',
   'config.destination': 'config.destination.mode',
   'config.destination.page': 'config.destination.page.selection',
-  'config.cta': 'config.cta.mode',
+  'config.cta': 'config.cta.values',
   'config.tracking': 'config.tracking.impressionUrl'
 }
 
@@ -912,36 +910,19 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           >
             <UFormField
               label="Call to action"
-              name="config.cta.mode"
+              name="config.cta.values"
               required
-              :error="serverErrors['config.cta.mode']"
+              :error="serverErrors['config.cta.values']"
             >
-              <URadioGroup
-                v-model="state.config.cta.mode"
-                :items="options.ctaMode"
-                value-key="value"
-                orientation="horizontal"
-                :ui="{ fieldset: 'flex-wrap' }"
-                :disabled="submitting"
-                data-testid="adt-form-cta-mode"
-              />
-            </UFormField>
-
-            <UFormField
-              v-if="showCtaValue"
-              label="Call to action text"
-              name="config.cta.value"
-              required
-              :error="serverErrors['config.cta.value']"
-            >
-              <URadioGroup
-                v-model="state.config.cta.value"
+              <USelectMenu
+                v-model="state.config.cta.values"
+                multiple
                 :items="options.ctaValue"
                 value-key="value"
-                orientation="horizontal"
-                :ui="{ fieldset: 'flex-wrap' }"
+                placeholder="Select call to action"
+                class="w-full"
                 :disabled="submitting"
-                data-testid="adt-form-cta-value"
+                data-testid="adt-form-cta"
               />
             </UFormField>
           </div>

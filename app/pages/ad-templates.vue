@@ -24,9 +24,9 @@ import type { ApiErrorBody } from '#shared/types/auth'
 import type {
   AdTemplate,
   AdTemplateOptions,
-  AdTemplatesResponse,
-  OptionItem
+  AdTemplatesResponse
 } from '#shared/types/ad-templates'
+import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
 
 useSeoMeta({ title: 'Ad templates' })
 
@@ -49,12 +49,6 @@ async function loadOptions() {
     options.value = null
     optionsError.value = err.data?.error ?? err.message ?? 'Unexpected error'
   }
-}
-
-/** the label of an option value; falls back to the raw value so an unknown value still renders */
-function labelOf(list: OptionItem[] | undefined, value: string | null | undefined): string {
-  if (value === null || value === undefined) return '—'
-  return list?.find(item => item.value === value)?.label ?? value
 }
 
 // ── list ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -157,12 +151,10 @@ function destinationCell(template: AdTemplate): string {
   return page?.selection === 'named' ? page.name : 'First in library'
 }
 
-/** CTA cell: the `ctaValue` label for `standard`, else the `ctaMode.dynamic` label — both from `/options` */
+/** CTA cell: Thai labels of the selected call-to-action texts, from `/options` */
 function ctaCell(template: AdTemplate): string {
-  const cta = template.config?.cta
-  return cta?.mode === 'standard'
-    ? labelOf(options.value?.ctaValue, cta.value)
-    : labelOf(options.value?.ctaMode, 'dynamic')
+  const values = ctaValuesFrom(template.config?.cta, options.value?.systemDefault?.cta?.values ?? [])
+  return ctaSummary(values, options.value?.ctaValue)
 }
 
 /** Catalog cell: the part after `/` of `catalogVersion` (`v1`), `–` for a document this API never wrote */
@@ -414,7 +406,7 @@ function onDeleted() {
                   <span class="line-clamp-2 max-w-48" :title="destinationCell(template)" data-testid="adt-destination">{{ destinationCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-3 py-2">
-                  <span class="whitespace-nowrap" data-testid="adt-cta">{{ ctaCell(template) }}</span>
+                  <span class="line-clamp-2 max-w-56" :title="ctaCell(template)" data-testid="adt-cta">{{ ctaCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-2 py-2">
                   <!-- stacked: the badge under the version keeps the column inside the 1440 table width -->

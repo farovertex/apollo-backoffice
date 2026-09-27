@@ -37,6 +37,7 @@ import type {
   OptionItem
 } from '#shared/types/ad-group-templates'
 import type { AdTemplate, AdTemplateOptions, AdTemplatesResponse } from '#shared/types/ad-templates'
+import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
 import type {
   CreateOrderBody,
   CreateOrderRejectedBody,
@@ -368,10 +369,8 @@ function pageCell(template: AdTemplate): string {
 }
 
 function ctaCell(template: AdTemplate): string {
-  const cta = template.config?.cta
-  return cta?.mode === 'standard'
-    ? labelOf(adtOptions.value?.ctaValue, cta.value)
-    : labelOf(adtOptions.value?.ctaMode, 'dynamic')
+  const values = ctaValuesFrom(template.config?.cta, adtOptions.value?.systemDefault?.cta?.values ?? [])
+  return ctaSummary(values, adtOptions.value?.ctaValue)
 }
 
 function catalogCell(version: string | null): string {
@@ -1175,7 +1174,7 @@ onUnmounted(() => {
                       </span>
                       <span class="line-clamp-1 text-xs text-muted">{{ postCell(template) }}</span>
                       <span class="line-clamp-1 text-xs text-muted">{{ pageCell(template) }}</span>
-                      <span class="text-xs text-muted">{{ ctaCell(template) }}</span>
+                      <span class="line-clamp-2 text-xs text-muted" :title="ctaCell(template)">{{ ctaCell(template) }}</span>
                       <span class="text-xs text-dimmed">
                         catalog {{ catalogCell(template.catalogVersion) }} · updated {{ timeAgo(template.updatedAt) }}
                       </span>

@@ -26,9 +26,35 @@ export type AdIdentityMode = 'spark'
 export type AdIdentitySource = 'authorizedPosts'
 /** Single-valued for now; a `url` destination may be added later (spec Q5/Q13/Q17). */
 export type AdDestinationMode = 'instantPage'
-export type AdCtaMode = 'dynamic' | 'standard'
-/** The four CTA names the `advertising/v1` catalog saw; 8 more exist on TikTok. */
-export type AdCtaValue = 'learnMore' | 'signUp' | 'experienceNow' | 'interested'
+/**
+ * One call-to-action in the Ads Manager tree. Stored key is stable; the BO shows the Thai `label`
+ * from `/options`. The runner clicks the tree node id that the key maps to.
+ */
+export type AdCtaValue =
+  | 'applyNow'
+  | 'interested'
+  | 'visitStore'
+  | 'watchNow'
+  | 'register'
+  | 'orderNow'
+  | 'checkItOut'
+  | 'viewNow'
+  | 'readMore'
+  | 'learnMore'
+  | 'download'
+  | 'shopNow'
+  | 'contactUs'
+  | 'bookNow'
+  | 'playGame'
+  | 'getQuote'
+  | 'installNow'
+  | 'getShowtimes'
+  | 'listenNow'
+  | 'subscribe'
+  | 'getTickets'
+  | 'experienceNow'
+  | 'preorderNow'
+  | 'donateNow'
 export type AdSelectionMode = 'first' | 'named'
 
 /** `allowOnTiktokPlatforms`: `null` = leave TikTok's own default (spec Q7, same shape as FEAT-011 A3). */
@@ -57,10 +83,10 @@ export interface AdDestination {
   page: AdPageSelection
 }
 
-/** `config.cta` — discriminated union (`dynamic` + `value` → 400 unknown key at `config.cta.value`). */
-export type AdCta
-  = | { mode: 'dynamic' }
-    | { mode: 'standard', value: AdCtaValue }
+/** `config.cta` — the call-to-action texts to leave checked (at least one). */
+export interface AdCta {
+  values: AdCtaValue[]
+}
 
 /** `config.tracking` — both keys required; each `''` → null, else an `http(s)` URL ≤ 2048. */
 export interface AdTracking {
@@ -117,7 +143,7 @@ export interface AdTemplateLimits {
 }
 
 /**
- * `GET /ad-templates/options` 200 body — exactly 12 keys: the 8 label lists plus the BO helpers
+ * `GET /ad-templates/options` 200 body — exactly 11 keys: the 7 label lists plus the BO helpers
  * (`allowOnTiktokPlatformsLabel`, `systemDefault`, `catalogVersion`, `limits`).
  */
 export interface AdTemplateOptions {
@@ -133,9 +159,7 @@ export interface AdTemplateOptions {
   pageSelection: OptionItem[]
   /** `inherit` ↔ `null`, `on` ↔ `true`, `off` ↔ `false` (spec A4) */
   triState: OptionItem[]
-  /** `dynamic`, `standard` */
-  ctaMode: OptionItem[]
-  /** the CTA names the catalog saw; the BO renders one radio per item, whatever the count */
+  /** every call-to-action in the Ads Manager dropdown, Thai label, dropdown order */
   ctaValue: OptionItem[]
   /** the long TikTok consent sentence, served so the BO shows it without a Thai literal */
   allowOnTiktokPlatformsLabel: string
