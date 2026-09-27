@@ -582,7 +582,14 @@ function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
   }
 }
 
-/** only the keys whose value really changed; each changed `config` key is sent whole */
+/**
+ * Only the keys whose value really changed; each changed `config` key is sent whole.
+ * One addition for FEAT-017 (spec AC-28): as soon as the save carries **anything**, `config.identity` travels
+ * with it, even when nothing in it changed — so every real save of an `authCode` template states the post
+ * explicitly (`{ selection: 'authCode' }` while the hint is shown, `{ selection: 'authCode', code }` after
+ * "Change code") and the API's keep-code rule (§2.4) decides. A save with no change at all still sends nothing
+ * ("Nothing changed", FEAT-012).
+ */
 function patchBodyFrom(original: AdTemplate, name: string, description: string | null): PatchAdTemplateBody {
   const body: PatchAdTemplateBody = {}
   if (name !== original.name) body.name = name
@@ -599,6 +606,13 @@ function patchBodyFrom(original: AdTemplate, name: string, description: string |
       hasConfigChange = true
     }
   }
+
+  const touched = hasConfigChange || body.name !== undefined || body.description !== undefined
+  if (touched && changed.identity === undefined) {
+    changed.identity = next.identity
+    hasConfigChange = true
+  }
+
   if (hasConfigChange) body.config = changed
   return body
 }
