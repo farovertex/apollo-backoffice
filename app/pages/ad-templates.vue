@@ -139,15 +139,24 @@ function timeAgo(iso: string): string {
   return Number.isNaN(d.getTime()) ? '—' : formatTimeAgo(d, {}, now.value)
 }
 
-/** Post cell: the caption text for a `named` post, else the English chrome `First authorized post` (A8) */
+/**
+ * Post cell: `New post by code` for the FEAT-017 `authCode` post (never the code, not even its last 4 —
+ * `adt-post-code-hint` in the form is the only place the mask is shown), the caption text for a legacy `named`
+ * post, else the English chrome `First authorized post` (A8).
+ */
 function postCell(template: AdTemplate): string {
   const post = template.config?.identity?.post
+  if (post?.selection === 'authCode') return 'New post by code'
   return post?.selection === 'named' ? post.text : 'First authorized post'
 }
 
-/** Instant page cell: the page name for a `named` page, else the English chrome `First in library` (A8) */
+/**
+ * Instant page cell: `New instant page` for the FEAT-017 `create` page, the page name for a legacy `named` page,
+ * else the English chrome `First in library` (A8).
+ */
 function destinationCell(template: AdTemplate): string {
   const page = template.config?.destination?.page
+  if (page?.selection === 'create') return 'New instant page'
   return page?.selection === 'named' ? page.name : 'First in library'
 }
 
