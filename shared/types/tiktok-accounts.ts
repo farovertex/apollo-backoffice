@@ -49,7 +49,7 @@ export interface OpenHumanTask {
 /** Job of the account that is `waiting` or `active`, as embedded in the account view. */
 export interface RunningJob {
   id: string
-  type: 'login' | 'discover'
+  type: 'login' | 'discover' | 'topup'
   status: 'waiting' | 'active'
   step: JobStep | null
   trigger: JobTrigger

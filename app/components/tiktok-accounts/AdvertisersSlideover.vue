@@ -14,6 +14,8 @@ import type { SlideoverProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { Advertiser, AdvertiserMissingFilter, AdvertisersResponse, AdvertiserStatus } from '#shared/types/advertisers'
 import type { TikTokAccount } from '#shared/types/tiktok-accounts'
+import TopupModal from './TopupModal.vue'
+import { clockRemainingMs, formatRemain, showPayButton, showTopupRefresh, TOPUP_BADGE, topupBlocksAccount } from '~/utils/topup'
 
 const props = defineProps<{
   account: TikTokAccount | null
@@ -68,13 +70,13 @@ let session = 0
 
 const hasMore = computed(() => page.value * LIMIT < total.value)
 
-async function load(nextPage: number, append = false) {
+async function load(nextPage: number, append = false, quiet = false) {
   const id = props.account?.id
   if (!id) return
   const s = ++session
   if (append) loadingMore.value = true
-  else loading.value = true
-  error.value = null
+  else if (!quiet) loading.value = true
+  if (!quiet) error.value = null
   try {
     const q = searchDebounced.value.trim()
     const missing: AdvertiserMissingFilter = showMissing.value ? 'all' : 'false'
@@ -100,7 +102,7 @@ async function load(nextPage: number, append = false) {
     if (append) {
       // keep the rows already shown; the user can press "Load more" again
       toast.add({ title: 'Could not load more advertisers', description: message, color: 'error' })
-    } else {
+    } else if (!quiet) {
       error.value = message
     }
   } finally {
@@ -145,11 +147,71 @@ watch(open, (isOpen) => {
   if (!isOpen) {
     reset()
     resetFilters()
+    stopTopupTimers()
+  } else {
+    startTopupTimers()
   }
+})
+
+const nowMs = ref(Date.now())
+const topupOpen = ref(false)
+const topupTarget = ref<Advertiser | null>(null)
+let clockTimer: ReturnType<typeof setInterval> | undefined
+let pollTimer: ReturnType<typeof setInterval> | undefined
+
+const accountBusy = computed(() => !!props.account?.runningJob || items.value.some(a => topupBlocksAccount(a.topup, nowMs.value)))
+
+function topupInFlight() {
+  return items.value.some((a) => {
+    const phase = a.topup?.phase
+    if (phase === 'processing' || phase === 'paid' || a.topup?.checking) return true
+    return phase === 'pending' && clockRemainingMs(a.topup?.qrSavedAt ?? null, nowMs.value) > 0
+  })
+}
+
+function startTopupTimers() {
+  stopTopupTimers()
+  nowMs.value = Date.now()
+  clockTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
+  pollTimer = setInterval(() => {
+    if (open.value && page.value === 1 && topupInFlight() && !loading.value && !loadingMore.value) void load(1, false, true)
+  }, 4000)
+}
+
+function stopTopupTimers() {
+  if (clockTimer) clearInterval(clockTimer)
+  if (pollTimer) clearInterval(pollTimer)
+  clockTimer = undefined
+  pollTimer = undefined
+}
+
+function openTopup(adv: Advertiser) {
+  topupTarget.value = adv
+  topupOpen.value = true
+}
+
+async function refreshRow(adv: Advertiser) {
+  const id = props.account?.id
+  if (!id || adv.topup?.checking) return
+  try {
+    await api(`/tiktok-accounts/${id}/advertisers/${adv.id}/topup/refresh`, { method: 'POST' })
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({ title: 'Could not refresh', description: err.data?.error ?? 'Could not refresh', color: 'error' })
+  } finally {
+    void load(1, false, true)
+  }
+}
+
+watch(items, () => {
+  if (!topupTarget.value) return
+  const fresh = items.value.find(a => a.id === topupTarget.value!.id)
+  if (fresh) topupTarget.value = fresh
 })
 
 onUnmounted(() => {
   session++
+  stopTopupTimers()
 })
 
 // ── state ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -340,6 +402,36 @@ function onSync() {
                     {{ statusBadge(adv.status).label }}
                   </UBadge>
                 </UTooltip>
+                <UBadge
+                  v-if="adv.topup?.phase"
+                  :color="TOPUP_BADGE[adv.topup.phase].color"
+                  variant="subtle"
+                  size="sm"
+                  class="cursor-pointer whitespace-nowrap"
+                  data-testid="ta-adv-topup-badge"
+                  :data-phase="adv.topup.phase"
+                  @click="openTopup(adv)"
+                >
+                  {{ TOPUP_BADGE[adv.topup.phase].label }}
+                </UBadge>
+                <UButton
+                  v-if="showPayButton(adv.topup, accountBusy, nowMs)"
+                  label="Pay"
+                  size="xs"
+                  color="primary"
+                  data-testid="ta-adv-pay"
+                  @click="openTopup(adv)"
+                />
+                <UButton
+                  v-if="showTopupRefresh(adv.topup, nowMs)"
+                  label="Refresh"
+                  size="xs"
+                  color="neutral"
+                  variant="outline"
+                  :loading="adv.topup?.checking"
+                  data-testid="ta-adv-topup-refresh"
+                  @click="refreshRow(adv)"
+                />
               </div>
             </div>
 
@@ -368,6 +460,23 @@ function onSync() {
               </UTooltip>
             </div>
 
+            <p
+              v-if="adv.topup?.balanceAmount"
+              class="text-xs text-muted"
+              data-testid="ta-adv-topup-balance"
+            >
+              {{ adv.topup.balanceCurrency ? `${adv.topup.balanceAmount} ${adv.topup.balanceCurrency}` : adv.topup.balanceAmount }}
+            </p>
+            <p
+              v-if="adv.topup?.qrSavedAt && (adv.topup.phase === 'ready' || adv.topup.phase === 'pending')"
+              class="text-xs text-muted"
+              data-testid="ta-adv-topup-remain"
+            >
+              {{ formatRemain(clockRemainingMs(adv.topup.qrSavedAt, nowMs)) }}
+            </p>
+            <p v-if="adv.topup?.error && adv.topup.phase !== 'processing'" class="text-xs text-error" data-testid="ta-adv-topup-error">
+              {{ adv.topup.error }}
+            </p>
             <UTooltip v-if="adv.rejectReason" :text="adv.rejectReason" :ui="{ content: 'max-w-md h-auto py-2 whitespace-normal' }">
               <p
                 class="flex items-start gap-1 text-xs text-error"
@@ -408,4 +517,11 @@ function onSync() {
       </div>
     </template>
   </USlideover>
+  <TopupModal
+    v-if="account"
+    v-model:open="topupOpen"
+    :account-id="account.id"
+    :advertiser="topupTarget"
+    @changed="reload"
+  />
 </template>

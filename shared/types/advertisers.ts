@@ -58,6 +58,25 @@ export interface Advertiser {
   missingSince: string | null
   createdAt: string
   updatedAt: string
+  /** Current top-up round. The QR image is not in this list; `GET .../advertisers/:id/topup` returns it. */
+  topup: AdvertiserTopup
+}
+
+export type AdvertiserTopupPhase = 'processing' | 'ready' | 'pending' | 'paid' | 'expired'
+
+export interface AdvertiserTopup {
+  phase: AdvertiserTopupPhase | null
+  /** Integer baht submitted to TikTok */
+  amount: number | null
+  /** ISO — when the QR image was saved. The 30-minute clock starts here. */
+  qrSavedAt: string | null
+  /** Shown until the next Pay click. No badge of its own. */
+  error: string | null
+  balanceAmount: string | null
+  balanceCurrency: string | null
+  /** ISO — paid amount stays on the row until this instant, then the Pay button returns */
+  paidUntil: string | null
+  checking: boolean
 }
 
 /** `GET /tiktok-accounts/:id/advertisers` 200 body (first paginated envelope of apollo-api). */
