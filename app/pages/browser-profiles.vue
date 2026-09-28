@@ -2,8 +2,9 @@
 /**
  * FEAT-002 — Browser profiles (functions 2.1 + 2.2 automatic, read-only; api-contract.md v2).
  * One `GET /backend/browser-profiles/available` (no query) per load / Refresh — the API syncs the provider list into
- * the DB and applies per-workspace visibility; search, group and status filters, sort and pagination are client-side
- * on the returned list (AdsPower Local API is throttled to ~1 req/s).
+ * Mongo, then the response is the visible rows already stored there (including rows this pull did not return).
+ * Search, group and status filters, sort and pagination are client-side on that list (AdsPower Local API is throttled
+ * to ~1 req/s).
  * No claim / start / stop / delete here — those are later features.
  * FEAT-006 (functions 2.3 + 2.10, api-contract.md v1): header buttons "Default settings"
  * (`BrowserProfilesDefaultsSlideover`) and "Create profile" (`BrowserProfilesCreateModal`, one extra
