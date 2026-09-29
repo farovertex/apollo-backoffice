@@ -34,7 +34,7 @@ const topup = computed(() => props.advertiser?.topup ?? null)
 const remain = computed(() => clockRemainingMs(topup.value?.qrSavedAt ?? null, now.value))
 const showImage = computed(() => {
   const phase = topup.value?.phase
-  return phase === 'ready' || phase === 'pending' || phase === 'expired' || (phase === 'ready' && remain.value === 0)
+  return phase === 'ready' || phase === 'pending' || phase === 'expired'
 })
 const showForm = computed(() => {
   const phase = topup.value?.phase
@@ -54,7 +54,9 @@ watch(open, (isOpen) => {
     return
   }
   now.value = Date.now()
-  tick = setInterval(() => { now.value = Date.now() }, 1000)
+  tick = setInterval(() => {
+    now.value = Date.now()
+  }, 1000)
   formError.value = topup.value?.error ?? null
   void loadImage()
 })

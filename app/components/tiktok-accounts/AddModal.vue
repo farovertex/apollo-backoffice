@@ -318,7 +318,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           data-testid="ta-add-create-profile"
         />
 
-        <UFormField v-if="!state.createProfile" label="Browser profile" name="browserProfileId" required>
+        <UFormField
+          v-if="!state.createProfile"
+          label="Browser profile"
+          name="browserProfileId"
+          required
+        >
           <USelectMenu
             v-model="state.browserProfileId"
             :items="freeProfiles"
