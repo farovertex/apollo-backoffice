@@ -9,6 +9,8 @@
  * Business Center list API, written by every successful discover run.
  */
 
+import type { AdvertiserReport } from './reports'
+
 export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
 
 /** `missing` query of `GET /tiktok-accounts/:id/advertisers`: `false` (default) → only current rows, `all` → every row. */
@@ -60,6 +62,11 @@ export interface Advertiser {
   updatedAt: string
   /** Current top-up round. The QR image is not in this list; `GET .../advertisers/:id/topup` returns it. */
   topup: AdvertiserTopup
+  /**
+   * FEAT-020 (AC-21) — ads-report tracking state of this advertiser, served with the list so the slideover
+   * needs no extra request. Optional for readers of an API that predates the feature.
+   */
+  report?: AdvertiserReport
 }
 
 export type AdvertiserTopupPhase = 'processing' | 'ready' | 'pending' | 'paid' | 'expired'
