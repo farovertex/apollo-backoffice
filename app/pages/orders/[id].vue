@@ -16,6 +16,11 @@
  * `screenshotUrl` gets `od-step-shot`, and one click issues exactly one
  * `GET /backend/builds/:id/screenshots/:no` whose `{ mimeType, base64 }` body becomes `od-shot-img`
  * (`od-shot-loading` while it runs, `od-shot-error` with the API text on 404 / any failure).
+ *
+ * FEAT-020 (api-contract §6.4): the page gained two tabs. **Builds is unchanged** — same markup, same
+ * testids, same 5 s poll, which keeps running whatever the open tab is. Report (`?tab=report`) mounts
+ * `ReportsOrderReportPanel` on its first open and is then kept alive; that panel does its own single GET and
+ * never polls.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -31,6 +36,7 @@ import type {
 const POLL_MS = 5000
 
 const route = useRoute()
+const router = useRouter()
 const api = useApi()
 const toast = useToast()
 
@@ -253,6 +259,23 @@ function canStopBuild(build: BuildView): boolean {
   return build.status === 'running' && order.value?.publishMode === 'publish' && !build.stopBeforePublish
 }
 
+// ── tabs (FEAT-020 api-contract §6.4) ────────────────────────────────────────────────────────────────────────────────
+/** the open tab lives in the URL query (`?tab=report`), so a link can open the report directly */
+type OrderTab = 'builds' | 'report'
+const tab = computed<OrderTab>(() => (route.query.tab === 'report' ? 'report' : 'builds'))
+/** the Report panel is created on the first open of the tab and then kept alive (one GET, not one per switch) */
+const reportMounted = ref(false)
+watch(tab, (value) => {
+  if (value === 'report') reportMounted.value = true
+}, { immediate: true })
+
+function setTab(next: OrderTab) {
+  const query = { ...route.query }
+  if (next === 'report') query.tab = 'report'
+  else delete query.tab
+  void router.replace({ query })
+}
+
 // ── step screenshot (FEAT-017 AC-30 · api-contract §6) ───────────────────────────────────────────────────────────────
 /**
  * One `GET /backend<step.screenshotUrl>` per click on `od-step-shot` (`screenshotUrl` is API-relative, so the
@@ -468,275 +491,314 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
             data-testid="od-action-error"
           />
 
-          <!-- summary -->
-          <section class="rounded-lg border border-default p-3" data-testid="od-summary">
-            <div class="flex flex-wrap items-center gap-2">
-              <h2 class="text-sm font-semibold text-highlighted">
-                Summary
-              </h2>
-              <UBadge
-                :color="order.publishMode === 'publish' ? 'warning' : 'neutral'"
-                variant="subtle"
-                class="whitespace-nowrap"
-                data-testid="od-mode"
-              >
-                {{ order.publishMode === 'publish' ? 'Publish' : 'Draft' }}
-              </UBadge>
-              <UBadge
-                color="neutral"
-                variant="outline"
-                class="whitespace-nowrap"
-                data-testid="od-workspace"
-              >
-                {{ order.workspace?.name ?? '—' }}
-              </UBadge>
-            </div>
-            <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
-              <dt class="text-muted">
-                Campaign
-              </dt>
-              <dd class="text-highlighted" data-testid="od-preset">
-                Sales cashback → Website conversions
-              </dd>
-              <dt class="text-muted">
-                Ad group template
-              </dt>
-              <dd class="text-highlighted" data-testid="od-agt">
-                {{ order.adGroupTemplate?.name ?? '—' }}
-              </dd>
-              <dt class="text-muted">
-                Budget per ad group
-              </dt>
-              <dd class="text-highlighted" data-testid="od-budget">
-                {{ budgetText }}
-              </dd>
-              <dt class="text-muted">
-                Ad group copies
-              </dt>
-              <dd class="text-highlighted" data-testid="od-copies">
-                {{ order.adGroupCopies }}
-              </dd>
-              <dt class="text-muted">
-                Ad template
-              </dt>
-              <dd class="text-highlighted" data-testid="od-adt">
-                {{ order.adTemplate?.name ?? '—' }}
-              </dd>
-              <template v-if="sparkPostCode">
-                <dt class="text-muted">
-                  Spark post code
-                </dt>
-                <dd class="break-all font-mono text-highlighted" data-testid="od-spark-code">
-                  {{ sparkPostCode }}
-                </dd>
-              </template>
-              <dt class="text-muted">
-                Advertisers
-              </dt>
-              <dd class="text-highlighted" data-testid="od-targets">
-                {{ order.targetCount }}
-              </dd>
-              <template v-if="order.publishMode === 'publish'">
-                <dt class="text-muted">
-                  Budget cap
-                </dt>
-                <dd class="font-medium text-highlighted" data-testid="od-cap">
-                  {{ capText }}
-                </dd>
-              </template>
-              <dt class="text-muted">
-                Created
-              </dt>
-              <dd class="text-highlighted" data-testid="od-created">
-                {{ order.createdBy?.username ?? '—' }} · {{ shortDateTime(order.createdAt) }}
-              </dd>
-            </dl>
-            <p class="mt-2 text-xs text-muted" data-testid="od-builds-summary">
-              {{ buildSummaryText(order.buildCounts) }}
-            </p>
-          </section>
+          <!-- FEAT-020 — tabs around the untouched Builds content -->
+          <div
+            class="flex gap-1 border-b border-default"
+            role="tablist"
+            aria-label="Order tabs"
+            data-testid="od-tabs"
+          >
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="tab === 'builds'"
+              class="-mb-px border-b-2 px-3 py-2 text-sm font-medium"
+              :class="tab === 'builds' ? 'border-primary text-highlighted' : 'border-transparent text-muted hover:text-default'"
+              data-testid="od-tab-builds"
+              @click="setTab('builds')"
+            >
+              Builds
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="tab === 'report'"
+              class="-mb-px border-b-2 px-3 py-2 text-sm font-medium"
+              :class="tab === 'report' ? 'border-primary text-highlighted' : 'border-transparent text-muted hover:text-default'"
+              data-testid="od-tab-report"
+              @click="setTab('report')"
+            >
+              Report
+            </button>
+          </div>
 
-          <!-- builds -->
-          <div class="overflow-x-auto" data-testid="od-builds-table">
-            <table class="w-full border-separate border-spacing-0 text-sm">
-              <thead>
-                <tr class="bg-elevated/50">
-                  <th class="rounded-l-lg border-y border-l border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Account
-                  </th>
-                  <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Advertiser
-                  </th>
-                  <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Status
-                  </th>
-                  <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Step
-                  </th>
-                  <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Started
-                  </th>
-                  <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Finished
-                  </th>
-                  <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Published
-                  </th>
-                  <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Error
-                  </th>
-                  <th class="rounded-r-lg border-y border-r border-default px-3 py-2 text-right font-semibold whitespace-nowrap text-highlighted">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <template v-for="build in builds" :key="build.id">
-                  <!-- the whole row toggles its steps; the action buttons stop the click so they never expand it -->
-                  <tr
-                    :data-id="build.id"
-                    :data-status="build.status"
-                    data-slot="tr"
-                    data-testid="od-build"
-                    class="cursor-pointer"
-                    @click="toggleExpanded(build.id)"
-                  >
-                    <td class="border-b border-default px-3 py-2">
-                      <div class="flex flex-col">
-                        <span class="font-medium text-highlighted">{{ build.account?.label ?? build.account?.loginEmail ?? '—' }}</span>
-                        <span v-if="build.account?.label" class="text-xs text-muted">{{ build.account.loginEmail }}</span>
-                      </div>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <div class="flex flex-col">
-                        <span class="text-highlighted">{{ build.advertiser?.name ?? '—' }}</span>
-                        <span v-if="build.advertiser" class="text-xs text-muted">{{ build.advertiser.tiktokAdvertiserId }}</span>
-                      </div>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <div class="flex flex-col items-start gap-1">
-                        <UBadge
-                          :color="buildStatusBadge(build.status).color"
-                          variant="subtle"
-                          class="whitespace-nowrap"
-                          data-testid="od-build-status"
-                        >
-                          {{ buildStatusBadge(build.status).label }}
-                        </UBadge>
-                        <UBadge
-                          v-if="build.stopBeforePublish"
-                          color="warning"
-                          variant="outline"
-                          size="sm"
-                          class="whitespace-nowrap"
-                          data-testid="od-build-stop-requested"
-                        >
-                          {{ build.stoppedBeforePublish ? 'Stopped before publish' : 'Stop requested' }}
-                        </UBadge>
-                      </div>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <span data-testid="od-build-step">{{ stepCell(build) }}</span>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <span class="whitespace-nowrap" :title="build.startedAt ?? ''">{{ timeAgo(build.startedAt) }}</span>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <span class="whitespace-nowrap" :title="build.finishedAt ?? ''">{{ timeAgo(build.finishedAt) }}</span>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <div class="flex flex-col">
-                        <span class="whitespace-nowrap">{{ shortDateTime(build.publishedAt) }}</span>
-                        <span v-if="build.tiktokCampaignId" class="text-xs text-muted">{{ build.tiktokCampaignId }}</span>
-                      </div>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <span
-                        v-if="build.lastError"
-                        class="line-clamp-2 max-w-48 text-error"
-                        :title="build.lastError"
-                        data-testid="od-build-error"
-                      >{{ build.lastError }}</span>
-                      <span v-else class="text-muted">—</span>
-                    </td>
-                    <td class="border-b border-default px-3 py-2">
-                      <div class="flex items-center justify-end gap-1 whitespace-nowrap">
-                        <UButton
-                          v-if="canCancelBuild(build)"
-                          label="Cancel"
-                          icon="i-lucide-circle-x"
-                          color="error"
-                          variant="subtle"
-                          size="xs"
-                          data-testid="od-build-cancel"
-                          @click.stop="askCancelBuild(build)"
-                        />
-                        <UButton
-                          v-if="canStopBuild(build)"
-                          label="Stop before publish"
-                          icon="i-lucide-hand"
-                          color="warning"
-                          variant="subtle"
-                          size="xs"
-                          data-testid="od-build-stop"
-                          @click.stop="askStopBuild(build)"
-                        />
-                        <UButton
-                          :icon="expanded.includes(build.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-                          :label="stepsLabel(build)"
-                          color="neutral"
-                          variant="ghost"
-                          size="xs"
-                          data-testid="od-build-expand"
-                          @click.stop="toggleExpanded(build.id)"
-                        />
-                      </div>
-                    </td>
+          <template v-if="tab === 'builds'">
+            <!-- summary -->
+            <section class="rounded-lg border border-default p-3" data-testid="od-summary">
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="text-sm font-semibold text-highlighted">
+                  Summary
+                </h2>
+                <UBadge
+                  :color="order.publishMode === 'publish' ? 'warning' : 'neutral'"
+                  variant="subtle"
+                  class="whitespace-nowrap"
+                  data-testid="od-mode"
+                >
+                  {{ order.publishMode === 'publish' ? 'Publish' : 'Draft' }}
+                </UBadge>
+                <UBadge
+                  color="neutral"
+                  variant="outline"
+                  class="whitespace-nowrap"
+                  data-testid="od-workspace"
+                >
+                  {{ order.workspace?.name ?? '—' }}
+                </UBadge>
+              </div>
+              <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+                <dt class="text-muted">
+                  Campaign
+                </dt>
+                <dd class="text-highlighted" data-testid="od-preset">
+                  Sales cashback → Website conversions
+                </dd>
+                <dt class="text-muted">
+                  Ad group template
+                </dt>
+                <dd class="text-highlighted" data-testid="od-agt">
+                  {{ order.adGroupTemplate?.name ?? '—' }}
+                </dd>
+                <dt class="text-muted">
+                  Budget per ad group
+                </dt>
+                <dd class="text-highlighted" data-testid="od-budget">
+                  {{ budgetText }}
+                </dd>
+                <dt class="text-muted">
+                  Ad group copies
+                </dt>
+                <dd class="text-highlighted" data-testid="od-copies">
+                  {{ order.adGroupCopies }}
+                </dd>
+                <dt class="text-muted">
+                  Ad template
+                </dt>
+                <dd class="text-highlighted" data-testid="od-adt">
+                  {{ order.adTemplate?.name ?? '—' }}
+                </dd>
+                <template v-if="sparkPostCode">
+                  <dt class="text-muted">
+                    Spark post code
+                  </dt>
+                  <dd class="break-all font-mono text-highlighted" data-testid="od-spark-code">
+                    {{ sparkPostCode }}
+                  </dd>
+                </template>
+                <dt class="text-muted">
+                  Advertisers
+                </dt>
+                <dd class="text-highlighted" data-testid="od-targets">
+                  {{ order.targetCount }}
+                </dd>
+                <template v-if="order.publishMode === 'publish'">
+                  <dt class="text-muted">
+                    Budget cap
+                  </dt>
+                  <dd class="font-medium text-highlighted" data-testid="od-cap">
+                    {{ capText }}
+                  </dd>
+                </template>
+                <dt class="text-muted">
+                  Created
+                </dt>
+                <dd class="text-highlighted" data-testid="od-created">
+                  {{ order.createdBy?.username ?? '—' }} · {{ shortDateTime(order.createdAt) }}
+                </dd>
+              </dl>
+              <p class="mt-2 text-xs text-muted" data-testid="od-builds-summary">
+                {{ buildSummaryText(order.buildCounts) }}
+              </p>
+            </section>
+
+            <!-- builds -->
+            <div class="overflow-x-auto" data-testid="od-builds-table">
+              <table class="w-full border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr class="bg-elevated/50">
+                    <th class="rounded-l-lg border-y border-l border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Account
+                    </th>
+                    <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Advertiser
+                    </th>
+                    <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Status
+                    </th>
+                    <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Step
+                    </th>
+                    <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Started
+                    </th>
+                    <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Finished
+                    </th>
+                    <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Published
+                    </th>
+                    <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                      Error
+                    </th>
+                    <th class="rounded-r-lg border-y border-r border-default px-3 py-2 text-right font-semibold whitespace-nowrap text-highlighted">
+                      Actions
+                    </th>
                   </tr>
-                  <tr v-if="expanded.includes(build.id)" :data-id="build.id" data-testid="od-build-expanded">
-                    <td class="border-b border-default bg-elevated/30 px-3 py-2" colspan="9">
-                      <p v-if="build.steps.length === 0" class="text-sm text-muted" data-testid="od-steps-empty">
-                        No steps yet
-                      </p>
-                      <ol v-else class="flex flex-col gap-1" data-testid="od-steps">
-                        <li
-                          v-for="stepEntry in build.steps"
-                          :key="stepEntry.no"
-                          :data-no="stepEntry.no"
-                          :data-status="stepEntry.status"
-                          data-testid="od-step"
-                          class="flex flex-wrap items-center gap-2 text-sm"
-                        >
-                          <span class="w-6 text-right text-xs text-muted">{{ stepEntry.no }}</span>
-                          <span class="font-medium text-highlighted">{{ stepEntry.name }}</span>
+                </thead>
+                <tbody>
+                  <template v-for="build in builds" :key="build.id">
+                    <!-- the whole row toggles its steps; the action buttons stop the click so they never expand it -->
+                    <tr
+                      :data-id="build.id"
+                      :data-status="build.status"
+                      data-slot="tr"
+                      data-testid="od-build"
+                      class="cursor-pointer"
+                      @click="toggleExpanded(build.id)"
+                    >
+                      <td class="border-b border-default px-3 py-2">
+                        <div class="flex flex-col">
+                          <span class="font-medium text-highlighted">{{ build.account?.label ?? build.account?.loginEmail ?? '—' }}</span>
+                          <span v-if="build.account?.label" class="text-xs text-muted">{{ build.account.loginEmail }}</span>
+                        </div>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <div class="flex flex-col">
+                          <span class="text-highlighted">{{ build.advertiser?.name ?? '—' }}</span>
+                          <span v-if="build.advertiser" class="text-xs text-muted">{{ build.advertiser.tiktokAdvertiserId }}</span>
+                        </div>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <div class="flex flex-col items-start gap-1">
                           <UBadge
-                            :color="stepEntry.status === 'failed' ? 'error' : stepEntry.status === 'done' ? 'success' : 'info'"
+                            :color="buildStatusBadge(build.status).color"
                             variant="subtle"
+                            class="whitespace-nowrap"
+                            data-testid="od-build-status"
+                          >
+                            {{ buildStatusBadge(build.status).label }}
+                          </UBadge>
+                          <UBadge
+                            v-if="build.stopBeforePublish"
+                            color="warning"
+                            variant="outline"
                             size="sm"
                             class="whitespace-nowrap"
+                            data-testid="od-build-stop-requested"
                           >
-                            {{ stepEntry.status }}
+                            {{ build.stoppedBeforePublish ? 'Stopped before publish' : 'Stop requested' }}
                           </UBadge>
-                          <span v-if="stepEntry.message" class="text-xs text-muted">{{ stepEntry.message }}</span>
-                          <span class="text-xs text-dimmed">{{ shortDateTime(stepEntry.at) }}</span>
+                        </div>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <span data-testid="od-build-step">{{ stepCell(build) }}</span>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <span class="whitespace-nowrap" :title="build.startedAt ?? ''">{{ timeAgo(build.startedAt) }}</span>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <span class="whitespace-nowrap" :title="build.finishedAt ?? ''">{{ timeAgo(build.finishedAt) }}</span>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <div class="flex flex-col">
+                          <span class="whitespace-nowrap">{{ shortDateTime(build.publishedAt) }}</span>
+                          <span v-if="build.tiktokCampaignId" class="text-xs text-muted">{{ build.tiktokCampaignId }}</span>
+                        </div>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <span
+                          v-if="build.lastError"
+                          class="line-clamp-2 max-w-48 text-error"
+                          :title="build.lastError"
+                          data-testid="od-build-error"
+                        >{{ build.lastError }}</span>
+                        <span v-else class="text-muted">—</span>
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <div class="flex items-center justify-end gap-1 whitespace-nowrap">
                           <UButton
-                            v-if="stepEntry.screenshotUrl"
-                            label="Screenshot"
-                            icon="i-lucide-image"
-                            color="neutral"
-                            variant="link"
+                            v-if="canCancelBuild(build)"
+                            label="Cancel"
+                            icon="i-lucide-circle-x"
+                            color="error"
+                            variant="subtle"
                             size="xs"
-                            data-testid="od-step-shot"
-                            @click="showScreenshot(stepEntry.screenshotUrl)"
+                            data-testid="od-build-cancel"
+                            @click.stop="askCancelBuild(build)"
                           />
-                        </li>
-                      </ol>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
+                          <UButton
+                            v-if="canStopBuild(build)"
+                            label="Stop before publish"
+                            icon="i-lucide-hand"
+                            color="warning"
+                            variant="subtle"
+                            size="xs"
+                            data-testid="od-build-stop"
+                            @click.stop="askStopBuild(build)"
+                          />
+                          <UButton
+                            :icon="expanded.includes(build.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
+                            :label="stepsLabel(build)"
+                            color="neutral"
+                            variant="ghost"
+                            size="xs"
+                            data-testid="od-build-expand"
+                            @click.stop="toggleExpanded(build.id)"
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                    <tr v-if="expanded.includes(build.id)" :data-id="build.id" data-testid="od-build-expanded">
+                      <td class="border-b border-default bg-elevated/30 px-3 py-2" colspan="9">
+                        <p v-if="build.steps.length === 0" class="text-sm text-muted" data-testid="od-steps-empty">
+                          No steps yet
+                        </p>
+                        <ol v-else class="flex flex-col gap-1" data-testid="od-steps">
+                          <li
+                            v-for="stepEntry in build.steps"
+                            :key="stepEntry.no"
+                            :data-no="stepEntry.no"
+                            :data-status="stepEntry.status"
+                            data-testid="od-step"
+                            class="flex flex-wrap items-center gap-2 text-sm"
+                          >
+                            <span class="w-6 text-right text-xs text-muted">{{ stepEntry.no }}</span>
+                            <span class="font-medium text-highlighted">{{ stepEntry.name }}</span>
+                            <UBadge
+                              :color="stepEntry.status === 'failed' ? 'error' : stepEntry.status === 'done' ? 'success' : 'info'"
+                              variant="subtle"
+                              size="sm"
+                              class="whitespace-nowrap"
+                            >
+                              {{ stepEntry.status }}
+                            </UBadge>
+                            <span v-if="stepEntry.message" class="text-xs text-muted">{{ stepEntry.message }}</span>
+                            <span class="text-xs text-dimmed">{{ shortDateTime(stepEntry.at) }}</span>
+                            <UButton
+                              v-if="stepEntry.screenshotUrl"
+                              label="Screenshot"
+                              icon="i-lucide-image"
+                              color="neutral"
+                              variant="link"
+                              size="xs"
+                              data-testid="od-step-shot"
+                              @click="showScreenshot(stepEntry.screenshotUrl)"
+                            />
+                          </li>
+                        </ol>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <ReportsOrderReportPanel
+            v-if="reportMounted"
+            v-show="tab === 'report'"
+            :order-id="orderId"
+          />
         </template>
       </div>
 

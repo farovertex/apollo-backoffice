@@ -8,6 +8,10 @@
  * (`ta-adv-slideover`): loading (first page in flight, nothing shown yet) · ready · empty · error.
  * Filters reset when the slideover closes, so the next open starts from `page=1&missing=false` with one request.
  * The "Sync advertisers" button of the empty state emits `sync`; the page runs the same POST + poll as the row.
+ *
+ * FEAT-020 (api-contract §6.5): each row also shows the ads-report state of that advertiser (`adv-report`,
+ * `data-state` = never|on|off|error) — it comes with the list view (AC-21), so no extra request — and links
+ * to `/reports?advertiserId=<id>`. The link is rendered for GOD/Admin only, like the Reports nav item.
  */
 import type { FetchError } from 'ofetch'
 import type { SlideoverProps } from '@nuxt/ui'
@@ -36,6 +40,13 @@ const REJECT_MAX = 60
 
 const api = useApi()
 const toast = useToast()
+const auth = useAuth()
+
+/** FEAT-020 §6.5 — the report line links to `/reports`, which is GOD/Admin only (display-only gate) */
+const canSeeReports = computed(() => {
+  const roles = auth.admin.value?.roles ?? []
+  return roles.includes('GOD') || roles.includes('Admin')
+})
 
 // ── filters ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 const search = ref('')
@@ -172,7 +183,9 @@ function topupInFlight() {
 function startTopupTimers() {
   stopTopupTimers()
   nowMs.value = Date.now()
-  clockTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
+  clockTimer = setInterval(() => {
+    nowMs.value = Date.now()
+  }, 1000)
   pollTimer = setInterval(() => {
     if (open.value && page.value === 1 && topupInFlight() && !loading.value && !loadingMore.value) void load(1, false, true)
   }, 4000)
@@ -266,6 +279,15 @@ async function copyId(id: string) {
   } catch {
     toast.add({ title: 'Could not copy the id', description: 'Clipboard access was denied by the browser.', color: 'error' })
   }
+}
+
+/** "รายงาน: เปิด · 5 นาทีที่แล้ว" · "รายงาน: ปิด" · the Thai error text · "รายงาน: —" when never tracked */
+function reportLine(adv: Advertiser): string {
+  const report = adv.report
+  if (!report || report.state === 'never') return `รายงาน: ${REPORT_DASH}`
+  if (report.state === 'off') return 'รายงาน: ปิด'
+  if (report.state === 'error') return `รายงาน: ${reportErrorText(report.lastError) ?? 'ผิดพลาด'}`
+  return `รายงาน: เปิด · ${timeAgoTh(report.lastFetchAt, nowMs.value)}`
 }
 
 function onSync() {
@@ -459,6 +481,18 @@ function onSync() {
                 </span>
               </UTooltip>
             </div>
+
+            <NuxtLink
+              v-if="canSeeReports"
+              :to="`/reports?advertiserId=${adv.id}`"
+              class="inline-flex w-fit items-center gap-1.5 text-xs text-muted hover:underline"
+              data-testid="adv-report"
+              :data-state="adv.report?.state ?? 'never'"
+              @click.stop
+            >
+              <span class="size-2 shrink-0 rounded-full" :class="reportDot(adv.report?.state)" />
+              <span>{{ reportLine(adv) }}</span>
+            </NuxtLink>
 
             <p
               v-if="adv.topup?.balanceAmount"
