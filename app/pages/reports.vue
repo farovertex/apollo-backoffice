@@ -68,12 +68,22 @@ const searchQuery = computed(() => queryString('search') ?? '')
 const search = ref(searchQuery.value)
 const searchDebounced = refDebounced(search, DEBOUNCE_MS)
 
+/** `all` is the "no filter" option of every dropdown — it never travels in the URL or to the API */
+function orUndefined(value: string): string | undefined {
+  return value === 'all' ? undefined : value
+}
+
+/**
+ * Merge a patch into the URL query: a key whose value is `undefined` / `''` disappears, every other key
+ * keeps its current value. Any change resets the page unless `keepPage` says otherwise.
+ */
 function setQuery(patch: Record<string, string | undefined>, keepPage = false) {
+  const merged = { ...route.query, ...patch }
   const next: Record<string, string> = {}
-  for (const [key, value] of Object.entries({ ...route.query, ...patch })) {
-    if (typeof value === 'string' && value !== '' && value !== 'all') next[key] = value
+  for (const [key, value] of Object.entries(merged)) {
+    if (!keepPage && key === 'page') continue
+    if (typeof value === 'string' && value !== '') next[key] = value
   }
-  if (!keepPage) delete next.page
   void router.replace({ query: next })
 }
 
@@ -476,7 +486,7 @@ function focusRow() {
               class="min-w-36"
               aria-label="Workspace"
               data-testid="rp-filter-workspace"
-              @update:model-value="(v: string) => setQuery({ workspaceId: v })"
+              @update:model-value="(v: string) => setQuery({ workspaceId: orUndefined(v) })"
             />
             <USelect
               :model-value="accountId"
@@ -485,7 +495,7 @@ function focusRow() {
               class="min-w-36"
               aria-label="Account"
               data-testid="rp-filter-account"
-              @update:model-value="(v: string) => setQuery({ tiktokAccountId: v })"
+              @update:model-value="(v: string) => setQuery({ tiktokAccountId: orUndefined(v) })"
             />
             <USelect
               :model-value="advertiserId"
@@ -494,7 +504,7 @@ function focusRow() {
               class="min-w-36"
               aria-label="Advertiser"
               data-testid="rp-filter-advertiser"
-              @update:model-value="(v: string) => setQuery({ advertiserId: v })"
+              @update:model-value="(v: string) => setQuery({ advertiserId: orUndefined(v) })"
             />
             <USelect
               :model-value="orderId"
@@ -503,7 +513,7 @@ function focusRow() {
               class="min-w-36"
               aria-label="Order"
               data-testid="rp-filter-order"
-              @update:model-value="(v: string) => setQuery({ orderId: v })"
+              @update:model-value="(v: string) => setQuery({ orderId: orUndefined(v) })"
             />
             <USelect
               :model-value="stateFilter"
@@ -512,7 +522,7 @@ function focusRow() {
               class="min-w-32"
               aria-label="สถานะ"
               data-testid="rp-filter-state"
-              @update:model-value="(v: string) => setQuery({ state: v })"
+              @update:model-value="(v: string) => setQuery({ state: orUndefined(v) })"
             />
             <USelect
               :model-value="linkedFilter"
@@ -521,7 +531,7 @@ function focusRow() {
               class="min-w-32"
               aria-label="ที่มา"
               data-testid="rp-filter-linked"
-              @update:model-value="(v: string) => setQuery({ linked: v })"
+              @update:model-value="(v: string) => setQuery({ linked: orUndefined(v) })"
             />
             <UButton
               v-if="hasFilter"

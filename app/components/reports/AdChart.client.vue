@@ -38,15 +38,13 @@ const y = (d: ChartPoint) => d.value
 
 const format = (v: number) => (props.decimals ? formatDecimal(v) : formatInt(v))
 
-/** only the first, the last and every 4th tick, so 24 hourly points never overlap */
-const xTicks = (i: number) => {
-  const point = props.points[i]
-  if (!point) return ''
-  if (i === 0 || i === props.points.length - 1) return point.label
-  return i % 4 === 0 ? point.label : ''
-}
+/** label the first, the last and every 4th point, so 24 hourly buckets never overlap */
+const xTickValues = computed(() =>
+  props.points.map((_, i) => i).filter(i => i % 4 === 0 || i === props.points.length - 1)
+)
+const xTicks = (i: number) => props.points[Math.round(i)]?.label ?? ''
 
-const template = (d: ChartPoint) => `${d.label} · ${props.metricLabel} ${format(d.value)}\n${d.detail}`
+const template = (d: ChartPoint) => `${d.label}\n${d.detail}`
 
 const ariaLabel = computed(() => `${props.metricLabel} · ${props.points.length} จุด`)
 </script>
@@ -79,8 +77,18 @@ const ariaLabel = computed(() => `${props.metricLabel} · ${props.points.length}
       />
       <VisLine :x="x" :y="y" color="var(--ui-primary)" />
       <VisAxis type="y" :tick-format="format" :num-ticks="4" />
-      <VisAxis type="x" :x="x" :tick-format="xTicks" />
-      <VisCrosshair color="var(--ui-primary)" :template="template" />
+      <VisAxis
+        type="x"
+        :x="x"
+        :tick-values="xTickValues"
+        :tick-format="xTicks"
+      />
+      <VisCrosshair
+        :x="x"
+        :y="[y]"
+        color="var(--ui-primary)"
+        :template="template"
+      />
       <VisTooltip />
     </VisXYContainer>
   </div>

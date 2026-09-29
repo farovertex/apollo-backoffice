@@ -71,7 +71,7 @@ function adGroupLine(row: AdReportRow): string {
         <tr class="bg-elevated/50">
           <th
             scope="col"
-            class="rounded-l-lg border-y border-l border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+            class="rounded-l-lg border-y border-l border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
             :aria-sort="ariaSort('creativeName')"
             :data-testid="sortable ? 'rp-sort-creativeName' : undefined"
             :class="sortable ? 'cursor-pointer select-none' : ''"
@@ -83,14 +83,14 @@ function adGroupLine(row: AdReportRow): string {
             โฆษณา
           </th>
           <template v-if="!compact">
-            <th scope="col" class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+            <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
               Order / แคมเปญ
             </th>
-            <th scope="col" class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+            <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
               Advertiser
             </th>
           </template>
-          <th scope="col" class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+          <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
             สถานะ
           </th>
           <th
@@ -117,12 +117,12 @@ function adGroupLine(row: AdReportRow): string {
             {{ column.label }}
             <span v-if="sortable && sortField === column.field" aria-hidden="true">{{ sortDesc ? '▼' : '▲' }}</span>
           </th>
-          <th scope="col" class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+          <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
             แนวโน้มวันนี้
           </th>
           <th
             scope="col"
-            class="rounded-r-lg border-y border-r border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+            class="rounded-r-lg border-y border-r border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
             :aria-sort="ariaSort('lastSeenAt')"
             :data-testid="sortable ? 'rp-sort-lastSeenAt' : undefined"
             :class="sortable ? 'cursor-pointer select-none' : ''"
@@ -156,14 +156,14 @@ function adGroupLine(row: AdReportRow): string {
           @keydown.enter.prevent="emit('select', row)"
         >
           <!-- โฆษณา -->
-          <td class="border-b border-default px-3 py-2">
+          <td class="border-b border-default px-2 py-2">
             <div class="flex min-w-0 items-center gap-2">
               <ReportsAdThumb :url="row.media?.coverUrl ?? null" :is-video="!!row.media?.isVideo" />
               <span class="flex min-w-0 flex-col">
-                <span class="max-w-52 truncate font-medium text-highlighted" :title="row.creativeName ?? ''">
+                <span class="max-w-44 truncate font-medium text-highlighted" :title="row.creativeName ?? ''">
                   {{ row.creativeName || REPORT_DASH }}
                 </span>
-                <span class="max-w-52 truncate text-xs text-muted" :title="row.adGroupName ?? ''">
+                <span class="max-w-44 truncate text-xs text-muted" :title="row.adGroupName ?? ''">
                   {{ adGroupLine(row) }}
                 </span>
               </span>
@@ -171,12 +171,12 @@ function adGroupLine(row: AdReportRow): string {
           </td>
 
           <!-- Order / แคมเปญ -->
-          <td v-if="!compact" class="border-b border-default px-3 py-2">
+          <td v-if="!compact" class="border-b border-default px-2 py-2">
             <div class="flex min-w-0 flex-col">
               <NuxtLink
                 v-if="row.order"
                 :to="`/orders/${row.order.id}`"
-                class="max-w-44 truncate text-primary hover:underline"
+                class="max-w-36 truncate text-primary hover:underline"
                 :title="row.order.name"
                 data-testid="rp-row-order"
                 @click.stop
@@ -201,9 +201,9 @@ function adGroupLine(row: AdReportRow): string {
           </td>
 
           <!-- Advertiser -->
-          <td v-if="!compact" class="border-b border-default px-3 py-2">
+          <td v-if="!compact" class="border-b border-default px-2 py-2">
             <div class="flex min-w-0 flex-col">
-              <span class="max-w-40 truncate text-highlighted" :title="row.advertiser?.name ?? ''">
+              <span class="max-w-32 truncate text-highlighted" :title="row.advertiser?.name ?? ''">
                 {{ row.advertiser?.name || REPORT_DASH }}
               </span>
               <span class="text-xs text-muted" :title="row.advertiser?.tiktokAdvertiserId ?? ''">
@@ -213,7 +213,7 @@ function adGroupLine(row: AdReportRow): string {
           </td>
 
           <!-- สถานะ -->
-          <td class="border-b border-default px-3 py-2">
+          <td class="border-b border-default px-2 py-2">
             <ReportsLevelPills :status="row.status" />
           </td>
 
@@ -251,12 +251,12 @@ function adGroupLine(row: AdReportRow): string {
           </td>
 
           <!-- แนวโน้มวันนี้ -->
-          <td class="border-b border-default px-3 py-2">
+          <td class="border-b border-default px-2 py-2">
             <ReportsSparkline :values="row.sparkline" />
           </td>
 
           <!-- อัปเดต -->
-          <td class="border-b border-default px-3 py-2">
+          <td class="border-b border-default px-2 py-2">
             <ReportsUpdatedCell
               :last-fetch-at="row.lastFetchAt"
               :fetch-error="row.fetchError"
