@@ -360,6 +360,7 @@ function targetingCell(template: AdGroupTemplate): string {
 
 function postCell(template: AdTemplate): string {
   const post = template.config?.identity?.post
+  if (post?.selection === 'authCode') return 'code' in post && post.code ? post.code : ''
   return post?.selection === 'named' ? post.text : 'First authorized post'
 }
 
@@ -1172,7 +1173,7 @@ onUnmounted(() => {
                           Older catalog
                         </UBadge>
                       </span>
-                      <span class="line-clamp-1 text-xs text-muted">{{ postCell(template) }}</span>
+                      <span class="break-all text-xs text-muted">{{ postCell(template) }}</span>
                       <span class="line-clamp-1 text-xs text-muted">{{ pageCell(template) }}</span>
                       <span class="line-clamp-2 text-xs text-muted" :title="ctaCell(template)">{{ ctaCell(template) }}</span>
                       <span class="text-xs text-dimmed">

@@ -36,6 +36,13 @@ const toast = useToast()
 
 const orderId = computed(() => String(route.params.id ?? ''))
 
+/** Full Spark post code from the order's stored ad config. Empty when this order did not authorize a post by code. */
+const sparkPostCode = computed(() => {
+  const post = order.value?.adConfig?.identity?.post
+  if (!post || post.selection !== 'authCode' || !('code' in post) || typeof post.code !== 'string') return ''
+  return post.code
+})
+
 // ── data ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const order = ref<OrderDetail | null>(null)
 const builds = ref<BuildView[]>([])
@@ -515,6 +522,14 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
               <dd class="text-highlighted" data-testid="od-adt">
                 {{ order.adTemplate?.name ?? '—' }}
               </dd>
+              <template v-if="sparkPostCode">
+                <dt class="text-muted">
+                  Spark post code
+                </dt>
+                <dd class="break-all font-mono text-highlighted" data-testid="od-spark-code">
+                  {{ sparkPostCode }}
+                </dd>
+              </template>
               <dt class="text-muted">
                 Advertisers
               </dt>

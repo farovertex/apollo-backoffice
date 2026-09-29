@@ -2,9 +2,9 @@
  * FEAT-005 — advertisers discovered from the Business Center (functions 3.9, action-flow F6). Mirrors
  * mission-control/.ai/features/FEAT-005-discover-advertisers-from-business-center/api-contract.md v1 §5
  * ("AdvertiserView", `GET /tiktok-accounts/:id/advertisers`, `POST /tiktok-accounts/:id/discover`).
- * Raw Business Center ints/strings are stored as-is (`raw` is never returned); `status` is derived from
- * `account_status` (dropdown 2026-09-27): 2 Approved → `active`, 0/1/4/8 → `suspended`, anything else falls
- * through to `rejectReason` / `showPunishLink`.
+ * Raw Business Center ints/strings are stored as-is (`raw` is never returned); discover `status` is
+ * its own map: `account_status` 4 → `active`, 8 → `suspended`. Other codes fall through to `rejectReason` /
+ * `showPunishLink`. The filter-dropdown words are a different map and are not used here.
  * FEAT-016 (api-contract.md v1 §1): the view gains `bcOrder`, the 0-based position of the advertiser in the
  * Business Center list API, written by every successful discover run.
  */
@@ -25,7 +25,7 @@ export interface Advertiser {
   name: string
   status: AdvertiserStatus
   accountType: number | null
-  /** raw BC `account_status` (2 Approved, 4 Suspended, 8 punished payload, …) */
+  /** raw BC `account_status` (discover: 4 active, 8 suspended) */
   accountStatus: number | null
   relationStatus: number | null
   relationType: number | null

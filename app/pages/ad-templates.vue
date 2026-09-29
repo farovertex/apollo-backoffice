@@ -140,13 +140,12 @@ function timeAgo(iso: string): string {
 }
 
 /**
- * Post cell: `New post by code` for the FEAT-017 `authCode` post (never the code, not even its last 4 —
- * `adt-post-code-hint` in the form is the only place the mask is shown), the caption text for a legacy `named`
- * post, else the English chrome `First authorized post` (A8).
+ * Post cell: the full Spark post code for an `authCode` post, the caption text for a legacy `named`
+ * post, else `First authorized post`.
  */
 function postCell(template: AdTemplate): string {
   const post = template.config?.identity?.post
-  if (post?.selection === 'authCode') return 'New post by code'
+  if (post?.selection === 'authCode') return 'code' in post && post.code ? post.code : ''
   return post?.selection === 'named' ? post.text : 'First authorized post'
 }
 
@@ -409,7 +408,7 @@ function onDeleted() {
                   </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
-                  <span class="line-clamp-2 max-w-48" :title="postCell(template)" data-testid="adt-post">{{ postCell(template) }}</span>
+                  <span class="break-all" :title="postCell(template)" data-testid="adt-post">{{ postCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <span class="line-clamp-2 max-w-48" :title="destinationCell(template)" data-testid="adt-destination">{{ destinationCell(template) }}</span>

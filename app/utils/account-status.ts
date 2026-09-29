@@ -1,13 +1,7 @@
-/** English labels from the Business Center account-status filter (2026-09-27). 8 is the punished payload code, same word as Suspended. */
+/** Discover payload only. 4 = Active, 8 = Suspended. The Business Center filter dropdown uses other numbers and is not this map. */
 const ACCOUNT_STATUS_LABEL: Record<number, string> = {
-  0: 'Deactivated',
-  1: 'Disapproved',
-  2: 'Approved',
-  3: 'In review',
-  4: 'Suspended',
-  5: 'Contract has not taken effect',
-  8: 'Suspended',
-  12: 'No TikTok accounts are linked'
+  4: 'Active',
+  8: 'Suspended'
 }
 
 export function accountStatusTip(code: number | null): string {

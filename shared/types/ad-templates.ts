@@ -80,12 +80,14 @@ export type AdPostSelection
     | { selection: 'authCode', code?: string }
 
 /**
- * `config.identity.post` **as served by the API** (FEAT-017 api-contract §2.3): the code itself never leaves
- * the API. `codeLast4` = last 4 characters of the stored code, `null` when it is shorter than 5 characters.
+ * `config.identity.post` **as served by the API**.
+ * Ad-template views and campaign-order detail include the stored Spark `code`.
+ * The masked shape (`hasCode` / `codeLast4`) is only for an older response.
  */
 export type AdPostSelectionView
   = | { selection: 'first' }
     | { selection: 'named', text: string }
+    | { selection: 'authCode', code: string }
     | { selection: 'authCode', hasCode: boolean, codeLast4: string | null }
 
 /**
@@ -139,7 +141,7 @@ export interface AdTracking {
 
 /**
  * The 6 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
- * `identity.post` is the masked view (`AdPostSelectionView`) — the Spark code is never in a response.
+ * `identity.post` of an `authCode` template includes the stored Spark `code`.
  */
 export interface AdConfig {
   /** null = let TikTok auto-name the ad; the job appends the date to the prefix */

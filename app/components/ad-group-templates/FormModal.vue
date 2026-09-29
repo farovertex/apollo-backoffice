@@ -447,6 +447,33 @@ type ListFieldName = keyof typeof LIST_FIELDS
  * entry can be explained instead of silently swallowed: trims, drops empties and refuses a too-long / duplicate /
  * over-the-limit tag with an inline message. The accepted list replaces the model, so a rejected tag never appears.
  */
+const AGE_UNLIMITED = '__unlimited__'
+
+const ageItems = computed(() => [
+  { value: AGE_UNLIMITED, label: props.options.ageGroupsUnlimitedLabel },
+  ...props.options.ageGroups.map(item => ({ value: item.value, label: item.label }))
+])
+
+const ageSelection = computed(() =>
+  state.config.ageGroups.length === 0 ? [AGE_UNLIMITED] : state.config.ageGroups
+)
+
+function onAgeGroups(next: string[] | undefined) {
+  const values = next ?? []
+  const ranges = values.filter(value => value !== AGE_UNLIMITED)
+  const pickedUnlimited = values.includes(AGE_UNLIMITED)
+  const hadUnlimited = state.config.ageGroups.length === 0
+  if (pickedUnlimited && ranges.length > 0 && hadUnlimited) {
+    state.config.ageGroups = ranges
+    return
+  }
+  if (pickedUnlimited) {
+    state.config.ageGroups = []
+    return
+  }
+  state.config.ageGroups = ranges
+}
+
 function onTagsUpdate(name: ListFieldName, next: string[] | null) {
   const limits = listLimits.value
   const accepted: string[] = []
@@ -1125,16 +1152,16 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <UFormField
               label="Age"
               name="config.ageGroups"
-              :help="state.config.ageGroups.length === 0 ? options.ageGroupsUnlimitedLabel : undefined"
               :error="serverErrors['config.ageGroups']"
             >
               <UCheckboxGroup
-                v-model="state.config.ageGroups"
-                :items="options.ageGroups"
+                :model-value="ageSelection"
+                :items="ageItems"
                 value-key="value"
                 orientation="horizontal"
                 :disabled="submitting"
                 data-testid="agt-form-ages"
+                @update:model-value="onAgeGroups"
               />
             </UFormField>
 

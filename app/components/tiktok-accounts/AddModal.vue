@@ -1,16 +1,20 @@
 <script setup lang="ts">
 /**
  * FEAT-003 — Add account modal (function 3.1). zod schema mirrors the API's `createTikTokAccountSchema`
- * (api-contract.md v1): email trim / lowercase / valid / ≤ 254, password 1..128, label ≤ 100 optional,
- * browserProfileId required. On every open: exactly one `GET /backend/browser-profiles/available` (no query, the API
- * syncs AdsPower + applies visibility) → picker of `status === 'free'` profiles. Submit → `POST /backend/tiktok-accounts`
- * → 201 → close + toast + `created`; 4xx → `UAlert` under the form with the API `error`, modal stays open.
- * The form (and the fetched list) is reset on close so the next open starts clean and refetches.
+ * (api-contract.md v1): email trim / lowercase / valid / ≤ 254, password 1..128, label ≤ 100 optional.
+ * Browser profile: pick a free profile, or check "Create new profile automatically". That path sends
+ * `POST /browser-profiles/create` with only `{ name }` — omitted fingerprint and proxy fields use the caller's
+ * saved defaults — then binds the new id. On every open: exactly one `GET /backend/browser-profiles/available`
+ * (no query, the API syncs AdsPower + applies visibility) → picker of `status === 'free'` profiles, shown only
+ * while automatic create is off. Submit → `POST /backend/tiktok-accounts` → 201 → close + toast + `created`;
+ * 4xx → `UAlert` under the form with the API `error`, modal stays open. If the profile was created but the
+ * account request failed, automatic create turns off and that profile is selected so a retry does not create
+ * a second one. The form (and the fetched list) is reset on close so the next open starts clean and refetches.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
 import type { FormSubmitEvent, ModalProps } from '@nuxt/ui'
-import type { AvailableProfile, AvailableResponse, ProviderErrorBody } from '#shared/types/browser-profiles'
+import type { AvailableProfile, AvailableResponse, CreatedProfile, CreateProfileErrorBody, ProviderErrorBody } from '#shared/types/browser-profiles'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { CreateAccountBody, TikTokAccount } from '#shared/types/tiktok-accounts'
 
@@ -41,8 +45,16 @@ const schema = z.object({
     .trim()
     .max(100, 'Label must be at most 100 characters')
     .optional(),
-  browserProfileId: z.string({ error: 'Browser profile is required' })
-    .min(1, 'Browser profile is required')
+  createProfile: z.boolean(),
+  browserProfileId: z.string().optional()
+}).superRefine((data, ctx) => {
+  if (!data.createProfile && !data.browserProfileId) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['browserProfileId'],
+      message: 'Browser profile is required'
+    })
+  }
 })
 
 type Schema = z.output<typeof schema>
@@ -51,11 +63,12 @@ interface FormState {
   loginEmail: string
   password: string
   label: string
+  createProfile: boolean
   browserProfileId: string | undefined
 }
 
 function emptyState(): FormState {
-  return { loginEmail: '', password: '', label: '', browserProfileId: undefined }
+  return { loginEmail: '', password: '', label: '', createProfile: true, browserProfileId: undefined }
 }
 
 const state = reactive<FormState>(emptyState())
@@ -145,14 +158,65 @@ watch(open, (isOpen) => {
 })
 
 // ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+function accountErrorState(e: unknown): { title: string, description?: string } {
+  const err = e as FetchError<Partial<ApiErrorBody>>
+  const issues = err.data?.issues?.map(i => i.message).filter(Boolean)
+  return {
+    title: err.data?.error ?? err.message ?? 'Could not add the account',
+    description: issues && issues.length ? issues.join(' · ') : undefined
+  }
+}
+
+function profileErrorState(e: unknown): { title: string, description?: string } {
+  const err = e as FetchError<Partial<CreateProfileErrorBody>>
+  const body = err.data
+  const issues = body?.issues?.map(i => i.message).filter(Boolean)
+  const parts: string[] = []
+  if (issues && issues.length) parts.push(issues.join(' · '))
+  if (body?.providerProfileId) parts.push(`providerProfileId: ${body.providerProfileId}`)
+  return {
+    title: body?.error ?? err.message ?? 'Could not create the profile',
+    description: parts.length ? parts.join(' — ') : undefined
+  }
+}
+
+/** AdsPower name limit. The login email is the profile name so the new profile is findable next to the account. */
+function profileNameFromEmail(loginEmail: string): string {
+  return loginEmail.slice(0, 100)
+}
+
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   submitting.value = true
   submitError.value = null
+
+  let browserProfileId = event.data.browserProfileId
+  let createdProfile: CreatedProfile | null = null
+  if (event.data.createProfile) {
+    const name = profileNameFromEmail(event.data.loginEmail)
+    try {
+      // retry: 0 — exactly one POST (a retry would create a second profile in the provider)
+      createdProfile = await api<CreatedProfile>('/browser-profiles/create', {
+        method: 'POST',
+        body: { name },
+        retry: 0
+      })
+      browserProfileId = createdProfile.id
+    } catch (e) {
+      submitError.value = profileErrorState(e)
+      submitting.value = false
+      return
+    }
+  }
+  if (!browserProfileId) {
+    submitting.value = false
+    return
+  }
+
   const body: CreateAccountBody = {
     loginEmail: event.data.loginEmail,
     password: event.data.password,
-    browserProfileId: event.data.browserProfileId
+    browserProfileId
   }
   if (event.data.label) body.label = event.data.label
   try {
@@ -161,12 +225,20 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     toast.add({ title: 'Account added', description: account.loginEmail, color: 'success' })
     emit('created', account)
   } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
-    const apiError = err.data?.error
-    const issues = err.data?.issues?.map(i => i.message).filter(Boolean)
-    submitError.value = {
-      title: apiError ?? err.message ?? 'Could not add the account',
-      description: issues && issues.length ? issues.join(' · ') : undefined
+    const accountError = accountErrorState(e)
+    if (createdProfile) {
+      const profile = createdProfile
+      profiles.value = [profile, ...profiles.value.filter(p => p.id !== profile.id)]
+      profilesLoaded.value = true
+      state.createProfile = false
+      state.browserProfileId = profile.id
+      const kept = `Profile "${profile.name}" was created and is selected below. Submit again to bind it.`
+      submitError.value = {
+        title: accountError.title,
+        description: accountError.description ? `${accountError.description} · ${kept}` : kept
+      }
+    } else {
+      submitError.value = accountError
     }
   } finally {
     submitting.value = false
@@ -238,7 +310,15 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           />
         </UFormField>
 
-        <UFormField label="Browser profile" name="browserProfileId" required>
+        <UCheckbox
+          v-model="state.createProfile"
+          label="Create new profile automatically"
+          description="Uses your saved browser profile defaults. The profile is named after the login email."
+          :disabled="submitting"
+          data-testid="ta-add-create-profile"
+        />
+
+        <UFormField v-if="!state.createProfile" label="Browser profile" name="browserProfileId" required>
           <USelectMenu
             v-model="state.browserProfileId"
             :items="freeProfiles"
@@ -254,50 +334,52 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           />
         </UFormField>
 
-        <UAlert
-          v-if="profilesError"
-          color="error"
-          variant="subtle"
-          icon="i-lucide-triangle-alert"
-          :title="profilesError.title"
-          :description="profilesError.description"
-          data-testid="ta-add-profile-error"
-        >
-          <template #actions>
-            <UButton
-              label="Retry"
-              icon="i-lucide-refresh-cw"
-              color="error"
-              variant="solid"
-              size="xs"
-              :loading="profilesPending"
-              data-testid="ta-add-profile-retry"
-              @click="loadProfiles"
-            />
-          </template>
-        </UAlert>
+        <template v-if="!state.createProfile">
+          <UAlert
+            v-if="profilesError"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            :title="profilesError.title"
+            :description="profilesError.description"
+            data-testid="ta-add-profile-error"
+          >
+            <template #actions>
+              <UButton
+                label="Retry"
+                icon="i-lucide-refresh-cw"
+                color="error"
+                variant="solid"
+                size="xs"
+                :loading="profilesPending"
+                data-testid="ta-add-profile-retry"
+                @click="loadProfiles"
+              />
+            </template>
+          </UAlert>
 
-        <UAlert
-          v-else-if="noFreeProfile"
-          color="warning"
-          variant="subtle"
-          icon="i-lucide-app-window"
-          title="No free browser profile. Create one in AdsPower and retry."
-          data-testid="ta-add-profile-empty"
-        >
-          <template #actions>
-            <UButton
-              label="Retry"
-              icon="i-lucide-refresh-cw"
-              color="warning"
-              variant="solid"
-              size="xs"
-              :loading="profilesPending"
-              data-testid="ta-add-profile-retry"
-              @click="loadProfiles"
-            />
-          </template>
-        </UAlert>
+          <UAlert
+            v-else-if="noFreeProfile"
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-app-window"
+            title="No free browser profile. Create one in AdsPower and retry."
+            data-testid="ta-add-profile-empty"
+          >
+            <template #actions>
+              <UButton
+                label="Retry"
+                icon="i-lucide-refresh-cw"
+                color="warning"
+                variant="solid"
+                size="xs"
+                :loading="profilesPending"
+                data-testid="ta-add-profile-retry"
+                @click="loadProfiles"
+              />
+            </template>
+          </UAlert>
+        </template>
 
         <UAlert
           v-if="submitError"

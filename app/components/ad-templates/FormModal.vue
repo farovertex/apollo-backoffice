@@ -23,11 +23,10 @@
  * language, hand cursor). The `first` / `named` variants stay valid on the API side for templates that were
  * saved earlier, but they can no longer be chosen here: such a template opens with `adt-legacy-notice`, an empty
  * code and the defaulted instant-page fields, and saving it converts it.
- * The code is write-only: it is never in a response (the view carries `hasCode` / `codeLast4` instead), so the
- * input starts empty and lives only in the component state. On edit of a template that has one, the field is
- * replaced by the masked hint `••••<last4>` + **Change code**; while the hint is shown the PATCH body sends
- * `identity.post = { selection: 'authCode' }` and the API keeps the stored code (§2.4). It is never logged, never
- * put in a toast and never rendered outside the password input.
+ * The ad-template view includes the stored Spark `code`. On edit the text input is prefilled with it and a
+ * save sends that value back. A response that only has the older masked shape (`hasCode` / `codeLast4`) still
+ * shows the hint: while the hint is shown the PATCH body sends `identity.post = { selection: 'authCode' }` and
+ * the API keeps the stored code. The code is never logged and never put in a toast.
  *
  * Layout: five sections in the TikTok page order as an **accordion**. `adname` is always open and has no toggle;
  * `identity` / `destination` / `cta` / `tracking` sit behind `adt-sec-<id>-toggle`, are collapsed while every
@@ -145,8 +144,14 @@ function radioToTri(value: string | undefined): TriState {
  * The config part of the state, from any `AdConfig` (the system default on create, the row on edit).
  * The two selections are forced to `authCode` / `create`; a stored `create` page keeps its five values, anything
  * else (a legacy `first` / `named` page, or the system default) starts from the defaults of spec L-10.
- * The code is never seeded — it is not in the response and an untouched field means "keep what is stored".
+ * The Spark code is seeded from the view when the template carries one.
  */
+function storedSparkCode(config: AdConfig | null | undefined): string {
+  const post = config?.identity?.post
+  if (post?.selection !== POST_AUTH_CODE || !('code' in post) || typeof post.code !== 'string') return ''
+  return post.code
+}
+
 function configStateFrom(config: AdConfig): ConfigState {
   const page = config?.destination?.page
   const createPage = page?.selection === PAGE_CREATE ? page : null
@@ -158,7 +163,7 @@ function configStateFrom(config: AdConfig): ConfigState {
       source: config?.identity?.source ?? '',
       post: {
         selection: POST_AUTH_CODE,
-        code: ''
+        code: storedSparkCode(config)
       }
     },
     destination: {
@@ -274,19 +279,19 @@ const pageSelectionLabel = computed(() => labelOf(props.options.pageSelection, P
 /** the loaded template already has a stored code (its masked view says so) → the hint can be offered */
 const hasStoredCode = computed(() => {
   const post = props.template?.config?.identity?.post
-  return post?.selection === POST_AUTH_CODE && post.hasCode === true
+  return post?.selection === POST_AUTH_CODE && 'hasCode' in post && post.hasCode === true
 })
 
 /** `••••<last4>`, or `••••` when the stored code is shorter than 5 characters (spec L-11) */
 const codeHint = computed(() => {
   const post = props.template?.config?.identity?.post
-  const last4 = post?.selection === POST_AUTH_CODE ? post.codeLast4 : null
+  const last4 = post?.selection === POST_AUTH_CODE && 'codeLast4' in post ? post.codeLast4 : null
   return `••••${last4 ?? ''}`
 })
 
 /**
  * `keep` = the hint is shown and the body carries `{ selection: 'authCode' }` (the API keeps the stored code);
- * `new` = the password input is shown and its value is sent. Create and a legacy template always start at `new`.
+ * `new` = the text input is shown and its value is sent. Create and a legacy template always start at `new`.
  */
 const codeMode = ref<'keep' | 'new'>('new')
 
@@ -353,11 +358,12 @@ watch(open, (isOpen) => {
 
 /**
  * "Reset to TikTok defaults" — config controls only, name/description untouched, no request.
- * The stored Spark code is **not** a TikTok default: an edit goes back to the hint (`keep`) instead of forcing
- * the secret to be retyped; a create / legacy template keeps the empty required input.
+ * The stored Spark code is **not** a TikTok default: an edit puts that code back in the field. A masked
+ * template (no `code` in the view) goes back to the hint. A create / legacy template keeps the empty input.
  */
 function resetToDefaults() {
   state.config = configStateFrom(props.options.systemDefault)
+  state.config.identity.post.code = storedSparkCode(props.template?.config)
   resetCodeMode()
   submitError.value = null
   clearServerErrors()
@@ -568,17 +574,21 @@ const CONFIG_KEYS = [
 
 /**
  * The stored config in the shape the form would send it back, so the diff below does not report a change that
- * is not one: the masked `authCode` post (`hasCode`, `codeLast4`) becomes the keep-code request shape
- * `{ selection: 'authCode' }`, which is exactly what `configFromState()` builds while the hint is shown.
+ * is not one. A view that includes `code` is compared with that code. A masked view (`hasCode` / `codeLast4`)
+ * becomes `{ selection: 'authCode' }`, which is what `configFromState()` builds while the hint is shown.
  */
 function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
   const config = original.config
   if (!config) return {}
   const post = config.identity?.post
   if (post?.selection !== POST_AUTH_CODE) return config as unknown as Partial<AdConfigRequest>
+  const code = storedSparkCode(config).trim()
+  const requestPost: AdPostSelection = code
+    ? { selection: POST_AUTH_CODE, code }
+    : { selection: POST_AUTH_CODE }
   return {
     ...config,
-    identity: { ...config.identity, post: { selection: POST_AUTH_CODE } }
+    identity: { ...config.identity, post: requestPost }
   }
 }
 
@@ -931,13 +941,13 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               label="Spark post code"
               name="config.identity.post.code"
               required
-              help="The authorization code of the TikTok post. Stored for the build; never shown again."
+              help="The authorization code of the TikTok post. Shown again when you edit this template."
               :error="serverErrors['config.identity.post.code']"
             >
               <UInput
                 v-model="state.config.identity.post.code"
-                type="password"
-                autocomplete="new-password"
+                type="text"
+                autocomplete="off"
                 autocapitalize="off"
                 spellcheck="false"
                 placeholder="Paste the code"
