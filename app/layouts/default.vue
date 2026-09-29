@@ -86,6 +86,14 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-020 — ads report (api-contract §6.1), directly after Orders; same role gate, no badge
+      label: 'Reports',
+      icon: 'i-lucide-chart-no-axes-combined',
+      to: '/reports',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), {
   // FEAT-006 — proxy list (function 2.9), directly under TikTok accounts; Settings stays last
