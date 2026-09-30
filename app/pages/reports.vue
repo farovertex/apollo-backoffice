@@ -278,9 +278,9 @@ const showSkeleton = computed(() => pending.value && !loaded.value && !error.val
 // ── header ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const intervalText = computed(() => {
   if (summary.value && summary.value.enabled === false) return 'ปิดการดึงอัตโนมัติ'
-  const minutes = intervalMinutes(intervalMs.value)
+  const phrase = intervalPhraseTh(intervalMs.value)
   const last = refreshedAt.value ? `${formatClock(refreshedAt.value)} (${timeAgoTh(refreshedAt.value, nowMs.value)})` : REPORT_DASH
-  return `อัปเดตทุก ${minutes} นาที · ล่าสุด ${last}`
+  return `อัปเดตทุก ${phrase} · ล่าสุด ${last}`
 })
 
 const tracking = computed(() => summary.value?.tracking ?? null)

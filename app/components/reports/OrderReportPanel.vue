@@ -191,7 +191,7 @@ function trackText(build: OrderReportBuild): string {
   if (t.state === 'never') return 'ยังไม่เริ่มติดตาม'
   const last = t.lastFetchAt ? `${formatClock(t.lastFetchAt)} (${timeAgoTh(t.lastFetchAt, nowMs.value)})` : REPORT_DASH
   const next = t.nextFetchAt ? formatClock(t.nextFetchAt) : REPORT_DASH
-  return `ล่าสุด ${last} · รอบถัดไป ${next} · ทุก ${intervalMinutes(intervalMs.value)} นาที`
+  return `ล่าสุด ${last} · รอบถัดไป ${next} · ทุก ${intervalPhraseTh(intervalMs.value)}`
 }
 
 function buildEmptyText(build: OrderReportBuild): string | null {
@@ -227,7 +227,7 @@ const confirmContent = { 'data-testid': 'or-confirm' } as Record<string, string>
       </div>
       <div class="flex items-center gap-2">
         <span v-if="report" class="text-xs text-muted" data-testid="or-interval">
-          อัปเดตทุก {{ intervalMinutes(intervalMs) }} นาที · ล่าสุด
+          อัปเดตทุก {{ intervalPhraseTh(intervalMs) }} · ล่าสุด
           {{ report.refreshedAt ? formatClock(report.refreshedAt) : REPORT_DASH }}
         </span>
         <UButton

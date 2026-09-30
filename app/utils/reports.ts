@@ -78,6 +78,18 @@ export function intervalMinutes(intervalMs: number | null | undefined): number {
   return Math.max(1, Math.round(ms / 60_000))
 }
 
+/**
+ * "N วินาที" when `intervalMs` is under a minute (no rounding up to "1 นาที"), "N นาที" otherwise
+ * (api-contract §6.2 O2). Used for `rp-interval` / `or-interval`.
+ */
+export function intervalPhraseTh(intervalMs: number | null | undefined): string {
+  const ms = typeof intervalMs === 'number' && intervalMs > 0 ? intervalMs : 0
+  if (ms > 0 && ms < 60_000) {
+    return `${Math.max(1, Math.round(ms / 1000))} วินาที`
+  }
+  return `${intervalMinutes(intervalMs)} นาที`
+}
+
 /** Thai text of every `lastError` / `fetchError` code (api-contract §6.2 "Error texts"). */
 export const REPORT_ERROR_TEXT: Record<ReportError, string> = {
   notLoggedIn: 'บัญชียังไม่ได้ login',
