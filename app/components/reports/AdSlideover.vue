@@ -153,24 +153,19 @@ function reset() {
 
 const fetchNow = useFetchNow()
 
-watch(open, (isOpen) => {
-  if (isOpen) {
+// open + adId are set together (open a row) and change together (open a different row while the
+// slideover stays open): one `watch` on both sources so the flush that changes either or both of
+// them loads exactly once, instead of two separate watchers each reacting to the same flush (BUG-021).
+watch([open, () => props.adId], ([isOpen, id], [wasOpen]) => {
+  if (isOpen && id) {
     reset()
     void loadDetail()
     void loadSeries()
-  } else {
+  } else if (!isOpen && wasOpen) {
     fetchNow.stop()
     reset()
     emit('closed')
   }
-})
-
-// a different row while the slideover stays open
-watch(() => props.adId, (id) => {
-  if (!open.value || !id) return
-  reset()
-  void loadDetail()
-  void loadSeries()
 })
 
 // the page's range switch while the slideover is open
