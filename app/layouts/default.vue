@@ -16,6 +16,15 @@ const isTemplateManager = computed(() => {
   return roles.includes('GOD') || roles.includes('Admin')
 })
 
+/**
+ * FEAT-021 — the Cashier group (Top-ups) is for GOD / Payment / Admin (spec D9, D17, D18). Same display-only
+ * rule as above: the API is the authority and `/topups` renders `tp-forbidden` for anybody else.
+ */
+const canSeeCashier = computed(() => {
+  const roles = auth.admin.value?.roles ?? []
+  return roles.includes('GOD') || roles.includes('Payment') || roles.includes('Admin')
+})
+
 const links = computed(() => [[{
   label: 'Home',
   icon: 'i-lucide-house',
@@ -94,6 +103,21 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }]
+  : []), ...(canSeeCashier.value
+  ? [{
+      // FEAT-021 — Cashier → Top-ups (AC-18); GOD / Payment / Admin, Admin read-only inside the page
+      label: 'Cashier',
+      icon: 'i-lucide-wallet',
+      type: 'trigger' as const,
+      defaultOpen: true,
+      children: [{
+        label: 'Top-ups',
+        to: '/topups',
+        onSelect: () => {
+          open.value = false
+        }
+      }]
     }]
   : []), {
   // FEAT-006 — proxy list (function 2.9), directly under TikTok accounts; Settings stays last

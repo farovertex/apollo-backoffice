@@ -10,6 +10,7 @@
  */
 
 import type { AdvertiserReport } from './reports'
+import type { TopupView } from './topups'
 
 export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
 
@@ -60,30 +61,17 @@ export interface Advertiser {
   missingSince: string | null
   createdAt: string
   updatedAt: string
-  /** Current top-up round. The QR image is not in this list; `GET .../advertisers/:id/topup` returns it. */
-  topup: AdvertiserTopup
+  /**
+   * FEAT-021 (api-contract v1 §3.2) — the **active** top-up round of this advertiser, else the latest round
+   * whose status is `notFound` (so "ตรวจอีกครั้ง" has something to act on), else `null`. Never carries the QR
+   * image: it comes back only in the 200 body of `POST /topups/:id/claim`.
+   */
+  topup: TopupView | null
   /**
    * FEAT-020 (AC-21) — ads-report tracking state of this advertiser, served with the list so the slideover
    * needs no extra request. Optional for readers of an API that predates the feature.
    */
   report?: AdvertiserReport
-}
-
-export type AdvertiserTopupPhase = 'processing' | 'ready' | 'pending' | 'paid' | 'expired'
-
-export interface AdvertiserTopup {
-  phase: AdvertiserTopupPhase | null
-  /** Integer baht submitted to TikTok */
-  amount: number | null
-  /** ISO — when the QR image was saved. The 30-minute clock starts here. */
-  qrSavedAt: string | null
-  /** Shown until the next Pay click. No badge of its own. */
-  error: string | null
-  balanceAmount: string | null
-  balanceCurrency: string | null
-  /** ISO — paid amount stays on the row until this instant, then the Pay button returns */
-  paidUntil: string | null
-  checking: boolean
 }
 
 /** `GET /tiktok-accounts/:id/advertisers` 200 body (first paginated envelope of apollo-api). */
