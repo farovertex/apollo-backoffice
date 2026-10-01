@@ -420,8 +420,8 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                   data-testid="tp-row"
                 >
                   <td class="border-b border-default px-2 py-2">
-                    <div class="flex min-w-0 flex-col">
-                      <span class="truncate font-medium text-highlighted" data-testid="tp-row-advertiser">{{ row.advertiser?.name || REPORT_DASH }}</span>
+                    <div class="flex max-w-56 min-w-0 flex-col">
+                      <span class="truncate font-medium text-highlighted" :title="row.advertiser?.name" data-testid="tp-row-advertiser">{{ row.advertiser?.name || REPORT_DASH }}</span>
                       <span class="font-mono text-xs text-muted" data-testid="tp-row-advertiser-id">{{ row.advertiser?.tiktokAdvertiserId || REPORT_DASH }}</span>
                     </div>
                   </td>
@@ -450,7 +450,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                     {{ row.payingBy?.displayName || REPORT_DASH }}
                   </td>
                   <td class="border-b border-default px-2 py-2 tabular-nums whitespace-nowrap" data-testid="tp-row-qr-remain">
-                    {{ row.qrExpiresAt ? formatRemainLong(qrRemainingMs(row, nowMs)) : REPORT_DASH }}
+                    {{ row.active && row.qrExpiresAt ? formatRemainLong(qrRemainingMs(row, nowMs)) : REPORT_DASH }}
                   </td>
                   <td class="border-b border-default px-2 py-2 tabular-nums whitespace-nowrap" data-testid="tp-row-lease-remain">
                     {{ row.status === 'paying' ? formatRemain(leaseRemainingMs(row, nowMs)) : REPORT_DASH }}

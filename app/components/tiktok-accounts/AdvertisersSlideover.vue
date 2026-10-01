@@ -452,7 +452,12 @@ function onSync() {
                     {{ statusBadge(adv.status).label }}
                   </UBadge>
                 </UTooltip>
-                <TopupsStatusBadge :topup="adv.topup" testid="ta-adv-topup-badge" />
+                <!-- `readyToPay` has no badge here: the primary button already reads "Ready to pay" (spec status table) -->
+                <TopupsStatusBadge
+                  v-if="adv.topup?.status !== 'readyToPay'"
+                  :topup="adv.topup"
+                  testid="ta-adv-topup-badge"
+                />
                 <TopupsRowActions
                   v-if="account"
                   :topup="adv.topup"

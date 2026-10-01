@@ -104,12 +104,14 @@ export function useTopupsLive(options: UseTopupsLiveOptions = {}) {
     source = null
   }
 
-  /** the stream is gone: poll the list and keep knocking on the stream (v1.1 §B) */
+  /** the stream is gone (or never opened): poll the list and keep knocking on the stream (v1.1 §B) */
   function fallBackToPolling() {
     closeSource()
     if (!running.value) return
     mode.value = 'polling'
     if (pollTimer || reconnectTimer) return
+    // the `ready` refetch will never come — read the list now, then every 10 s
+    void refresh()
     pollTimer = setInterval(() => {
       void refresh()
     }, TOPUP_POLL_MS)
@@ -153,15 +155,22 @@ export function useTopupsLive(options: UseTopupsLiveOptions = {}) {
     }
   }
 
-  /** open the stream (and load the list once) — called on mount / when a slide-over opens */
+  /**
+   * Open the stream — called on mount / when a slide-over opens. The list is **not** read here: the `ready`
+   * event does it (api-contract §5), and `fallBackToPolling()` does it when the stream never opens, so a
+   * normal page load makes exactly one `GET /topups` either way.
+   */
   function start() {
     if (running.value) return
     running.value = true
     mode.value = 'connecting'
-    void refresh()
+    if (!import.meta.client) {
+      // no EventSource on the server — nothing to open, nothing to show until the client takes over
+      mode.value = 'polling'
+      return
+    }
+    pending.value = true
     connect()
-    // no EventSource on the server, and a stream that never opens must not keep the page in `connecting`
-    if (!import.meta.client) mode.value = 'polling'
   }
 
   /** close everything — called on unmount / when a slide-over closes */
@@ -188,7 +197,7 @@ export function useTopupsLive(options: UseTopupsLiveOptions = {}) {
     clearTimers()
     reset()
     mode.value = 'connecting'
-    void refresh()
+    pending.value = true
     connect()
   })
 

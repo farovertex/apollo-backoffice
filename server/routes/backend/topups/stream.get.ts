@@ -10,6 +10,7 @@
  *   - only `accept`, `accept-language`, `user-agent` and `x-forwarded-for` travel upstream
  *   - of the upstream response only the status and the body are passed on — no `set-cookie`, no caching
  *   - the browser closing the EventSource aborts the upstream request (no leaked change-stream listener)
+ *   - the upstream dying mid-stream ends the browser's connection too, so `useTopupsLive` falls back to polling
  *   - a non-stream answer (503 "not a replica set", 401, 403, 404) is passed through with its JSON body so
  *     `useTopupsLive` can fall back to polling (v1.1 §B)
  *
@@ -76,5 +77,17 @@ export default defineEventHandler(async (event) => {
   setResponseHeader(event, 'connection', 'keep-alive')
   setResponseHeader(event, 'x-accel-buffering', 'no')
 
-  return sendStream(event, upstream.body)
+  // `sendStream` ends the response when the upstream body ends, but **rejects** when the upstream dies
+  // mid-stream (API restarted / killed). Without the catch + end() the browser would keep a half-open
+  // EventSource, never fire `onerror` and never fall back to polling — so the connection is always closed here.
+  try {
+    await sendStream(event, upstream.body)
+  } catch {
+    // upstream disappeared; nothing left to forward
+  } finally {
+    controller.abort()
+    if (!event.node.res.writableEnded) {
+      event.node.res.end()
+    }
+  }
 })
