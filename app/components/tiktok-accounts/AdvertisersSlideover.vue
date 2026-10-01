@@ -9,6 +9,12 @@
  * Filters reset when the slideover closes, so the next open starts from `page=1&missing=false` with one request.
  * The "Sync advertisers" button of the empty state emits `sync`; the page runs the same POST + poll as the row.
  *
+ * FEAT-021 (api-contract v1 §3.2, v1.1 §C): the top-up part of a row is driven by `advertiser.topup`
+ * (`TopupView | null`) — one element set per status, the amount popover instead of a modal, and the pay modal
+ * that only opens after a `claim` 200. The rows stay fresh through `useTopupsLive`: the SSE `topup` events
+ * patch `adv.topup` in place, and while the stream is down (`polling`) the list is re-read quietly on every
+ * poll tick as long as a visible advertiser has an active round. No account-wide "busy" lock any more (D6).
+ *
  * FEAT-020 (api-contract §6.5): each row also shows the ads-report state of that advertiser (`adv-report`,
  * `data-state` = never|on|off|error) — it comes with the list view (AC-21), so no extra request — and links
  * to `/reports?advertiserId=<id>`. The link is rendered for GOD/Admin only, like the Reports nav item.
@@ -18,8 +24,8 @@ import type { SlideoverProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { Advertiser, AdvertiserMissingFilter, AdvertisersResponse, AdvertiserStatus } from '#shared/types/advertisers'
 import type { TikTokAccount } from '#shared/types/tiktok-accounts'
-import TopupModal from './TopupModal.vue'
-import { clockRemainingMs, formatRemain, showPayButton, showTopupRefresh, TOPUP_BADGE, topupBlocksAccount } from '~/utils/topup'
+import type { TopupView } from '#shared/types/topups'
+import type { TopupViewer } from '~/utils/topup'
 
 const props = defineProps<{
   account: TikTokAccount | null
@@ -158,73 +164,95 @@ watch(open, (isOpen) => {
   if (!isOpen) {
     reset()
     resetFilters()
-    stopTopupTimers()
+    stopClock()
+    stopLive()
+    closeModal()
   } else {
-    startTopupTimers()
+    startClock()
+    startLive()
   }
 })
 
+// ── top-up (FEAT-021) ────────────────────────────────────────────────────────────────────────────────────────────────
 const nowMs = ref(Date.now())
-const topupOpen = ref(false)
-const topupTarget = ref<Advertiser | null>(null)
 let clockTimer: ReturnType<typeof setInterval> | undefined
-let pollTimer: ReturnType<typeof setInterval> | undefined
 
-const accountBusy = computed(() => !!props.account?.runningJob || items.value.some(a => topupBlocksAccount(a.topup, nowMs.value)))
+const viewer = computed<TopupViewer>(() => ({
+  id: auth.admin.value?.id ?? null,
+  roles: auth.admin.value?.roles ?? []
+}))
 
-function topupInFlight() {
-  return items.value.some((a) => {
-    const phase = a.topup?.phase
-    if (phase === 'processing' || phase === 'paid' || a.topup?.checking) return true
-    return phase === 'pending' && clockRemainingMs(a.topup?.qrSavedAt ?? null, nowMs.value) > 0
-  })
+/** an SSE `topup` event (or the answer of a mutation) replaces the round of the advertiser it belongs to */
+function patchTopup(topup: TopupView) {
+  const row = items.value.find(a => a.id === topup.advertiserId)
+  if (row) row.topup = topup
 }
 
-function startTopupTimers() {
-  stopTopupTimers()
+const { mode: liveMode, syncedAt, start: startLive, stop: stopLive } = useTopupsLive({ onTopup: patchTopup })
+const {
+  current: payingTopup,
+  qrImage,
+  modalOpen,
+  busyId,
+  staleId,
+  open: claimTopup,
+  cancel: cancelTopup,
+  confirm: confirmTopup,
+  recheck: recheckTopup,
+  release: releaseTopup,
+  closeModal,
+  notify
+} = useTopupPay(patchTopup)
+
+const modalBusy = computed(() => !!payingTopup.value && busyId.value === payingTopup.value.id)
+
+/** the list carries `advertiser.topup`; only a quiet re-read can show a round that ended while we polled */
+watch(syncedAt, () => {
+  if (!open.value || liveMode.value !== 'polling') return
+  if (page.value !== 1 || loading.value || loadingMore.value) return
+  if (!items.value.some(a => a.topup?.active)) return
+  void load(1, false, true)
+})
+
+function startClock() {
+  stopClock()
   nowMs.value = Date.now()
   clockTimer = setInterval(() => {
     nowMs.value = Date.now()
   }, 1000)
-  pollTimer = setInterval(() => {
-    if (open.value && page.value === 1 && topupInFlight() && !loading.value && !loadingMore.value) void load(1, false, true)
-  }, 4000)
 }
 
-function stopTopupTimers() {
+function stopClock() {
   if (clockTimer) clearInterval(clockTimer)
-  if (pollTimer) clearInterval(pollTimer)
   clockTimer = undefined
-  pollTimer = undefined
 }
 
-function openTopup(adv: Advertiser) {
-  topupTarget.value = adv
-  topupOpen.value = true
+/** "Ready to pay" / re-open my own round: claim first, the modal opens only on 200 (AC-17) */
+async function onOpenTopup(topup: TopupView) {
+  const claimed = await claimTopup(topup)
+  if (claimed || !staleId.value) return
+  // 409 "QR หมดอายุแล้ว" / "ไม่ได้อยู่ในสถานะพร้อมจ่าย" — what the row shows is stale
+  staleId.value = null
+  void load(1, false, true)
 }
 
-async function refreshRow(adv: Advertiser) {
-  const id = props.account?.id
-  if (!id || adv.topup?.checking) return
-  try {
-    await api(`/tiktok-accounts/${id}/advertisers/${adv.id}/topup/refresh`, { method: 'POST' })
-  } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
-    toast.add({ title: 'Could not refresh', description: err.data?.error ?? 'Could not refresh', color: 'error' })
-  } finally {
-    void load(1, false, true)
-  }
+async function onConfirmTopup(topup: TopupView) {
+  if (await confirmTopup(topup)) closeModal()
 }
 
-watch(items, () => {
-  if (!topupTarget.value) return
-  const fresh = items.value.find(a => a.id === topupTarget.value!.id)
-  if (fresh) topupTarget.value = fresh
-})
+async function onCancelTopup(topup: TopupView) {
+  if (await cancelTopup(topup)) closeModal()
+}
+
+function onLeaseExpired() {
+  closeModal()
+  notify('หมดเวลาจอง', 'รอบนี้ถูกคืนให้คนอื่นจ่ายต่อแล้ว')
+}
 
 onUnmounted(() => {
   session++
-  stopTopupTimers()
+  stopClock()
+  stopLive()
 })
 
 // ── state ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -424,35 +452,19 @@ function onSync() {
                     {{ statusBadge(adv.status).label }}
                   </UBadge>
                 </UTooltip>
-                <UBadge
-                  v-if="adv.topup?.phase"
-                  :color="TOPUP_BADGE[adv.topup.phase].color"
-                  variant="subtle"
-                  size="sm"
-                  class="cursor-pointer whitespace-nowrap"
-                  data-testid="ta-adv-topup-badge"
-                  :data-phase="adv.topup.phase"
-                  @click="openTopup(adv)"
-                >
-                  {{ TOPUP_BADGE[adv.topup.phase].label }}
-                </UBadge>
-                <UButton
-                  v-if="showPayButton(adv.topup, accountBusy, nowMs)"
-                  label="Pay"
-                  size="xs"
-                  color="primary"
-                  data-testid="ta-adv-pay"
-                  @click="openTopup(adv)"
-                />
-                <UButton
-                  v-if="showTopupRefresh(adv.topup, nowMs)"
-                  label="Refresh"
-                  size="xs"
-                  color="neutral"
-                  variant="outline"
-                  :loading="adv.topup?.checking"
-                  data-testid="ta-adv-topup-refresh"
-                  @click="refreshRow(adv)"
+                <TopupsStatusBadge :topup="adv.topup" testid="ta-adv-topup-badge" />
+                <TopupsRowActions
+                  v-if="account"
+                  :topup="adv.topup"
+                  :tiktok-account-id="account.id"
+                  :advertiser-id="adv.id"
+                  :viewer="viewer"
+                  prefix="ta-adv-topup"
+                  :busy="busyId === adv.topup?.id"
+                  @created="patchTopup"
+                  @open="onOpenTopup"
+                  @recheck="recheckTopup"
+                  @release="releaseTopup"
                 />
               </div>
             </div>
@@ -494,21 +506,36 @@ function onSync() {
               <span>{{ reportLine(adv) }}</span>
             </NuxtLink>
 
+            <!-- FEAT-021 v1.1 §C — one line per status next to the badge -->
             <p
-              v-if="adv.topup?.balanceAmount"
+              v-if="adv.topup?.status === 'paid' && adv.topup.balanceAmount"
               class="text-xs text-muted"
               data-testid="ta-adv-topup-balance"
             >
-              {{ adv.topup.balanceCurrency ? `${adv.topup.balanceAmount} ${adv.topup.balanceCurrency}` : adv.topup.balanceAmount }}
+              ยอดคงเหลือ {{ topupBalanceText(adv.topup) }}
             </p>
             <p
-              v-if="adv.topup?.qrSavedAt && (adv.topup.phase === 'ready' || adv.topup.phase === 'pending')"
-              class="text-xs text-muted"
-              data-testid="ta-adv-topup-remain"
+              v-if="adv.topup?.status === 'readyToPay'"
+              class="text-xs text-muted tabular-nums"
+              data-testid="ta-adv-topup-qr-remain"
             >
-              {{ formatRemain(clockRemainingMs(adv.topup.qrSavedAt, nowMs)) }}
+              QR หมดอายุใน {{ formatRemainLong(qrRemainingMs(adv.topup, nowMs)) }}
             </p>
-            <p v-if="adv.topup?.error && adv.topup.phase !== 'processing'" class="text-xs text-error" data-testid="ta-adv-topup-error">
+            <p
+              v-if="adv.topup?.status === 'paying'"
+              class="text-xs text-muted tabular-nums"
+              data-testid="ta-adv-topup-lease-remain"
+            >
+              จองไว้อีก {{ formatRemain(leaseRemainingMs(adv.topup, nowMs)) }}
+            </p>
+            <p
+              v-if="adv.topup?.status === 'verifying'"
+              class="text-xs text-muted"
+              data-testid="ta-adv-topup-check-info"
+            >
+              {{ topupCheckInfo(adv.topup) }}
+            </p>
+            <p v-if="adv.topup?.status === 'qrFailed' && adv.topup.error" class="text-xs text-error" data-testid="ta-adv-topup-error">
               {{ adv.topup.error }}
             </p>
             <UTooltip v-if="adv.rejectReason" :text="adv.rejectReason" :ui="{ content: 'max-w-md h-auto py-2 whitespace-normal' }">
@@ -551,11 +578,13 @@ function onSync() {
       </div>
     </template>
   </USlideover>
-  <TopupModal
-    v-if="account"
-    v-model:open="topupOpen"
-    :account-id="account.id"
-    :advertiser="topupTarget"
-    @changed="reload"
+  <TopupsPayModal
+    v-model:open="modalOpen"
+    :topup="payingTopup"
+    :qr-image="qrImage"
+    :busy="modalBusy"
+    @confirm="onConfirmTopup"
+    @cancel="onCancelTopup"
+    @expired="onLeaseExpired"
   />
 </template>
