@@ -7,6 +7,11 @@
  * FEAT-007 v1: every item + the 201 body gain `tags` (display only, from the AdsPower `remark`); the admin's
  * per-profile "group" (FEAT-006) is replaced by one system-wide `ADSPOWER_GROUP_NAME` + a display-only tag =
  * username (`ProfileDefaultsGroup`).
+ * FEAT-024 v1 (api-contract §3.1/§3.2/§3.4, §10): `/available` answers from Mongo and never calls the provider, so
+ * every provider round-trip became a job. An item may be a **reserved** row whose provider profile does not exist yet
+ * (`providerProfileId: null`, `syncedAt: null`, `runState: 'provisioning'`) or a failed one (`runState: 'error'` +
+ * `provisionError`); the response gained a top-level `sync` block (the state of the `syncList` job / node) and
+ * `POST /browser-profiles/sync` (`SyncResponse`) replaces the implicit sync that used to happen behind every GET.
  */
 
 export interface AvailableProfileProxy {
@@ -26,11 +31,18 @@ export interface BoundAccountRef {
   loginEmail: string
 }
 
+/**
+ * FEAT-024 — `browserProfiles.runState`. `provisioning` = the row is reserved and the provider `create` job has not
+ * finished; `error` = the last provider op on this row failed (see `provisionError`). The BO only reacts to those two.
+ */
+export type ProfileRunState = 'closed' | 'opening' | 'open' | 'closing' | 'provisioning' | 'error'
+
 export interface AvailableProfile {
   /** BROWSER_PROFILES._id — every listed profile is in the DB after the sync */
   id: string
   provider: 'adspower'
-  providerProfileId: string
+  /** FEAT-024 — `null` while the row is only reserved (`runState: 'provisioning'`) or the create job failed */
+  providerProfileId: string | null
   name: string
   groupName: string | null
   proxy: AvailableProfileProxy | null
@@ -46,22 +58,47 @@ export interface AvailableProfile {
   boundAccountId: string | null
   /** FEAT-003 — joined from `tiktokAccounts` by `boundAccountId`; `null` when free (or the account row is gone) */
   boundAccount: BoundAccountRef | null
-  /** ISO — last time this profile was seen in the provider list */
-  syncedAt: string
+  /** ISO — last time this profile was seen in the provider list; FEAT-024: `null` for a reserved row */
+  syncedAt: string | null
   /** FEAT-007 — display only, from the AdsPower `remark`; `[]` = none. Never used for search/filter. */
   tags: string[]
+  /** FEAT-024 — provider-side lifecycle of the row (see `ProfileRunState`) */
+  runState: ProfileRunState
+  /** FEAT-024 — why the last provider op failed (never a secret); `null` unless something failed */
+  provisionError: string | null
+}
+
+/**
+ * FEAT-024 — top-level `sync` of `/available`: the state of the profile list sync (one `provider{syncList}` job per
+ * node). `status: 'running'` = such a job is `waiting|active` right now (BO polls until `idle`), `lastSyncedAt` =
+ * oldest `lastSyncedAt` of the considered nodes (null = never), `lastError` = first node error text (null = none).
+ */
+export interface AvailableSyncState {
+  status: 'idle' | 'running'
+  jobId: string | null
+  lastSyncedAt: string | null
+  lastError: string | null
 }
 
 /**
  * 200 body. `total` = visible rows before `q`/`group`/`status`, `groups` = sorted distinct non-empty groupName of the
- * visible rows, `syncedAt` = timestamp of this sync.
+ * visible rows. FEAT-024: `syncedAt` = `sync.lastSyncedAt` (`null` when the list was never synced), and the request
+ * itself no longer syncs anything.
  */
 export interface AvailableResponse {
   count: number
   total: number
   groups: string[]
-  syncedAt: string
+  syncedAt: string | null
+  sync: AvailableSyncState
   profiles: AvailableProfile[]
+}
+
+/** FEAT-024 — `POST /browser-profiles/sync` 202 body; `reused: true` = a sync job was already queued/running. */
+export interface SyncResponse {
+  jobId: string
+  node: string
+  reused: boolean
 }
 
 /** 429 / 503 / 502 body (`providerErrors()` in apollo-api). */
@@ -155,10 +192,15 @@ export interface CreateProfileBody extends ProfileSettings {
   name: string
 }
 
-/** `POST /browser-profiles/create` 201 body = the `/available` item + `createdBy` / `createdAt`. */
+/**
+ * `POST /browser-profiles/create` 201 body = the `/available` item + `createdBy` / `createdAt`.
+ * FEAT-024: the row is only **reserved** at this point (`providerProfileId: null`, `runState: 'provisioning'`) and
+ * `jobId` is the `provider{create}` job that will fill it in.
+ */
 export interface CreatedProfile extends AvailableProfile {
   createdBy: string
   createdAt: string
+  jobId: string
 }
 
 /**

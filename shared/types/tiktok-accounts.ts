@@ -56,7 +56,8 @@ export interface FirstLoginTries {
 export interface AccountBrowserProfile {
   id: string
   name: string
-  providerProfileId: string
+  /** FEAT-024 — `null` while the profile row is only reserved (create job still running) or the create failed */
+  providerProfileId: string | null
   groupName: string | null
 }
 
