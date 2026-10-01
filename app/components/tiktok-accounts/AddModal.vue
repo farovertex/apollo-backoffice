@@ -120,7 +120,8 @@ let loadSeq = 0
 const freeProfiles = computed<ProfileItem[]>(() =>
   profiles.value
     .filter(p => p.status === 'free')
-    .map(p => ({ id: p.id, label: p.name, description: `${p.providerProfileId} · ${p.groupName ?? '—'}` }))
+    // FEAT-024: a free profile may still be reserved (`providerProfileId: null`) — it is bindable, just not created yet
+    .map(p => ({ id: p.id, label: p.name, description: `${p.providerProfileId ?? '—'} · ${p.groupName ?? '—'}` }))
 )
 const noFreeProfile = computed(() => profilesLoaded.value && !profilesError.value && freeProfiles.value.length === 0)
 const pickerDisabled = computed(() => profilesPending.value || !!profilesError.value || noFreeProfile.value)

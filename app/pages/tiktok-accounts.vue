@@ -349,7 +349,8 @@ const columns: TableColumn<TikTokAccount>[] = [
       if (!p) return h('span', { class: 'text-muted' }, '—')
       return h('div', { class: 'flex flex-col whitespace-nowrap' }, [
         h('span', { class: 'font-medium text-highlighted' }, p.name),
-        h('span', { class: 'font-mono text-xs text-muted' }, p.providerProfileId)
+        // FEAT-024: null while the profile row is only reserved (create job running) or the create failed
+        h('span', { class: 'font-mono text-xs text-muted' }, p.providerProfileId ?? '—')
       ])
     }
   },
