@@ -10,6 +10,9 @@
  * 4xx → `UAlert` under the form with the API `error`, modal stays open. If the profile was created but the
  * account request failed, automatic create turns off and that profile is selected so a retry does not create
  * a second one. The form (and the fetched list) is reset on close so the next open starts clean and refetches.
+ * FEAT-023 (api-contract.md v1 §4): two passwords — **Email password** (`emailPassword`, the mailbox) and
+ * **TikTok password** (`password`) — plus the **Auto first login** checkbox (`pendingFirstLogin`, default true).
+ * The flag only marks the account; the create call never enqueues a login, the scheduler picks it up.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -38,13 +41,17 @@ const schema = z.object({
     .min(1, 'Login email is required')
     .max(254, 'Login email must be at most 254 characters')
     .pipe(z.email('Enter a valid email address')),
-  password: z.string({ error: 'Password is required' })
-    .min(1, 'Password is required')
-    .max(128, 'Password must be at most 128 characters'),
+  emailPassword: z.string({ error: 'Email password is required' })
+    .min(1, 'Email password is required')
+    .max(128, 'Email password must be at most 128 characters'),
+  password: z.string({ error: 'TikTok password is required' })
+    .min(1, 'TikTok password is required')
+    .max(128, 'TikTok password must be at most 128 characters'),
   label: z.string()
     .trim()
     .max(100, 'Label must be at most 100 characters')
     .optional(),
+  pendingFirstLogin: z.boolean(),
   createProfile: z.boolean(),
   browserProfileId: z.string().optional()
 }).superRefine((data, ctx) => {
@@ -61,23 +68,36 @@ type Schema = z.output<typeof schema>
 
 interface FormState {
   loginEmail: string
+  emailPassword: string
   password: string
   label: string
+  pendingFirstLogin: boolean
   createProfile: boolean
   browserProfileId: string | undefined
 }
 
 function emptyState(): FormState {
-  return { loginEmail: '', password: '', label: '', createProfile: true, browserProfileId: undefined }
+  return {
+    loginEmail: '',
+    emailPassword: '',
+    password: '',
+    label: '',
+    pendingFirstLogin: true,
+    createProfile: true,
+    browserProfileId: undefined
+  }
 }
 
 const state = reactive<FormState>(emptyState())
+// one toggle per password field; both start masked on every open
+const showEmailPassword = ref(false)
 const showPassword = ref(false)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
 
 function resetForm() {
   Object.assign(state, emptyState())
+  showEmailPassword.value = false
   showPassword.value = false
   submitting.value = false
   submitError.value = null
@@ -216,7 +236,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   const body: CreateAccountBody = {
     loginEmail: event.data.loginEmail,
     password: event.data.password,
-    browserProfileId
+    emailPassword: event.data.emailPassword,
+    browserProfileId,
+    pendingFirstLogin: event.data.pendingFirstLogin
   }
   if (event.data.label) body.label = event.data.label
   try {
@@ -274,7 +296,33 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           />
         </UFormField>
 
-        <UFormField label="Password" name="password" required>
+        <UFormField label="Email password" name="emailPassword" required>
+          <UInput
+            v-model="state.emailPassword"
+            :type="showEmailPassword ? 'text' : 'password'"
+            autocomplete="new-password"
+            placeholder="Mailbox password of the login email"
+            class="w-full"
+            :ui="{ trailing: 'pe-1' }"
+            :disabled="submitting"
+            data-testid="ta-add-email-password"
+          >
+            <template #trailing>
+              <UButton
+                color="neutral"
+                variant="link"
+                size="sm"
+                :icon="showEmailPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+                :aria-label="showEmailPassword ? 'Hide email password' : 'Show email password'"
+                :aria-pressed="showEmailPassword"
+                data-testid="ta-add-email-password-toggle"
+                @click="showEmailPassword = !showEmailPassword"
+              />
+            </template>
+          </UInput>
+        </UFormField>
+
+        <UFormField label="TikTok password" name="password" required>
           <UInput
             v-model="state.password"
             :type="showPassword ? 'text' : 'password'"
@@ -291,7 +339,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 variant="link"
                 size="sm"
                 :icon="showPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
-                :aria-label="showPassword ? 'Hide password' : 'Show password'"
+                :aria-label="showPassword ? 'Hide TikTok password' : 'Show TikTok password'"
                 :aria-pressed="showPassword"
                 data-testid="ta-add-password-toggle"
                 @click="showPassword = !showPassword"
@@ -309,6 +357,17 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             data-testid="ta-add-label"
           />
         </UFormField>
+
+        <UCheckbox
+          v-model="state.pendingFirstLogin"
+          label="Auto first login"
+          :disabled="submitting"
+          data-testid="ta-add-pending"
+        >
+          <template #description>
+            <span data-testid="ta-add-pending-helper">{{ AUTO_FIRST_LOGIN_HELP }}</span>
+          </template>
+        </UCheckbox>
 
         <UCheckbox
           v-model="state.createProfile"

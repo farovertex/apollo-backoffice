@@ -13,6 +13,11 @@
  * chip) after Session status; row action Sync (`ta-sync`) → `POST /backend/tiktok-accounts/:id/discover` (202 / 409 →
  * poll `GET /backend/tiktok-accounts/:id` every 2 s, one loop per account id, until `runningJob === null` → refresh +
  * toast; other errors → toast, no poll). The latest polled account is merged into its row so "Syncing…" shows live.
+ * FEAT-023 (batch upload + first login, api-contract.md v1 §3/§5): navbar button "Batch upload" (`ta-batch-upload`)
+ * opens `TiktokAccountsBatchModal` (parses the CSV in the browser, one `POST /backend/tiktok-accounts/batch`,
+ * refresh on `imported`). The Password column became **Email password** (`ta-email-password`) + **TikTok password**
+ * (`ta-password`), each with its own reveal set, and a **First login** column (`ta-first-login`) shows
+ * `email_fail 2/3` / "Pending" / `—`. The flag's field name is never printed as a label.
  */
 import type { TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
@@ -65,16 +70,20 @@ const filtered = computed<TikTokAccount[]>(() => {
 })
 
 // ── password reveal (per account id, owned here so table re-renders never leak a revealed cell to another row) ───────
+// one set per column (FEAT-023): revealing the TikTok password must not reveal the mailbox one
 const revealed = ref(new Set<string>())
-function toggleRevealed(id: string) {
-  const next = new Set(revealed.value)
+const revealedEmail = ref(new Set<string>())
+function toggle(set: Ref<Set<string>>, id: string) {
+  const next = new Set(set.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
-  revealed.value = next
+  set.value = next
 }
-// a fresh dataset (refresh / after create / after delete) starts fully masked and drops the per-row poll snapshots
+// a fresh dataset (refresh / after create / after delete / after an import) starts fully masked and drops the
+// per-row poll snapshots
 watch(data, () => {
   revealed.value = new Set()
+  revealedEmail.value = new Set()
   polledById.value = new Map()
 })
 
@@ -136,6 +145,7 @@ function sessionBadge(s: SessionStatus) {
 
 // ── actions ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 const addOpen = ref(false)
+const batchOpen = ref(false)
 const deleteOpen = ref(false)
 const deleteTarget = ref<TikTokAccount | null>(null)
 
@@ -304,13 +314,31 @@ const columns: TableColumn<TikTokAccount>[] = [
     cell: ({ row }) => h('span', { class: 'whitespace-nowrap' }, row.original.loginEmail)
   },
   {
+    id: 'emailPassword',
+    header: 'Email password',
+    cell: ({ row }) => {
+      // rows created before FEAT-023 have no mailbox password; nothing to mask or copy there
+      const value = row.original.emailPassword
+      if (!value) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-email-password', 'data-shown': 'false' }, '—')
+      return h(PasswordCell, {
+        key: row.original.id,
+        value,
+        shown: revealedEmail.value.has(row.original.id),
+        testIdPrefix: 'ta-email',
+        name: 'email password',
+        onToggle: () => toggle(revealedEmail, row.original.id)
+      })
+    }
+  },
+  {
     id: 'password',
-    header: 'Password',
+    header: 'TikTok password',
     cell: ({ row }) => h(PasswordCell, {
       key: row.original.id,
       value: row.original.password,
       shown: revealed.value.has(row.original.id),
-      onToggle: () => toggleRevealed(row.original.id)
+      name: 'TikTok password',
+      onToggle: () => toggle(revealed, row.original.id)
     })
   },
   {
@@ -345,6 +373,44 @@ const columns: TableColumn<TikTokAccount>[] = [
         }, () => loginErrorShort(err)))
       }
       return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
+    }
+  },
+  {
+    id: 'firstLogin',
+    // FEAT-023: the UI name of `pendingFirstLogin` is "Auto first login" / this column — never the field name
+    header: 'First login',
+    cell: ({ row }) => {
+      const a = row.original
+      const fail = a.firstLoginFail
+      if (fail) {
+        // spec.md "UI behaviour": the cell reads `email_fail 2/3`; the tooltip explains the code
+        const count = firstLoginTryCount(fail, a.firstLoginTries)
+        const text = firstLoginFailText(fail)
+        return h(UTooltip, { text }, () => h(UBadge, {
+          'color': 'error',
+          'variant': 'subtle',
+          'size': 'sm',
+          'icon': 'i-lucide-triangle-alert',
+          'class': 'whitespace-nowrap font-mono',
+          'title': text,
+          'data-testid': 'ta-first-login',
+          'data-pending': a.pendingFirstLogin ? 'true' : 'false',
+          'data-fail': fail
+        }, () => count ? `${fail} ${count}` : fail))
+      }
+      if (a.pendingFirstLogin) {
+        return h(UTooltip, { text: AUTO_FIRST_LOGIN_HELP }, () => h(UBadge, {
+          'color': 'info',
+          'variant': 'subtle',
+          'size': 'sm',
+          'icon': 'i-lucide-clock',
+          'class': 'whitespace-nowrap',
+          'title': AUTO_FIRST_LOGIN_HELP,
+          'data-testid': 'ta-first-login',
+          'data-pending': 'true'
+        }, () => 'Pending'))
+      }
+      return h('span', { 'class': 'text-muted', 'data-testid': 'ta-first-login', 'data-pending': 'false' }, '—')
     }
   },
   {
@@ -512,6 +578,16 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             @click="refresh()"
           />
           <UButton
+            label="Batch upload"
+            aria-label="Batch upload"
+            icon="i-lucide-file-up"
+            color="neutral"
+            variant="outline"
+            :ui="{ label: 'hidden lg:inline' }"
+            data-testid="ta-batch-upload"
+            @click="batchOpen = true"
+          />
+          <UButton
             label="Add account"
             aria-label="Add account"
             icon="i-lucide-plus"
@@ -575,6 +651,14 @@ const showTable = computed(() => !error.value && !isEmpty.value)
               data-testid="ta-empty-add"
               @click="addOpen = true"
             />
+            <UButton
+              label="Batch upload"
+              icon="i-lucide-file-up"
+              color="neutral"
+              variant="outline"
+              data-testid="ta-empty-batch"
+              @click="batchOpen = true"
+            />
           </template>
         </UEmpty>
 
@@ -609,6 +693,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
       </div>
 
       <TiktokAccountsAddModal v-model:open="addOpen" @created="refresh()" />
+      <TiktokAccountsBatchModal v-model:open="batchOpen" @imported="refresh()" />
       <TiktokAccountsDeleteModal
         v-model:open="deleteOpen"
         :account="deleteTarget"

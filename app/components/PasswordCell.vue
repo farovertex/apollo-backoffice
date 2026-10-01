@@ -7,14 +7,19 @@
  * FEAT-003 — TikTok accounts (`ta-password*`, the default prefix).
  * FEAT-006 — generalised with `testIdPrefix` and reused by `/proxies` (`px-password*`); moved from
  * `components/tiktok-accounts/PasswordCell.vue` (the FEAT-003 test ids are unchanged).
+ * FEAT-023 — `name` distinguishes the two password columns of `/tiktok-accounts` for screen readers and in the
+ * copy toast; its default keeps the FEAT-003/006 wording byte-identical.
  */
 const props = withDefaults(defineProps<{
   value: string
   shown: boolean
   /** test-id prefix: `<prefix>-password`, `<prefix>-password-toggle`, `<prefix>-password-copy` */
   testIdPrefix?: string
+  /** lower-case name used in the aria-labels and the copy toast ("email password" → "Show email password") */
+  name?: string
 }>(), {
-  testIdPrefix: 'ta'
+  testIdPrefix: 'ta',
+  name: 'password'
 })
 
 const emit = defineEmits<{
@@ -24,12 +29,15 @@ const emit = defineEmits<{
 const MASK = '••••••••'
 const toast = useToast()
 
+/** "password" → "Password" (the toast title starts with it) */
+const Name = computed(() => props.name.charAt(0).toUpperCase() + props.name.slice(1))
+
 async function copy() {
   try {
     await navigator.clipboard.writeText(props.value)
-    toast.add({ title: 'Password copied', color: 'success' })
+    toast.add({ title: `${Name.value} copied`, color: 'success' })
   } catch {
-    toast.add({ title: 'Could not copy the password', description: 'Clipboard access was denied by the browser.', color: 'error' })
+    toast.add({ title: `Could not copy the ${props.name}`, description: 'Clipboard access was denied by the browser.', color: 'error' })
   }
 }
 </script>
@@ -47,7 +55,7 @@ async function copy() {
       color="neutral"
       variant="ghost"
       size="xs"
-      :aria-label="shown ? 'Hide password' : 'Show password'"
+      :aria-label="shown ? `Hide ${name}` : `Show ${name}`"
       :aria-pressed="shown"
       :data-testid="`${testIdPrefix}-password-toggle`"
       @click="emit('toggle')"
@@ -57,7 +65,7 @@ async function copy() {
       color="neutral"
       variant="ghost"
       size="xs"
-      aria-label="Copy password"
+      :aria-label="`Copy ${name}`"
       :data-testid="`${testIdPrefix}-password-copy`"
       @click="copy"
     />

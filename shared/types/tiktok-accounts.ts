@@ -8,6 +8,11 @@
  * `lastDiscoverAt`, `lastDiscoverError`; `runningJob.type` is `login | discover`, `trigger` may be `afterLogin`,
  * `step` may be a discover step; `POST /tiktok-accounts/:id/discover` answers 202 `DiscoverJobResponse`
  * (shared/types/advertisers.ts) or 409 `LoginConflictBody` (+ `jobType`).
+ * FEAT-023 (batch upload + first login via mailbox, api-contract.md v1 §2–§5): the view gains `emailPassword`,
+ * `pendingFirstLogin`, `firstLoginFail`, `firstLoginTries`; `POST /tiktok-accounts` takes `emailPassword` +
+ * `pendingFirstLogin`; `POST /tiktok-accounts/batch` takes `BatchAccountsBody` and answers 201 `BatchAccountsResponse`.
+ * `password` is the TikTok password, `emailPassword` the mailbox one — both plaintext in the account view only
+ * (never logged, never screenshotted, never in a batch result row).
  */
 
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
@@ -27,8 +32,25 @@ export type JobStep
   = 'starting' | 'checking' | 'fillingForm' | 'solvingCaptcha' | 'waitingHuman' | 'enteringOtp' | 'finishing'
     | 'openingOverview' | 'openingAccounts' | 'fetchingPages' | 'saving'
 
-/** `afterLogin` = discover job enqueued automatically by a login success (FEAT-005). */
-export type JobTrigger = 'manual' | 'retry' | 'human' | 'afterLogin'
+/**
+ * `afterLogin` = discover job enqueued automatically by a login success (FEAT-005).
+ * `scheduler` = login job enqueued by the first-login scan (FEAT-023 §6), never by a click.
+ */
+export type JobTrigger = 'manual' | 'retry' | 'human' | 'afterLogin' | 'scheduler'
+
+/**
+ * FEAT-023 — why the automatic first login gave up (`tiktokAccounts.firstLoginFail`); null while it may still run
+ * or after a success. Shown in the "First login" column; the flag itself is never a label on the UI.
+ */
+export type FirstLoginFail = 'email_fail' | 'captcha_fail' | 'otp_fail' | 'other_fail'
+
+/** FEAT-023 — attempts per failure kind (`tiktokAccounts.firstLoginTries`); zeros on rows created before the feature. */
+export interface FirstLoginTries {
+  email: number
+  captcha: number
+  otp: number
+  other: number
+}
 
 /** Populated browser profile (subset of BROWSER_PROFILES); `null` on the account view if the profile row is gone. */
 export interface AccountBrowserProfile {
@@ -63,7 +85,14 @@ export interface TikTokAccount {
   browserProfile: AccountBrowserProfile | null
   label: string | null
   loginEmail: string
+  /** TikTok Ads password */
   password: string
+  /** mailbox password of `loginEmail`, used by the automatic first login; null on rows created before FEAT-023 */
+  emailPassword: string | null
+  /** the scheduler signs this account in once (mailbox then TikTok); the API turns it off on success or on a final failure */
+  pendingFirstLogin: boolean
+  firstLoginFail: FirstLoginFail | null
+  firstLoginTries: FirstLoginTries
   sessionStatus: SessionStatus
   isActive: boolean
   /** ISO | null — set by the login job's "check first" step */
@@ -96,9 +125,46 @@ export interface AccountsResponse {
 /** `POST /tiktok-accounts` body (`createTikTokAccountSchema`). `label` omitted or empty → null. */
 export interface CreateAccountBody {
   loginEmail: string
+  /** TikTok Ads password */
   password: string
+  /** FEAT-023 — mailbox password, required */
+  emailPassword: string
   browserProfileId: string
   label?: string
+  /** FEAT-023 — omitted = true on the API side; the BO always sends it so the checkbox is the only source */
+  pendingFirstLogin?: boolean
+}
+
+/** FEAT-023 — one CSV line of `POST /tiktok-accounts/batch`; `label` is always null for imported rows. */
+export interface BatchAccountRow {
+  loginEmail: string
+  emailPassword: string
+  password: string
+}
+
+/** FEAT-023 — `POST /tiktok-accounts/batch` body (§5): 1..1000 rows, one flag for the whole file. */
+export interface BatchAccountsBody {
+  pendingFirstLogin: boolean
+  rows: BatchAccountRow[]
+}
+
+/**
+ * FEAT-023 — result of one batch row. `skip` = the email already exists in the file or in the workspace
+ * (`error: 'duplicate'`), `fail` = profile create / bind failed. Never carries a password.
+ */
+export interface BatchRowResult {
+  loginEmail: string
+  status: 'ok' | 'skip' | 'fail'
+  id?: string
+  error?: string
+}
+
+/** FEAT-023 — `POST /tiktok-accounts/batch` 201 body (§5). No login is enqueued by this call. */
+export interface BatchAccountsResponse {
+  ok: number
+  skip: number
+  fail: number
+  rows: BatchRowResult[]
 }
 
 /** `POST /tiktok-accounts/:id/login` 202 body. */
