@@ -12,10 +12,19 @@
  * rows created from the BO carry a fingerprint icon.
  * FEAT-007: every item gains `tags` (display only, from the AdsPower `remark`) — the Group column shows one small
  * badge per tag next to the group name; tags are never part of the client-side search or the group filter.
+ * FEAT-024 (api-contract §3.1/§3.2/§3.4, §10 · spec AC-11/A12): `/available` answers from Mongo and never calls
+ * AdsPower, so the sync is explicit — header button "Sync now" (`bp-sync-now`) posts
+ * `/backend/browser-profiles/sync` (202) and the page re-reads itself every 2 s until `sync.status === 'idle'`
+ * (`bp-sync-status`, `bp-sync-error`). The same single timer (`useProfilesPoll`, 2 s / 90 s cap, one interval per
+ * page) also watches reserved rows: a profile created from the BO starts as `runState: 'provisioning'` with
+ * `providerProfileId: null` → `Creating…` badge + `—` Profile ID until its `provider{create}` job is done, or an
+ * `Error` badge carrying `provisionError`.
  */
 import type { TableColumn } from '@nuxt/ui'
+import type { FetchError } from 'ofetch'
 import { getPaginationRowModel } from '@tanstack/table-core'
-import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, ProviderErrorBody } from '#shared/types/browser-profiles'
+import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
+import type { ProfilesPollReason } from '~/composables/useProfilesPoll'
 
 useSeoMeta({ title: 'Browser profiles' })
 
@@ -25,6 +34,7 @@ const UIcon = resolveComponent('UIcon')
 const UTooltip = resolveComponent('UTooltip')
 
 const api = useApi()
+const toast = useToast()
 
 // `server: false`: the request must be issued by the browser (one visible XHR per load, stubbable by QA with
 // page.route) and never block SSR on a slow / down AdsPower.
@@ -41,7 +51,8 @@ const profiles = computed<AvailableProfile[]>(() => data.value?.profiles ?? [])
 // `groups` / `total` / `syncedAt` fall back gracefully while the API side lands.
 const groups = computed<string[]>(() => data.value?.groups ?? [])
 const total = computed(() => data.value?.total ?? profiles.value.length)
-// top-level `syncedAt` = timestamp of this sync. `useTimeAgo` (VueUse) re-renders every 30 s; `—` when missing.
+// FEAT-024: top-level `syncedAt` = `sync.lastSyncedAt`, `null` when the list was never synced (`Synced —`).
+// `useTimeAgo` (VueUse) re-renders every 30 s.
 const syncedAt = computed<string | null>(() => data.value?.syncedAt ?? null)
 const syncedAgo = useTimeAgo(() => syncedAt.value ?? 0)
 
@@ -74,12 +85,13 @@ function clearFilters() {
 
 // Same rules as the API's `q` / `group` / `status` (api-contract.md v2): case-insensitive substring on name /
 // providerProfileId / groupName; exact groupName; exact status (`free` | `bound`).
+// FEAT-024: `providerProfileId` may be null (reserved row) — the API ignores those for `q`, so do we.
 const filtered = computed<AvailableProfile[]>(() => {
   const needle = searchDebounced.value.trim().toLowerCase()
   return profiles.value.filter((p) => {
     if (needle) {
       const hit = p.name.toLowerCase().includes(needle)
-        || p.providerProfileId.toLowerCase().includes(needle)
+        || (p.providerProfileId ?? '').toLowerCase().includes(needle)
         || (p.groupName ?? '').toLowerCase().includes(needle)
       if (!hit) return false
     }
@@ -100,8 +112,13 @@ function setPage(p: number) {
 }
 const currentPage = computed(() => pagination.value.pageIndex + 1)
 
-// any filter change (or a fresh dataset) → page 1
-watch([searchDebounced, group, statusFilter, data], () => setPage(1))
+// any filter change → page 1. FEAT-024: a re-read (Refresh or a 2 s poll tick) keeps the current page — it only
+// clamps it when the list got shorter, otherwise polling would drag the admin back to page 1 every 2 s.
+watch([searchDebounced, group, statusFilter], () => setPage(1))
+watch(filtered, (rows) => {
+  const lastPage = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  if (currentPage.value > lastPage) setPage(lastPage)
+})
 
 function formatProxy(proxy: AvailableProfile['proxy']): string {
   if (!proxy) return '—'
@@ -113,6 +130,39 @@ function formatProxy(proxy: AvailableProfile['proxy']): string {
 function boundLabel(p: AvailableProfile): string {
   const account = p.boundAccount
   return account ? `Bound · ${account.label ?? account.loginEmail}` : 'Bound'
+}
+
+/**
+ * FEAT-024 — second badge of the Status column (`bp-run-state`, `data-state` = the raw `runState`):
+ * `provisioning` → neutral `Creating…` while the `provider{create}` job runs · `error` + `provisionError` → error
+ * badge whose tooltip/`title` is the API's own text. Every other `runState` (closed / opening / open / closing) is
+ * normal operation and adds nothing.
+ */
+function runStateBadge(p: AvailableProfile) {
+  if (p.runState === 'provisioning') {
+    return h(UBadge, {
+      'color': 'neutral',
+      'variant': 'subtle',
+      'icon': 'i-lucide-loader-circle',
+      'class': 'whitespace-nowrap',
+      'ui': { leadingIcon: 'animate-spin' },
+      'title': 'The browser profile is being created in AdsPower',
+      'data-testid': 'bp-run-state',
+      'data-state': p.runState
+    }, () => 'Creating…')
+  }
+  if (p.runState === 'error' && p.provisionError) {
+    return h(UTooltip, { text: p.provisionError }, () => h(UBadge, {
+      'color': 'error',
+      'variant': 'subtle',
+      'icon': 'i-lucide-triangle-alert',
+      'class': 'whitespace-nowrap',
+      'title': p.provisionError ?? undefined,
+      'data-testid': 'bp-run-state',
+      'data-state': p.runState
+    }, () => 'Error'))
+  }
+  return null
 }
 
 /** FEAT-006 — tooltip of the fingerprint icon: `Chrome ua_auto · Windows · WebRTC disabled · Noise on` */
@@ -128,6 +178,90 @@ const createOpen = ref(false)
 function onCreated() {
   clearFilters()
   return refresh()
+}
+
+// ── sync + polling (FEAT-024) ────────────────────────────────────────────────────────────────────────────────────────
+const sync = computed(() => data.value?.sync ?? null)
+/** the POST itself is in flight */
+const syncPosting = ref(false)
+/**
+ * we got a 202 and have not seen an `idle` answer yet. Without it the button would flicker out of `loading` between
+ * the 202 and the first poll tick (the data in hand still says `idle`).
+ */
+const syncRequested = ref(false)
+/** the API says a `syncList` job is queued/running (or we just asked for one) */
+const syncRunning = computed(() => sync.value?.status === 'running' || syncRequested.value)
+/** `providerNodes.lastSyncError` of the last sync — shown under Synced and toasted once per distinct text */
+const syncError = computed<string | null>(() => sync.value?.lastError ?? null)
+/** visible rows (after the client-side filters) whose provider profile is still being created */
+const provisioningCount = computed(() => filtered.value.filter(p => p.runState === 'provisioning').length)
+
+// one interval for the whole page (spec A12): 2 s, 90 s per reason, cleared on unmount
+const poll = useProfilesPoll(() => refresh())
+
+poll.onTimeout('sync', () => {
+  syncRequested.value = false
+  toast.add({
+    title: 'Sync is taking longer than expected',
+    description: 'The sync job is still queued. Press Refresh in a moment.',
+    color: 'warning'
+  })
+})
+
+/** what the single timer is waiting for — a data attribute QA can watch (`''` = no timer) */
+const pollingReasons = computed(() => poll.waiting.value.join(' '))
+
+/** the Sync now button is busy: POST in flight, or a job is running and we have not given up watching it */
+const syncing = computed(() => syncPosting.value || (syncRunning.value && !poll.hasGivenUp('sync')))
+
+// a response that says the job is over ends the "requested" state
+watch(sync, (s) => {
+  if (s?.status === 'idle') syncRequested.value = false
+})
+
+// one toast per distinct sync error (the poll sees the same text every 2 s)
+let toastedSyncError: string | null = null
+watch(syncError, (message) => {
+  if (!message) {
+    toastedSyncError = null
+    return
+  }
+  if (message === toastedSyncError) return
+  toastedSyncError = message
+  toast.add({ title: 'Last profile sync failed', description: message, color: 'error' })
+}, { immediate: true })
+
+// the single source of truth for the timer: which reasons the data in hand still waits for
+watch([syncRunning, provisioningCount], () => {
+  const reasons: ProfilesPollReason[] = []
+  if (syncRunning.value) reasons.push('sync')
+  if (provisioningCount.value > 0) reasons.push('provisioning')
+  poll.track(reasons)
+}, { immediate: true })
+
+/** `POST /backend/browser-profiles/sync` — exactly one request per click, then the poll takes over */
+async function syncNow() {
+  if (syncing.value) return
+  syncPosting.value = true
+  try {
+    // retry: 0 — one POST per click (the API dedupes anyway, but a retry would be a second audit row)
+    const res = await api<SyncResponse>('/browser-profiles/sync', { method: 'POST', retry: 0 })
+    syncRequested.value = true
+    // a click after a 90 s give-up restarts the watch window
+    poll.retry('sync')
+    if (res.reused) {
+      toast.add({ title: 'A sync is already running', description: `node ${res.node}`, color: 'info' })
+    }
+  } catch (e) {
+    const err = e as FetchError<Partial<ProviderErrorBody>>
+    toast.add({
+      title: 'Could not start the sync',
+      description: err.data?.error ?? err.message,
+      color: 'error'
+    })
+  } finally {
+    syncPosting.value = false
+  }
 }
 
 const columns: TableColumn<AvailableProfile>[] = [
@@ -171,7 +305,14 @@ const columns: TableColumn<AvailableProfile>[] = [
     accessorKey: 'providerProfileId',
     header: 'Profile ID',
     enableSorting: false,
-    cell: ({ row }) => h('span', { class: 'font-mono text-xs' }, row.original.providerProfileId)
+    // FEAT-024: a reserved row has no provider id yet (and a failed create never gets one) → `—`
+    cell: ({ row }) => {
+      const id = row.original.providerProfileId
+      return h('span', {
+        'class': id ? 'font-mono text-xs' : 'font-mono text-xs text-muted',
+        'data-testid': 'bp-profile-id'
+      }, id ?? '—')
+    }
   },
   {
     accessorKey: 'groupName',
@@ -221,9 +362,19 @@ const columns: TableColumn<AvailableProfile>[] = [
     enableSorting: false,
     // `free` = no TikTok account bound to this profile yet, `bound` = boundAccountId set. FEAT-003: the Bound badge
     // names the account (`label`, else `loginEmail`); plain `Bound` when the join is null (dangling id).
-    cell: ({ row }) => row.original.status === 'bound'
-      ? h(UBadge, { color: 'warning', variant: 'subtle', class: 'whitespace-nowrap' }, () => boundLabel(row.original))
-      : h(UBadge, { color: 'success', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Free')
+    // FEAT-024: the Free/Bound badge is kept and a second `bp-run-state` badge is added for a row whose provider
+    // profile is still being created or whose create failed.
+    cell: ({ row }) => {
+      const p = row.original
+      const children = [
+        p.status === 'bound'
+          ? h(UBadge, { color: 'warning', variant: 'subtle', class: 'whitespace-nowrap' }, () => boundLabel(p))
+          : h(UBadge, { color: 'success', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Free')
+      ]
+      const runState = runStateBadge(p)
+      if (runState) children.push(runState)
+      return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
+    }
   },
   {
     id: 'scope',
@@ -237,6 +388,8 @@ const columns: TableColumn<AvailableProfile>[] = [
 ]
 
 // ── states ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+// FEAT-024: `/available` reads Mongo, so 503/429/502 cannot come from this route any more — the branches stay as a
+// harmless fallback (an old API, or a proxy in between), but a plain failure no longer blames AdsPower.
 const errorState = computed<{ title: string, description?: string } | null>(() => {
   if (!error.value) return null
   const statusCode = error.value.statusCode
@@ -249,7 +402,7 @@ const errorState = computed<{ title: string, description?: string } | null>(() =
     case 502:
       return { title: 'AdsPower returned an error', description: body?.error }
     default:
-      return { title: 'Could not load profiles' }
+      return { title: 'Could not load profiles', description: body?.error }
   }
 })
 
@@ -267,7 +420,7 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
         </template>
 
         <template #right>
-          <!-- three labelled buttons clip the H1 (`truncate`) at 390 px → icon-only below `sm`, aria-label keeps the name -->
+          <!-- four labelled buttons clip the H1 (`truncate`) at 390 px → icon-only below `sm`, aria-label keeps the name -->
           <UButton
             label="Refresh"
             aria-label="Refresh"
@@ -278,6 +431,18 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
             :ui="{ label: 'hidden sm:inline' }"
             data-testid="bp-refresh"
             @click="refresh()"
+          />
+          <!-- FEAT-024: the explicit profile-list sync (the GET above no longer touches AdsPower) -->
+          <UButton
+            label="Sync now"
+            aria-label="Sync now"
+            icon="i-lucide-refresh-ccw-dot"
+            color="neutral"
+            variant="outline"
+            :loading="syncing"
+            :ui="{ label: 'hidden sm:inline' }"
+            data-testid="bp-sync-now"
+            @click="syncNow()"
           />
           <UButton
             label="Default settings"
@@ -303,7 +468,12 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
     </template>
 
     <template #body>
-      <div data-testid="bp-page" :data-status="status" class="flex flex-1 flex-col gap-4">
+      <div
+        data-testid="bp-page"
+        :data-status="status"
+        :data-polling="pollingReasons"
+        class="flex flex-1 flex-col gap-4"
+      >
         <div class="flex flex-wrap items-center gap-1.5">
           <UInput
             v-model="search"
@@ -373,7 +543,7 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
           v-else-if="isEmpty"
           icon="i-lucide-app-window"
           title="No profiles in AdsPower"
-          description="Create profiles in the AdsPower app, then refresh."
+          description="Create a profile here, or create it in the AdsPower app and press Sync now."
           data-testid="bp-empty"
         />
 
@@ -428,9 +598,24 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
             <span data-testid="bp-count">Showing {{ filtered.length }} of {{ total }} profiles</span>
             <span class="hidden sm:inline" aria-hidden="true">·</span>
             <span
-              :title="syncedAt ?? undefined"
+              :title="syncedAt ?? 'Never synced'"
               data-testid="bp-synced"
             >Synced {{ syncedAt ? syncedAgo : '—' }}</span>
+            <!-- FEAT-024: state of the sync job + the node's last sync error, next to / under Synced -->
+            <span
+              v-if="syncing"
+              class="inline-flex items-center gap-1 text-primary"
+              data-testid="bp-sync-status"
+            >
+              <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
+              Syncing…
+            </span>
+            <span
+              v-if="syncError"
+              class="basis-full text-xs text-error"
+              :title="syncError"
+              data-testid="bp-sync-error"
+            >{{ syncError }}</span>
           </div>
 
           <UPagination
