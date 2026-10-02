@@ -35,6 +35,16 @@ export interface LaunchAdvertiser {
   bcOrder: number | null
   /** `status === 'active' && missingSince === null` — only these can be picked */
   selectable: boolean
+  /**
+   * FEAT-026 (api-contract v1 §1) — the stored, app-credited balance (`ADVERTISERS.balanceAmount/Currency/At`,
+   * written only by `TopupService.applyCheck` on a `paid` round, FEAT-021). **Not** TikTok's live balance.
+   */
+  balanceAmount: string | null
+  balanceCurrency: string | null
+  /** ISO | null — time of the last credit */
+  balanceAt: string | null
+  /** `Number(balanceAmount.replace(/,/g, '')) > 0` — computed by the API */
+  hasBalance: boolean
 }
 
 /** One TikTok account of `GET /launch/targets` (available accounts first, then label/loginEmail). */
