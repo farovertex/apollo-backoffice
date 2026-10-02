@@ -511,13 +511,12 @@ function onSync() {
               <span>{{ reportLine(adv) }}</span>
             </NuxtLink>
 
-            <!-- FEAT-021 v1.1 §C — one line per status next to the badge -->
             <p
-              v-if="adv.topup?.status === 'paid' && adv.topup.balanceAmount"
-              class="text-xs text-muted"
-              data-testid="ta-adv-topup-balance"
+              v-if="advertiserBalanceText(adv)"
+              class="text-xs text-muted tabular-nums"
+              data-testid="ta-adv-balance"
             >
-              ยอดคงเหลือ {{ topupBalanceText(adv.topup) }}
+              ยอดคงเหลือ {{ advertiserBalanceText(adv) }}
             </p>
             <p
               v-if="adv.topup?.status === 'readyToPay'"

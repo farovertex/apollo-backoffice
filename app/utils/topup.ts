@@ -150,10 +150,20 @@ export function topupCheckInfo(topup: TopupView | null | undefined): string {
   return parts.join(' · ')
 }
 
-/** "1,000.00 THB" — the balance the worker read after `paid` */
-export function topupBalanceText(topup: TopupView | null | undefined): string {
-  if (!topup?.balanceAmount) return ''
-  return topup.balanceCurrency ? `${topup.balanceAmount} ${topup.balanceCurrency}` : topup.balanceAmount
+/** "400.00 THB" — ยอดคงเหลือหลังบวกเงินฝากที่ตรวจผ่าน */
+export function balanceText(amount: string | null | undefined, currency: string | null | undefined): string {
+  if (!amount) return ''
+  return currency ? `${amount} ${currency}` : amount
+}
+
+/** ยอดที่โชว์บนแถว advertiser — รอบที่เพิ่ง paid มาก่อน ไม่งั้นใช้ยอดสะสมบนแถว */
+export function advertiserBalanceText(adv: {
+  balanceAmount?: string | null
+  balanceCurrency?: string | null
+  topup?: TopupView | null
+}): string {
+  if (adv.topup?.status === 'paid' && adv.topup.balanceAmount) return topupBalanceText(adv.topup)
+  return balanceText(adv.balanceAmount, adv.balanceCurrency)
 }
 
 /** integer baht ≥ `TOPUP_MIN_AMOUNT`; the message mirrors the API's 400 text (api-contract §4) */

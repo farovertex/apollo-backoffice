@@ -67,6 +67,11 @@ export interface Advertiser {
    * image: it comes back only in the 200 body of `POST /topups/:id/claim`.
    */
   topup: TopupView | null
+  /** ยอดคงเหลือที่บวกจากรอบฝากที่ตรวจผ่านแล้ว · null = ยังไม่เคยฝากสำเร็จ */
+  balanceAmount?: string | null
+  balanceCurrency?: string | null
+  /** ISO | null */
+  balanceAt?: string | null
   /**
    * FEAT-020 (AC-21) — ads-report tracking state of this advertiser, served with the list so the slideover
    * needs no extra request. Optional for readers of an API that predates the feature.
