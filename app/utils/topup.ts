@@ -156,6 +156,11 @@ export function balanceText(amount: string | null | undefined, currency: string 
   return currency ? `${amount} ${currency}` : amount
 }
 
+/** ยอดคงเหลือที่เขียนลงรอบตอน `paid` */
+export function topupBalanceText(topup: TopupView | null | undefined): string {
+  return balanceText(topup?.balanceAmount, topup?.balanceCurrency)
+}
+
 /** ยอดที่โชว์บนแถว advertiser — รอบที่เพิ่ง paid มาก่อน ไม่งั้นใช้ยอดสะสมบนแถว */
 export function advertiserBalanceText(adv: {
   balanceAmount?: string | null
