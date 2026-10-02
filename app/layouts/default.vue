@@ -25,6 +25,12 @@ const canSeeCashier = computed(() => {
   return roles.includes('GOD') || roles.includes('Payment') || roles.includes('Admin')
 })
 
+/**
+ * FEAT-009 — same display-only filter for the GOD-only Admin Management item; `middleware/god-only.ts` and the
+ * API's `@Roles('GOD')` are what actually protect the page. (BUG-026: dropped by the FEAT-009 merge, restored.)
+ */
+const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
+
 const links = computed(() => [[{
   label: 'Home',
   icon: 'i-lucide-house',
