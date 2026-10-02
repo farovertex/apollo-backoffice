@@ -1,0 +1,24 @@
+# Caddy (profile `tls` ของ docker-compose.yml) — TLS อัตโนมัติ (Let's Encrypt) + reverse proxy ไป bo
+# DOMAIN / ACME_EMAIL มาจาก .env ผ่าน environment ของ service caddy
+# apollo-api ไม่มีทางเข้าจากข้างนอก (bo proxy ให้ที่ /backend/** และแนบ Bearer เอง)
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	reverse_proxy bo:3000 {
+		# bo ใช้ X-Forwarded-Proto ตัดสิน cookie `secure` (h3 getRequestProtocol อ่าน header นี้เป็นค่าเริ่มต้น) — Caddy ใส่ให้เอง
+		header_up X-Real-IP {remote_host}
+	}
+}

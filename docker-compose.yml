@@ -1,0 +1,66 @@
+# Production ของ apollo-bo บน Droplet 1 — bo (+ caddy แบบเลือกได้) · คู่กับ apollo-api/docker-compose.yml บนเครื่องเดียวกัน
+#
+#   docker network create gttm                      # ครั้งเดียวต่อเครื่อง (ถ้ายังไม่ได้สร้างตอนขึ้น apollo-api)
+#   cp .env.example .env && $EDITOR .env             # NUXT_SESSION_PASSWORD (≥ 32 ตัว) · BO_PORT · (optional) DOMAIN + ACME_EMAIL
+#   docker compose up -d --build --wait              # build image จาก repo นี้ → bo ขึ้นที่ http://<ip>:20000
+#   DOMAIN ตั้งแล้ว → docker compose --profile tls up -d --build --wait   # + caddy :80/:443 TLS อัตโนมัติ → https://<DOMAIN>
+#   git pull && docker compose [--profile tls] up -d --build --wait      # release รอบถัดไป · rollback = git checkout <sha>
+#
+# - bo คุยกับ api ผ่านเครือข่าย docker `gttm` ที่ http://gttm-api:3001 (alias ที่ apollo-api/docker-compose.yml ตั้งไว้) — api ต้องขึ้นก่อน
+# - BO_BIND=0.0.0.0 (ค่าเริ่มต้น) = เปิด bo สู่ภายนอกที่ BO_PORT · เมื่อใช้ caddy ให้ตั้ง BO_BIND=127.0.0.1 แล้วให้ caddy เป็นทางเข้าเดียว
+# - .env ของ repo นี้ใช้ทั้ง interpolate ค่าใน compose และส่งให้ container bo (NUXT_*) · NUXT_API_BASE ถูก override ให้ชี้ gttm-api เสมอ
+
+name: gttm-bo
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  bo:
+    image: gttm-bo:${TAG:-latest}
+    build:
+      context: .
+    env_file: .env
+    environment:
+      # ชี้ api ในเครือข่าย gttm เสมอ (ค่า NUXT_API_BASE ใน .env มีไว้สำหรับรันบนเครื่องเท่านั้น)
+      NUXT_API_BASE: http://gttm-api:3001
+      NUXT_SESSION_PASSWORD: ${NUXT_SESSION_PASSWORD:?NUXT_SESSION_PASSWORD ว่าง — openssl rand -base64 48 | tr -d '/+=' | head -c 40}
+      NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL:-}
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    ports:
+      - "${BO_BIND:-0.0.0.0}:${BO_PORT:-20000}:3000"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # ★ ใช้ :- ไม่ใช่ :? เพราะ compose interpolate ทุก service แม้ profile ปิด · DOMAIN ว่างตอนเปิด profile tls = caddy ขึ้นไม่ได้ (ดู logs caddy)
+      DOMAIN: ${DOMAIN:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      bo:
+        condition: service_healthy
+
+networks:
+  default:
+    name: gttm
+    external: true
+
+volumes:
+  caddy_data:
+  caddy_config:

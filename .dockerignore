@@ -1,0 +1,21 @@
+# build context ของ Dockerfile — เอาเฉพาะ source ที่ `nuxt build` ต้องใช้
+node_modules
+.output
+.nuxt
+.nitro
+.cache
+.data
+dist
+.git
+.env
+.env.*
+!.env.example
+*.log
+*.local.*
+deploy
+docker-compose.yml
+README.md
+LICENSE
+renovate.json
+workflows
+.DS_Store
