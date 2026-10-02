@@ -127,7 +127,17 @@ const links = computed(() => [[{
   onSelect: () => {
     open.value = false
   }
-}, {
+}, ...(isGod.value
+  ? [{
+      // FEAT-009 — Admin Management (functions 0.2–0.5), after Proxies; GOD only, Settings stays last
+      label: 'Admin Management',
+      icon: 'i-lucide-shield-check',
+      to: '/admins',
+      onSelect: () => {
+        open.value = false
+      }
+    }]
+  : []), {
   label: 'Settings',
   to: '/settings',
   icon: 'i-lucide-settings',
@@ -187,7 +197,25 @@ const groups = computed(() => [{
   }]
 }])
 
+/**
+ * FEAT-009 — one-shot flash messages (`app/utils/flash.ts`). A middleware that redirects during the **server**
+ * render leaves its message in the `bo-flash` cookie; it is shown once here and cleared. On the client the
+ * middleware toasts directly, so nothing is left in the cookie there.
+ * BUG-009: consumed on mount (direct URL load → SSR redirect → fresh page) and in `router.afterEach`, which —
+ * unlike a `route.fullPath` watcher — also fires when a guard redirects back to the route the user is already on.
+ */
+function showFlash() {
+  const flash = takeFlash()
+  if (!flash) return
+  toast.add({ title: flash.title, description: flash.description, color: flash.color ?? 'info' })
+}
+
+const stopFlashHook = useRouter().afterEach(() => showFlash())
+onUnmounted(stopFlashHook)
+
 onMounted(async () => {
+  showFlash()
+
   const cookie = useCookie('cookie-consent')
   if (cookie.value === 'accepted') {
     return
