@@ -12,6 +12,17 @@
  *   (`limits.maxAdvertisersPerAccount`). Everything else sits in the collapsed `Unavailable (N)` strip with the
  *   reason texts of api-contract §4 (`app/utils/launch-reasons.ts`). Search and the workspace filter are
  *   client-side over that one response (spec A6); the workspace filter is hidden with a single workspace.
+ *
+ *   FEAT-026 — "Only with balance" (`la-acc-funded`) is **on** at every page open (not persisted, A4): the
+ *   table then lists only available accounts with ≥ 1 `selectable` advertiser whose `hasBalance` is true
+ *   (`fundedAdvertisers`/`isFunded`), composed with search/workspace by AND, client-side, no extra request.
+ *   The shown/auto-picked advertiser of a row (`advertiserOf`/`isAutoAdvertiser`/`setSelected`) is the first
+ *   funded selectable advertiser when the switch is on, else the API's `defaultAdvertiserId` — an explicit
+ *   `selection` pick always wins. Turning the switch **on** drops every account without a funded advertiser
+ *   from `selection` (A6); turning it off keeps the selection. The header checkbox (`la-acc-select-all`)
+ *   replaces the old "Select all" button: true/indeterminate/false over the **visible** rows only, and acts
+ *   on those same visible rows (`toggleSelectAllVisible`). `la-acc-unfunded-hint`/`la-acc-nofunded` explain
+ *   and undo the filter (`la-acc-show-all`); `la-acc-clear-search` also turns the switch off.
  * Step 2 · Templates — the existing list endpoints (`?limit=100`) + their `/options`, requested **once per
  *   page lifetime** when the step is first opened. A card whose `catalogVersion` differs from the one
  *   `/options` serves is disabled with the re-save message (spec A8) — the API refuses it anyway (400).
@@ -120,8 +131,25 @@ const unavailableAccounts = computed(() => accounts.value.filter(a => !a.availab
 // ── step 1 · filters ─────────────────────────────────────────────────────────────────────────────────────────────────
 const accountSearch = ref('')
 const workspaceFilter = ref<string>('all')
+/** FEAT-026 — "Only with balance", on at every page open, never persisted (spec A4) */
+const fundedOnly = ref(true)
 const unavailableOpen = ref(false)
 const expanded = ref<string[]>([])
+
+/** account.advertisers.filter(selectable && hasBalance), BC order — non-empty ⇔ the account is "funded" */
+function fundedAdvertisers(account: LaunchAccount): LaunchAdvertiser[] {
+  return account.advertisers.filter(a => a.selectable && a.hasBalance)
+}
+
+function isFunded(account: LaunchAccount): boolean {
+  return fundedAdvertisers(account).length > 0
+}
+
+/** BO presentation rule (api-contract §3): funded-first when the switch is on, else the API default */
+function computedDefaultId(account: LaunchAccount): string | null {
+  if (fundedOnly.value) return fundedAdvertisers(account)[0]?.id ?? null
+  return account.defaultAdvertiserId
+}
 
 const workspaceItems = computed(() => {
   const seen = new Map<string, string>()
@@ -136,7 +164,8 @@ const workspaceItems = computed(() => {
 /** with a single workspace the filter carries no information (spec AC-13) */
 const showWorkspaceFilter = computed(() => workspaceItems.value.length > 2)
 
-const filteredAccounts = computed(() => {
+/** available ∩ workspace ∩ search — the funded filter composes on top (`filteredAccounts`) */
+const searchFilteredAccounts = computed(() => {
   const q = accountSearch.value.trim().toLowerCase()
   return availableAccounts.value.filter((account) => {
     if (workspaceFilter.value !== 'all' && account.workspace?.id !== workspaceFilter.value) return false
@@ -151,6 +180,22 @@ const filteredAccounts = computed(() => {
   })
 })
 
+/** available ∩ workspace ∩ search ∩ (funded when the switch is on), all client-side (spec A3) */
+const filteredAccounts = computed(() => {
+  if (!fundedOnly.value) return searchFilteredAccounts.value
+  return searchFilteredAccounts.value.filter(isFunded)
+})
+
+/** how many of the search/workspace-filtered accounts the funded switch additionally hides */
+const unfundedHiddenCount = computed(() => searchFilteredAccounts.value.filter(a => !isFunded(a)).length)
+
+/** turning the switch on drops unfunded accounts from the selection (A6); off keeps it */
+watch(fundedOnly, (on) => {
+  if (!on) return
+  const ids = availableAccounts.value.filter(a => !isFunded(a)).map(a => a.id)
+  selection.value = without(selection.value, ids)
+})
+
 const selectedCount = computed(() => Object.keys(selection.value).length)
 /** target order = the order the API served the accounts in (the API keeps the body order) */
 const selectedAccounts = computed(() => availableAccounts.value.filter(a => selection.value[a.id]))
@@ -159,14 +204,15 @@ const selectedWorkspaceCount = computed(
 )
 
 function advertiserOf(account: LaunchAccount): LaunchAdvertiser | null {
-  const id = selection.value[account.id] ?? account.defaultAdvertiserId
+  const id = selection.value[account.id] ?? computedDefaultId(account)
   return account.advertisers.find(a => a.id === id) ?? null
 }
 
-/** the shown advertiser is still the one the API picked — the row carries the `auto` badge */
+/** the shown advertiser is still the computed default (funded-first on, API default off) — `auto` badge */
 function isAutoAdvertiser(account: LaunchAccount): boolean {
-  const id = selection.value[account.id] ?? account.defaultAdvertiserId
-  return !!id && id === account.defaultAdvertiserId
+  const def = computedDefaultId(account)
+  const id = selection.value[account.id] ?? def
+  return !!id && id === def
 }
 
 function isSelected(account: LaunchAccount): boolean {
@@ -179,7 +225,7 @@ function setSelected(account: LaunchAccount, on: boolean) {
     return
   }
   const id = selection.value[account.id]
-    ?? account.defaultAdvertiserId
+    ?? computedDefaultId(account)
     ?? account.advertisers.find(a => a.selectable)?.id
   if (!id) return
   selection.value = { ...selection.value, [account.id]: id }
@@ -197,10 +243,26 @@ function pickAdvertiser(account: LaunchAccount, advertiser: LaunchAdvertiser) {
   selection.value = { ...selection.value, [account.id]: advertiser.id }
 }
 
-function selectAllVisible() {
+/** header checkbox state over the **visible** rows only (api-contract §3) */
+const visibleSelectedCount = computed(() => filteredAccounts.value.filter(isSelected).length)
+const selectAllState = computed<boolean | 'indeterminate'>(() => {
+  const total = filteredAccounts.value.length
+  const selected = visibleSelectedCount.value
+  if (total === 0 || selected === 0) return false
+  return selected === total ? true : 'indeterminate'
+})
+
+/** click when not all visible selected → select every visible row; click when all selected → deselect them */
+function toggleSelectAllVisible() {
+  const rows = filteredAccounts.value
+  if (rows.length === 0) return
+  if (visibleSelectedCount.value === rows.length) {
+    selection.value = without(selection.value, rows.map(a => a.id))
+    return
+  }
   const picked: Record<string, string> = { ...selection.value }
-  for (const account of filteredAccounts.value) {
-    const id = picked[account.id] ?? account.defaultAdvertiserId ?? account.advertisers.find(a => a.selectable)?.id
+  for (const account of rows) {
+    const id = picked[account.id] ?? computedDefaultId(account) ?? account.advertisers.find(a => a.selectable)?.id
     if (id) picked[account.id] = id
   }
   selection.value = picked
@@ -216,8 +278,20 @@ function toggleExpanded(id: string) {
     : [...expanded.value, id]
 }
 
+/** also turns the funded filter off (spec AC-9) — the search no-match state means it is time to see everything */
 function clearAccountSearch() {
   accountSearch.value = ''
+  fundedOnly.value = false
+}
+
+function showAllAccounts() {
+  fundedOnly.value = false
+}
+
+/** `<balanceAmount> <balanceCurrency>` of the given advertiser, printed as stored, or `—` (api-contract §3) */
+function balanceCell(advertiser: LaunchAdvertiser | null): string {
+  if (!advertiser?.balanceAmount) return '—'
+  return advertiser.balanceCurrency ? `${advertiser.balanceAmount} ${advertiser.balanceCurrency}` : advertiser.balanceAmount
 }
 
 // ── step 2 · templates (one request set per page lifetime) ────────────────────────────────────────────────────────────
@@ -606,8 +680,12 @@ const hasAccountSearch = computed(() => accountSearch.value.trim() !== '' || wor
 const showAccountsEmpty = computed(() =>
   targetsLoaded.value && !targetsError.value && !forbidden.value && availableAccounts.value.length === 0
 )
+/** switch on, no search/workspace filter, every available account unfunded (spec AC-9) */
+const showAccountsNoFunded = computed(() =>
+  !showAccountsEmpty.value && fundedOnly.value && !hasAccountSearch.value && filteredAccounts.value.length === 0
+)
 const showAccountsNoMatch = computed(() =>
-  !showAccountsEmpty.value && filteredAccounts.value.length === 0 && hasAccountSearch.value
+  !showAccountsEmpty.value && !showAccountsNoFunded.value && filteredAccounts.value.length === 0 && hasAccountSearch.value
 )
 
 onMounted(() => {
@@ -658,6 +736,7 @@ onUnmounted(() => {
         data-testid="la-page"
         :data-step="step"
         :data-pending="targetsPending ? 'true' : 'false'"
+        :data-funded="fundedOnly ? 'true' : 'false'"
         class="flex flex-1 flex-col gap-4"
       >
         <UAlert
@@ -746,14 +825,10 @@ onUnmounted(() => {
                     aria-label="Workspace"
                     data-testid="la-acc-ws"
                   />
-                  <UButton
-                    label="Select all"
-                    color="neutral"
-                    variant="outline"
-                    size="sm"
-                    :disabled="filteredAccounts.length === 0"
-                    data-testid="la-acc-select-all"
-                    @click="selectAllVisible"
+                  <USwitch
+                    v-model="fundedOnly"
+                    label="Only with balance"
+                    data-testid="la-acc-funded"
                   />
                   <UButton
                     v-if="selectedCount > 0"
@@ -794,6 +869,25 @@ onUnmounted(() => {
                 </UEmpty>
 
                 <UEmpty
+                  v-else-if="showAccountsNoFunded"
+                  icon="i-lucide-wallet"
+                  title="No account has a balance"
+                  :description="`Turn the filter off to see ${unfundedHiddenCount} available account(s)`"
+                  data-testid="la-acc-nofunded"
+                >
+                  <template #actions>
+                    <UButton
+                      label="Show all"
+                      icon="i-lucide-eye"
+                      color="neutral"
+                      variant="outline"
+                      data-testid="la-acc-show-all"
+                      @click="showAllAccounts"
+                    />
+                  </template>
+                </UEmpty>
+
+                <UEmpty
                   v-else-if="showAccountsNoMatch"
                   icon="i-lucide-search-x"
                   title="No account matches your filters"
@@ -815,7 +909,15 @@ onUnmounted(() => {
                   <table class="w-full border-separate border-spacing-0 text-sm">
                     <thead>
                       <tr class="bg-elevated/50">
-                        <th class="w-10 rounded-l-lg border-y border-l border-default px-3 py-2" />
+                        <th class="w-10 rounded-l-lg border-y border-l border-default px-3 py-2">
+                          <UCheckbox
+                            :model-value="selectAllState"
+                            aria-label="Select all visible accounts"
+                            :disabled="filteredAccounts.length === 0"
+                            data-testid="la-acc-select-all"
+                            @update:model-value="toggleSelectAllVisible"
+                          />
+                        </th>
                         <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                           Account
                         </th>
@@ -843,6 +945,7 @@ onUnmounted(() => {
                         <tr
                           :data-id="account.id"
                           :data-selected="isSelected(account) ? 'true' : 'false'"
+                          :data-funded="isFunded(account) ? 'true' : 'false'"
                           data-slot="tr"
                           data-testid="la-acc-row"
                         >
@@ -887,6 +990,9 @@ onUnmounted(() => {
                                 >
                                   auto
                                 </UBadge>
+                              </span>
+                              <span class="text-xs text-muted tabular-nums" data-testid="la-acc-balance">
+                                {{ balanceCell(advertiserOf(account)) }}
                               </span>
                             </div>
                           </td>
@@ -935,6 +1041,9 @@ onUnmounted(() => {
                                 >
                                   {{ advertiserBadge(advertiser).label }}
                                 </UBadge>
+                                <span class="text-xs text-muted tabular-nums" data-testid="la-adv-balance">
+                                  {{ balanceCell(advertiser) }}
+                                </span>
                               </li>
                             </ul>
                           </td>
@@ -943,6 +1052,22 @@ onUnmounted(() => {
                     </tbody>
                   </table>
                 </div>
+
+                <p
+                  v-if="fundedOnly && unfundedHiddenCount > 0"
+                  class="text-xs text-muted"
+                  data-testid="la-acc-unfunded-hint"
+                >
+                  {{ unfundedHiddenCount }} account(s) without balance hidden
+                  <UButton
+                    label="Show all"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    data-testid="la-acc-show-all"
+                    @click="showAllAccounts"
+                  />
+                </p>
 
                 <!-- unavailable strip: collapsed by default -->
                 <div v-if="unavailableAccounts.length > 0" class="flex flex-col gap-2 border-t border-default pt-3">
@@ -1275,6 +1400,9 @@ onUnmounted(() => {
                       <UIcon name="i-lucide-arrow-right" class="size-4 text-dimmed" />
                       <span class="text-highlighted">{{ advertiserOf(account)?.name ?? '—' }}</span>
                       <span class="text-xs text-muted">{{ advertiserOf(account)?.tiktokAdvertiserId ?? '—' }}</span>
+                      <span class="text-xs text-muted tabular-nums" data-testid="la-review-balance">
+                        {{ balanceCell(advertiserOf(account)) }}
+                      </span>
                       <UBadge
                         color="neutral"
                         variant="outline"
