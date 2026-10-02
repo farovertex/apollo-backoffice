@@ -1,34 +1,51 @@
 # Production — apollo-bo
 
-bo รันบน **Droplet 1** เครื่องเดียวกับ `apollo-api` (api + scheduler) และคุยกับ api ผ่านเครือข่าย docker `gttm` ที่ `http://gttm-api:3001` — ขึ้น apollo-api ก่อนเสมอ (`apollo-api/deploy/README.md`) · รายละเอียดโครงสร้างทั้งหมด: `mission-control/docs/deploy.md`
+bo รันบน **Droplet 1** เครื่องเดียวกับ `apollo-api` (api + scheduler) และเรียก api ที่ `http://127.0.0.1:20001` — ขึ้น apollo-api ก่อนเสมอ (`apollo-api/deploy/README.md`) · โครงสร้างทั้งหมด: `mission-control/docs/deploy.md`
 
-## ขึ้น / อัปเดต
+**วิธีหลัก = pm2** (build บนเครื่อง · เลือก 2026-10-02 เพราะเร็วกว่า docker build) · docker compose เก็บไว้เป็นทางเลือก (§ท้ายไฟล์)
+
+## ขึ้น / อัปเดต (pm2)
 
 ```bash
-git clone git@github.com:<owner>/apollo-bo.git ~/gttm/apollo-bo && cd ~/gttm/apollo-bo
-cp .env.example .env && chmod 600 .env && $EDITOR .env
-#   NUXT_SESSION_PASSWORD = openssl rand -base64 48 | tr -d '/+=' | head -c 40   (≥ 32 ตัว · เปลี่ยน = ทุกคน login ใหม่)
-#   BO_PORT=20000 (ค่าเริ่มต้น) · NUXT_API_BASE ไม่ต้องตั้ง (compose ชี้ gttm-api ให้)
-docker compose up -d --build --wait            # build จาก repo นี้ → http://<ip>:20000
-docker compose logs -f bo                      # "Listening on http://0.0.0.0:3000"
-curl -I http://<ip>:20000/login                # 200 · POST /api/auth/login ผิดรหัส → 401 จาก api = เส้น bo→api ใช้ได้
+git clone git@github.com:<owner>/apollo-bo.git ~/gttm/apollo-backoffice && cd ~/gttm/apollo-backoffice
+deploy/install-server.sh install            # ครั้งแรก: สร้าง .env จาก .env.example แล้วหยุดให้กรอก
+nano .env                                   # NUXT_SESSION_PASSWORD=$(openssl rand -base64 48 | tr -d '/+=' | head -c 40) · NUXT_API_BASE=http://127.0.0.1:20001 · BO_PORT=20000
+deploy/install-server.sh install            # pnpm install → nuxt build → pm2 start gttm-bo → pm2 save → pm2 startup (รัน sudo ที่มันพิมพ์)
+curl -I http://127.0.0.1:20000/login        # 200 · จากนอก http://<ip>:20000 (เปิด ufw 20000)
 
-git pull --ff-only && docker compose up -d --build --wait     # release · rollback = git checkout <sha> แล้วคำสั่งเดิม
+deploy/install-server.sh update [--ref <tag|sha>]   # release รอบถัดไป · rollback = update --ref <sha เดิม>
+pm2 logs gttm-bo · pm2 status
 ```
+
+`.env` ถูกอ่านโดย `deploy/ecosystem.config.cjs` แล้วส่งให้โปรเซส (Nitro production ไม่อ่าน .env เอง) · แก้ `.env` แล้วต้อง `pm2 reload deploy/ecosystem.config.cjs --update-env`
 
 ## เปิด HTTPS ด้วยโดเมน (แนะนำก่อนใช้งานจริง — ไม่งั้นรหัส admin วิ่งบน http เปล่า)
 
-1. A record ของโดเมน → IP ของ Droplet 1 · เปิด 80/443 ใน firewall
-2. ใน `.env`: `DOMAIN=bo.example.com` · `ACME_EMAIL=ops@example.com` · `NUXT_PUBLIC_SITE_URL=https://bo.example.com` · `BO_BIND=127.0.0.1` (ให้ caddy เป็นทางเข้าเดียว)
-3. `docker compose --profile tls up -d --build --wait` → Caddy ขอ cert จาก Let's Encrypt และต่ออายุให้เอง → `https://bo.example.com`
+```bash
+sudo apt install -y caddy                                   # https://caddyserver.com/docs/install#debian-ubuntu-raspbian
+sudo cp deploy/Caddyfile.pm2 /etc/caddy/Caddyfile
+sudo sed -i 's/{$DOMAIN}/bo.example.com/; s/{$ACME_EMAIL}/ops@example.com/' /etc/caddy/Caddyfile
+sudo ufw allow 80,443/tcp
+# ใน .env: BO_BIND=127.0.0.1 (ให้ Caddy เป็นทางเข้าเดียว) · NUXT_PUBLIC_SITE_URL=https://bo.example.com → pm2 reload deploy/ecosystem.config.cjs --update-env
+sudo systemctl reload caddy                                 # Caddy ขอ cert จาก Let's Encrypt และต่ออายุให้เอง
+```
 
-Caddy = web server/reverse proxy ที่จัดการ TLS อัตโนมัติ (แทน nginx + certbot) · config อยู่ที่ `deploy/Caddyfile`
+Caddy = web server/reverse proxy ที่จัดการ TLS อัตโนมัติ (แทน nginx + certbot)
+
+## ทางเลือก: docker compose (build บน server เช่นกัน · ช้ากว่า)
+
+```bash
+docker network create gttm                   # ครั้งเดียว · ร่วมกับ apollo-api/docker-compose.yml (api ต้องขึ้นแบบ docker ด้วย)
+cp .env.example .env && nano .env            # NUXT_SESSION_PASSWORD · BO_PORT (NUXT_API_BASE ถูก override เป็น http://gttm-api:3001)
+docker compose up -d --build --wait          # http://<ip>:20000
+docker compose --profile tls up -d --build --wait   # มี DOMAIN → caddy ใน compose
+```
 
 ## ไฟล์
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `Dockerfile` | `nuxt build` → `.output` → `node .output/server/index.mjs` · non-root · healthcheck `/login` · env อ่านตอน start |
-| `.dockerignore` | ไม่ให้ node_modules / `.env` / `.output` / `*.local.*` เข้า build context |
-| `docker-compose.yml` | `bo` (host port `BO_BIND:BO_PORT`) · `caddy` (profile `tls`) · network `gttm` (external · สร้างโดย `docker network create gttm`) |
-| `deploy/Caddyfile` | TLS อัตโนมัติ + security headers + proxy ไป `bo:3000` |
+| `deploy/install-server.sh` | pm2: `install · update [--ref] · status` — install → `nuxt build` → pm2 start/reload → startup |
+| `deploy/ecosystem.config.cjs` | pm2 app `gttm-bo` = `node .output/server/index.mjs` · อ่าน `.env` แล้วตั้ง NITRO_HOST/PORT, NUXT_API_BASE |
+| `deploy/Caddyfile.pm2` | Caddy บน host → `127.0.0.1:20000` |
+| `Dockerfile` · `.dockerignore` · `docker-compose.yml` · `deploy/Caddyfile` | ทางเลือก docker (bo + caddy profile `tls` · network `gttm`) |

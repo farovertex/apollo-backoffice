@@ -1,0 +1,30 @@
+# Caddy บน host (ลงด้วย apt) สำหรับโหมด pm2 — TLS อัตโนมัติ + reverse proxy ไป bo ที่ 127.0.0.1:20000
+#
+#   sudo apt install -y caddy                       # https://caddyserver.com/docs/install#debian-ubuntu-raspbian
+#   sudo cp deploy/Caddyfile.pm2 /etc/caddy/Caddyfile
+#   sudo sed -i 's/{$DOMAIN}/bo.example.com/; s/{$ACME_EMAIL}/ops@example.com/' /etc/caddy/Caddyfile
+#   ตั้ง BO_BIND=127.0.0.1 ใน .env ของ apollo-bo แล้ว pm2 reload (ให้ Caddy เป็นทางเข้าเดียว) · เปิด 80/443 ใน firewall
+#   sudo systemctl reload caddy
+#
+# apollo-api ไม่มีทางเข้าจากข้างนอก (bo proxy ให้ที่ /backend/** และแนบ Bearer เอง)
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:20000 {
+		# bo ใช้ X-Forwarded-Proto ตัดสิน cookie `secure` — Caddy ใส่ให้เอง
+		header_up X-Real-IP {remote_host}
+	}
+}
