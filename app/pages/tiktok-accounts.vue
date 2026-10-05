@@ -4,7 +4,8 @@
  * One `GET /backend/tiktok-accounts` per load / Refresh / after create / after delete via `useApi()`; search is
  * client-side (label / loginEmail / profile name / profile id), rows sorted by createdAt desc, no pagination.
  * Password: the table renders the literal mask until the row toggle is on (value never in the DOM while masked);
- * Copy reads it from the row data. Delete confirms in a modal.
+ * Copy reads it from the row data. Delete confirms in a modal (BUG-029: with an "Also delete the browser profile"
+ * checkbox, on by default, that sends `?deleteProfile=1` → `provider/delete` job).
  * FEAT-004: Login → `POST /backend/tiktok-accounts/:id/login` (202 / 409 → `TiktokAccountsLoginModal`, other →
  * toast). BUG-028: the button is **always enabled** — every click POSTs again and the API queues a new login job
  * whatever the account state; the job decides on its own whether it is already logged in (the page guards nothing,
