@@ -6,6 +6,11 @@
  * Search, group and status filters, sort and pagination are client-side on that list (AdsPower Local API is throttled
  * to ~1 req/s).
  * No claim / start / stop / delete here — those are later features.
+ * functions 2.11 (TASK-force-close): one row action, "Force close" (`bp-force-close`) → confirm modal (`bp-force-confirm`)
+ * → `POST /backend/browser-profiles/:id/force-close` (202). It is **not** a job: the API records the request and the
+ * worker on the profile's node closes the Chrome window right away, even when a job is using the profile (that job
+ * ends as cancelled). The row is polled (reason `forceClose`) until its `runState` leaves `closing`; the admin then
+ * opens the profile themselves in the AdsPower app. Enabled only for `open` / `opening` / `closing` rows.
  * FEAT-006 (functions 2.3 + 2.10, api-contract.md v1): header buttons "Default settings"
  * (`BrowserProfilesDefaultsSlideover`) and "Create profile" (`BrowserProfilesCreateModal`, one extra
  * `GET …/available` after a 201); the Proxy column prefers `proxyRef.label` over the FEAT-002 provider snapshot and
@@ -23,7 +28,7 @@
 import type { TableColumn } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
 import { getPaginationRowModel } from '@tanstack/table-core'
-import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
+import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, ForceCloseResponse, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
 import type { ProfilesPollReason } from '~/composables/useProfilesPoll'
 
 useSeoMeta({ title: 'Browser profiles' })
@@ -195,6 +200,9 @@ const syncRunning = computed(() => sync.value?.status === 'running' || syncReque
 const syncError = computed<string | null>(() => sync.value?.lastError ?? null)
 /** visible rows (after the client-side filters) whose provider profile is still being created */
 const provisioningCount = computed(() => filtered.value.filter(p => p.runState === 'provisioning').length)
+/** functions 2.11 — ids we asked to force-close and have not yet seen leave `closing` (the same single timer watches them) */
+const forceClosing = ref<string[]>([])
+const forceClosingCount = computed(() => forceClosing.value.filter(id => profiles.value.find(p => p.id === id)?.runState === 'closing').length)
 
 // one interval for the whole page (spec A12): 2 s, 90 s per reason, cleared on unmount
 const poll = useProfilesPoll(() => refresh())
@@ -232,10 +240,11 @@ watch(syncError, (message) => {
 }, { immediate: true })
 
 // the single source of truth for the timer: which reasons the data in hand still waits for
-watch([syncRunning, provisioningCount], () => {
+watch([syncRunning, provisioningCount, forceClosingCount], () => {
   const reasons: ProfilesPollReason[] = []
   if (syncRunning.value) reasons.push('sync')
   if (provisioningCount.value > 0) reasons.push('provisioning')
+  if (forceClosingCount.value > 0) reasons.push('forceClose')
   poll.track(reasons)
 }, { immediate: true })
 
@@ -263,6 +272,78 @@ async function syncNow() {
     syncPosting.value = false
   }
 }
+
+// ── force close (functions 2.11) ──────────────────────────────────────────────────────────────────────────────────────
+/** only a browser that is (or is about to be) open can be force-closed; a reserved / failed row has nothing to close */
+function canForceClose(p: AvailableProfile): boolean {
+  return !!p.providerProfileId && (p.runState === 'open' || p.runState === 'opening' || p.runState === 'closing')
+}
+
+const forceTarget = ref<AvailableProfile | null>(null)
+const forceConfirmOpen = ref(false)
+const forcePosting = ref(false)
+const forceModalContent = { 'data-testid': 'bp-force-confirm' } as Record<string, string>
+
+function askForceClose(p: AvailableProfile) {
+  forceTarget.value = p
+  forceConfirmOpen.value = true
+}
+
+/** `POST /backend/browser-profiles/:id/force-close` — one request per confirm, then the poll takes over */
+async function runForceClose() {
+  const target = forceTarget.value
+  if (!target || forcePosting.value) return
+  forcePosting.value = true
+  try {
+    const res = await api<ForceCloseResponse>(`/browser-profiles/${encodeURIComponent(target.id)}/force-close`, { method: 'POST', retry: 0 })
+    if (!forceClosing.value.includes(target.id)) forceClosing.value = [...forceClosing.value, target.id]
+    forceConfirmOpen.value = false
+    // the data in hand still says `open` — re-read now so the row shows `closing` and the watcher picks the reason up
+    await refresh()
+    poll.retry('forceClose')
+    toast.add({
+      title: res.reused ? 'Force close already requested' : 'Force close requested',
+      description: `${target.name} · the node closes the browser in a moment`,
+      color: res.reused ? 'info' : 'success'
+    })
+  } catch (e) {
+    const err = e as FetchError<Partial<ProviderErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    forceConfirmOpen.value = false
+    toast.add({ title: 'Could not force close', description: err.data?.error ?? err.message, color: status === 409 ? 'warning' : 'error' })
+    if (status === 409) void refresh()
+  } finally {
+    forcePosting.value = false
+  }
+}
+
+// a watched row left `closing` → one toast with the outcome, and the id is dropped (missing row = dropped silently)
+watch(profiles, (rows) => {
+  if (!forceClosing.value.length) return
+  const keep: string[] = []
+  for (const id of forceClosing.value) {
+    const p = rows.find(r => r.id === id)
+    if (!p) continue
+    if (p.runState === 'closing') {
+      keep.push(id)
+      continue
+    }
+    if (p.runState === 'error' && p.provisionError) {
+      toast.add({ title: 'Force close failed', description: `${p.name} · ${p.provisionError}`, color: 'error' })
+    } else {
+      toast.add({ title: 'Browser closed', description: `${p.name} · open it from the AdsPower app to have a look`, color: 'success' })
+    }
+  }
+  if (keep.length !== forceClosing.value.length) forceClosing.value = keep
+})
+
+poll.onTimeout('forceClose', () => {
+  toast.add({
+    title: 'Force close is taking longer than expected',
+    description: 'Is the worker of that node running? Press Refresh in a moment.',
+    color: 'warning'
+  })
+})
 
 const columns: TableColumn<AvailableProfile>[] = [
   {
@@ -384,6 +465,32 @@ const columns: TableColumn<AvailableProfile>[] = [
     cell: ({ row }) => row.original.workspaceId === null
       ? h(UBadge, { color: 'neutral', variant: 'outline', class: 'whitespace-nowrap' }, () => 'Shared')
       : h(UBadge, { color: 'primary', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Workspace')
+  },
+  {
+    id: 'actions',
+    header: '',
+    enableSorting: false,
+    // functions 2.11: the only row action — disabled for rows with nothing to close, spinning while the node works
+    cell: ({ row }) => {
+      const p = row.original
+      const busy = forceClosing.value.includes(p.id) && p.runState === 'closing'
+      return h('div', { class: 'flex justify-end' }, [
+        h(UButton, {
+          'label': 'Force close',
+          'aria-label': `Force close ${p.name}`,
+          'icon': 'i-lucide-power-off',
+          'color': 'error',
+          'variant': 'outline',
+          'size': 'xs',
+          'disabled': !canForceClose(p) || busy,
+          'loading': busy,
+          'title': canForceClose(p) ? 'Close the Chrome window right now, even if a job is using it' : 'Nothing to close — the browser is not open',
+          'data-testid': 'bp-force-close',
+          'data-state': p.runState,
+          'onClick': () => askForceClose(p)
+        })
+      ])
+    }
   }
 ]
 
@@ -628,6 +735,43 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
           />
         </div>
       </div>
+
+      <!-- functions 2.11: confirm before the node kills the browser (a running job on it ends as cancelled) -->
+      <UModal
+        v-model:open="forceConfirmOpen"
+        title="Force close this browser?"
+        :description="forceTarget ? `${forceTarget.name} · ${forceTarget.providerProfileId ?? ''}` : ''"
+        :dismissible="!forcePosting"
+        :ui="{ content: 'max-w-md' }"
+        :content="forceModalContent"
+      >
+        <template #body>
+          <div class="flex flex-col gap-4">
+            <p class="text-sm text-muted">
+              AdsPower closes the Chrome window of this profile right now. A job that is using it fails and ends as
+              cancelled. Afterwards open the profile yourself in the AdsPower app to have a look.
+            </p>
+            <div class="flex flex-wrap justify-end gap-2">
+              <UButton
+                label="Keep open"
+                color="neutral"
+                variant="subtle"
+                :disabled="forcePosting"
+                data-testid="bp-force-confirm-cancel"
+                @click="forceConfirmOpen = false"
+              />
+              <UButton
+                label="Force close"
+                icon="i-lucide-power-off"
+                color="error"
+                :loading="forcePosting"
+                data-testid="bp-force-confirm-ok"
+                @click="runForceClose"
+              />
+            </div>
+          </div>
+        </template>
+      </UModal>
 
       <BrowserProfilesDefaultsSlideover v-model:open="defaultsOpen" />
       <BrowserProfilesCreateModal v-model:open="createOpen" @created="onCreated" />

@@ -107,6 +107,18 @@ export interface ProviderErrorBody {
   kind: 'busy' | 'unreachable' | 'permanent'
 }
 
+/** functions 2.11 — `POST /browser-profiles/:id/force-close` (202): AdsPower closes the Chrome window right away, even when a job holds the lock */
+export interface ForceCloseResponse {
+  /** true = a request was already pending; nothing new was written */
+  reused: boolean
+  profile: {
+    id: string
+    runState: ProfileRunState
+    /** the pending request (`null` once the node has closed the browser, or the close failed) */
+    forceClose: { requestedAt: string, startedAt: string | null } | null
+  }
+}
+
 // ── FEAT-006 — fingerprint, options, defaults, create ─────────────────────────────────────────────────────────────────
 
 /** desktop only (provider-neutral `ProfileOs`) */

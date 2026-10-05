@@ -19,7 +19,7 @@ export const PROFILES_POLL_MS = 2000
 export const PROFILES_POLL_MAX_MS = 90_000
 
 /** why the page is re-reading: the sync job, or at least one visible `provisioning` row */
-export type ProfilesPollReason = 'sync' | 'provisioning'
+export type ProfilesPollReason = 'sync' | 'provisioning' | 'forceClose'
 
 export function useProfilesPoll(reread: () => Promise<unknown>) {
   /** reasons currently being waited on (a timer runs iff this is not empty) */
