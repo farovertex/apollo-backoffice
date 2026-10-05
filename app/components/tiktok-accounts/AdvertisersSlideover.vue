@@ -2,7 +2,7 @@
 /**
  * FEAT-005 — advertisers of one TikTok account (functions 3.9, spec.md "UI behaviour", api-contract.md v1 §5/§7).
  * Opened from the Advertisers column (`ta-adv-count`). While open it lists
- * `GET /backend/tiktok-accounts/:id/advertisers?page=&limit=50&missing=<false|all>[&q=][&status=]` — exactly one
+ * `GET /backend/tiktok-accounts/:id/advertisers?page=&limit=50&sort=bcOrder&missing=<false|all>[&q=][&status=]` — exactly one
  * request per open / filter change (search debounced 300 ms), page reset to 1 on every filter change, "Load more"
  * appends the next page while `page * limit < total`. State is exposed as `data-state` on the dialog element
  * (`ta-adv-slideover`): loading (first page in flight, nothing shown yet) · ready · empty · error.
@@ -107,6 +107,7 @@ async function load(nextPage: number, append = false, quiet = false) {
       query: {
         page: nextPage,
         limit: LIMIT,
+        sort: 'bcOrder',
         missing,
         q: q || undefined,
         status: statusFilter.value === 'all' ? undefined : statusFilter.value
