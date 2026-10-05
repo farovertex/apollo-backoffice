@@ -6,7 +6,9 @@
  * Password: the table renders the literal mask until the row toggle is on (value never in the DOM while masked);
  * Copy reads it from the row data. Delete confirms in a modal.
  * FEAT-004: Login → `POST /backend/tiktok-accounts/:id/login` (202 / 409 → `TiktokAccountsLoginModal`, other →
- * toast); the button is disabled while `runningJob` is set; the badge maps `needsHuman` to "Needs OTP" and a
+ * toast). BUG-028: the button is **always enabled** — every click POSTs again and the API queues a new login job
+ * whatever the account state; the job decides on its own whether it is already logged in (the page guards nothing,
+ * a running job only changes the tooltip). The badge maps `needsHuman` to "Needs OTP" and a
  * `lastLoginError` chip (`ta-login-error`) sits next to it while `loggedOut`. Modal close / success → one refresh.
  * FEAT-005 (discover advertisers, api-contract.md v1 §5/§7): columns "BC org" (`ta-bc-org` + copy) and "Advertisers"
  * (`ta-adv-count` opens `TiktokAccountsAdvertisersSlideover`, `ta-adv-synced` / `ta-adv-syncing` / `ta-adv-error`
@@ -161,7 +163,8 @@ function openLoginModal(account: TikTokAccount) {
 }
 
 async function onLogin(account: TikTokAccount) {
-  if (loginStarting.value || account.runningJob) return
+  // BUG-028: no state guard here — only one POST at a time per click
+  if (loginStarting.value) return
   loginStarting.value = account.id
   try {
     // retry: 0 — exactly one POST per click (ofetch would otherwise re-issue it on 5xx)
@@ -494,7 +497,8 @@ const columns: TableColumn<TikTokAccount>[] = [
       const job = row.original.runningJob
       const running = !!job
       const syncBlocked = syncBlockedReason(row.original)
-      const loginBlocked = running ? (job.type === 'discover' ? 'Sync in progress' : 'Login in progress') : null
+      // BUG-028: never disabled — a running job only annotates the tooltip
+      const loginHint = running ? (job.type === 'discover' ? 'Sync in progress — login again anyway' : 'Login in progress — login again anyway') : null
       const wide = wideActions.value
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
         // the tooltip trigger is a span so it still opens on hover while the button is disabled; below 2xl the
@@ -514,7 +518,7 @@ const columns: TableColumn<TikTokAccount>[] = [
             'onClick': () => onSync(row.original)
           })
         ])),
-        h(UTooltip, { text: loginBlocked ?? 'Login', disabled: wide && !loginBlocked }, () => h('span', { class: 'inline-flex' }, [
+        h(UTooltip, { text: loginHint ?? 'Login', disabled: wide && !loginHint }, () => h('span', { class: 'inline-flex' }, [
           h(UButton, {
             'label': 'Login',
             'icon': 'i-lucide-log-in',
@@ -522,7 +526,6 @@ const columns: TableColumn<TikTokAccount>[] = [
             'variant': 'outline',
             'size': 'xs',
             'ui': ACTION_LABEL_UI,
-            'disabled': running,
             'loading': loginStarting.value === row.original.id,
             'aria-label': 'Login',
             'data-testid': 'ta-login',
