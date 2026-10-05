@@ -8,12 +8,18 @@
  * `createProxySchema`, so an invalid label / host / port / country never reaches the network.
  * API errors (409 duplicate label, 400 validation, 404) are shown in `px-form-error`; the modal stays open with
  * every typed value intact.
+ *
+ * FEAT-027 §8 — when `proxy.boundProfile` is set, the five connection fields (type/host/port/username/password)
+ * render disabled with a helper alert (`px-form-locked`) naming the profile; label/country/note stay editable. The
+ * API still answers 409 `{ error, boundProfileId, boundProfileName, lockedFields }` if a race lets one of those keys
+ * through (e.g. the bind happened between opening the modal and submitting) — `lockedFields` is appended to the
+ * `px-form-error` description.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
 import type { Form, FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { CreateProxyBody, PatchProxyBody, Proxy, ProxyType } from '#shared/types/proxies'
+import type { CreateProxyBody, PatchProxyBody, Proxy, ProxyBoundConflictBody, ProxyType } from '#shared/types/proxies'
 
 const props = defineProps<{
   /** null = create, a row = edit */
@@ -34,6 +40,9 @@ const api = useApi()
 const toast = useToast()
 
 const isEdit = computed(() => props.proxy !== null)
+// FEAT-027 §8 — connection fields are locked while a browser profile holds this proxy
+const boundProfileName = computed(() => props.proxy?.boundProfile?.name ?? null)
+const isLocked = computed(() => props.proxy?.boundProfile != null)
 
 // ── form ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const TYPE_ITEMS: { label: string, value: ProxyType }[] = [
@@ -115,6 +124,8 @@ const showPassword = ref(false)
 const clearPassword = ref(false)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
+// FEAT-027 §8 — the five connection fields, disabled while submitting OR while the proxy is bound
+const connectionDisabled = computed(() => submitting.value || isLocked.value)
 
 function resetForm() {
   Object.assign(state, stateFrom(props.proxy))
@@ -218,11 +229,15 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 }
 
 function errorState(e: unknown, fallback: string): { title: string, description?: string } {
-  const err = e as FetchError<Partial<ApiErrorBody>>
+  const err = e as FetchError<Partial<ApiErrorBody> & Partial<ProxyBoundConflictBody>>
   const issues = err.data?.issues?.map(i => i.message).filter(Boolean)
+  const parts: string[] = []
+  if (issues && issues.length) parts.push(issues.join(' · '))
+  // FEAT-027 §8 — 409 while bound names the locked connection-field keys that were sent
+  if (err.data?.lockedFields?.length) parts.push(`Locked fields: ${err.data.lockedFields.join(', ')}`)
   return {
     title: err.data?.error ?? err.message ?? fallback,
-    description: issues && issues.length ? issues.join(' · ') : undefined
+    description: parts.length ? parts.join(' — ') : undefined
   }
 }
 </script>
@@ -254,6 +269,15 @@ function errorState(e: unknown, fallback: string): { title: string, description?
           />
         </UFormField>
 
+        <UAlert
+          v-if="isLocked"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-lock"
+          :title="`Connection settings are locked while profile ${boundProfileName ?? '(unknown)'} uses this proxy`"
+          data-testid="px-form-locked"
+        />
+
         <div class="grid gap-4 sm:grid-cols-3">
           <UFormField label="Type" name="type" required>
             <USelect
@@ -261,7 +285,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
               :items="TYPE_ITEMS"
               value-key="value"
               class="w-full"
-              :disabled="submitting"
+              :disabled="connectionDisabled"
               data-testid="px-form-type"
             />
           </UFormField>
@@ -277,7 +301,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
               placeholder="10.0.0.9"
               autocomplete="off"
               class="w-full"
-              :disabled="submitting"
+              :disabled="connectionDisabled"
               data-testid="px-form-host"
             />
           </UFormField>
@@ -293,7 +317,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
               inputmode="numeric"
               placeholder="8080"
               class="w-full"
-              :disabled="submitting"
+              :disabled="connectionDisabled"
               data-testid="px-form-port"
             />
           </UFormField>
@@ -319,7 +343,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
               autocomplete="off"
               placeholder="proxy user"
               class="w-full"
-              :disabled="submitting"
+              :disabled="connectionDisabled"
               data-testid="px-form-username"
             />
           </UFormField>
@@ -332,7 +356,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
               :placeholder="isEdit ? 'Unchanged' : 'proxy password'"
               class="w-full"
               :ui="{ trailing: 'pe-1' }"
-              :disabled="submitting || clearPassword"
+              :disabled="connectionDisabled || clearPassword"
               data-testid="px-form-password"
             >
               <template #trailing>
@@ -343,7 +367,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
                   :icon="showPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
                   :aria-label="showPassword ? 'Hide password' : 'Show password'"
                   :aria-pressed="showPassword"
-                  :disabled="clearPassword"
+                  :disabled="clearPassword || isLocked"
                   data-testid="px-form-password-toggle"
                   @click="showPassword = !showPassword"
                 />
@@ -357,7 +381,7 @@ function errorState(e: unknown, fallback: string): { title: string, description?
           v-model="clearPassword"
           label="Clear password"
           description="Send the proxy without credentials from now on."
-          :disabled="submitting"
+          :disabled="connectionDisabled"
           data-testid="px-form-password-clear"
         />
 

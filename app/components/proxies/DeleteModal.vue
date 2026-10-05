@@ -4,11 +4,16 @@
  * The confirmation names what the delete will clear, straight from the row's `usage` counts. Confirm →
  * `DELETE /backend/proxies/:id` → 200 `{ ok, defaultsCleared, profilesCleared }` → toast with those counts and
  * `deleted` (the page re-requests the list). API error → toast, the modal stays open.
+ *
+ * FEAT-027 §7 — when `proxy.boundProfile` is set the confirm button is disabled and a line names the profile
+ * (`px-delete-bound`): the API would answer 409 anyway, but the UI never lets the click happen. A free proxy is
+ * unchanged. The 409 branch below stays as a defensive toast for the race where the bind happens after the modal
+ * opened but before the (otherwise disabled) click — it cannot be reached through the UI alone.
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { DeleteProxyResponse, Proxy } from '#shared/types/proxies'
+import type { DeleteProxyResponse, Proxy, ProxyBoundConflictBody } from '#shared/types/proxies'
 
 const props = defineProps<{
   proxy: Proxy | null
@@ -27,6 +32,8 @@ const api = useApi()
 const toast = useToast()
 const deleting = ref(false)
 
+const isBound = computed(() => props.proxy?.boundProfile != null)
+
 const usageLine = computed(() => {
   const usage = props.proxy?.usage
   if (!usage || (usage.defaults === 0 && usage.profiles === 0)) return 'Not used anywhere'
@@ -35,7 +42,7 @@ const usageLine = computed(() => {
 
 async function confirm() {
   const proxy = props.proxy
-  if (!proxy || deleting.value) return
+  if (!proxy || deleting.value || isBound.value) return
   deleting.value = true
   try {
     // retry: 0 — exactly one DELETE per click
@@ -48,7 +55,7 @@ async function confirm() {
     })
     emit('deleted', res)
   } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
+    const err = e as FetchError<Partial<ApiErrorBody> & Partial<ProxyBoundConflictBody>>
     toast.add({
       title: 'Could not delete the proxy',
       description: err.data?.error ?? err.message ?? 'Unexpected error',
@@ -73,6 +80,16 @@ async function confirm() {
     </template>
 
     <template #body>
+      <UAlert
+        v-if="isBound"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-lock"
+        :title="`Profile ${proxy?.boundProfile?.name ?? '(unknown)'} is using this proxy — delete that profile first`"
+        class="mb-3"
+        data-testid="px-delete-bound"
+      />
+
       <div class="flex flex-wrap justify-end gap-2">
         <UButton
           label="Cancel"
@@ -88,6 +105,7 @@ async function confirm() {
           color="error"
           variant="solid"
           :loading="deleting"
+          :disabled="isBound"
           data-testid="px-delete-confirm"
           @click="confirm"
         />
