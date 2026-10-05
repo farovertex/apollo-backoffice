@@ -208,11 +208,14 @@ export interface CreateProfileBody extends ProfileSettings {
  * `POST /browser-profiles/create` 201 body = the `/available` item + `createdBy` / `createdAt`.
  * FEAT-024: the row is only **reserved** at this point (`providerProfileId: null`, `runState: 'provisioning'`) and
  * `jobId` is the `provider{create}` job that will fill it in.
+ * FEAT-027 AS-1: `proxyWarning` is present only when no explicit `proxyId` was sent and the caller's default proxy
+ * was bound to another profile — the profile is created **without** a proxy; the BO shows it as a warning toast.
  */
 export interface CreatedProfile extends AvailableProfile {
   createdBy: string
   createdAt: string
   jobId: string
+  proxyWarning?: string
 }
 
 /**
