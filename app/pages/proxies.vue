@@ -8,11 +8,21 @@
  * `[data-testid="px-table"] tbody tr`.
  * Password: `PasswordCell` renders the literal mask; the plaintext enters the DOM only while that row's toggle is on
  * (human decision 2026-09-22, same as TIKTOK_ACCOUNTS.password) and is never logged or screenshotted.
+ *
+ * FEAT-027 — 1:1 binding, connectivity check and batch CSV upload (api-contract.md v1 §3/§4/§9/§10, spec.md "UI
+ * behaviour", AC-9..12, AC-14). Two new columns: **Bound to** (`px-bound`, a link to `/browser-profiles?q=<name>`
+ * when bound, "—" + a Free badge otherwise) and **Last check** (`px-last-check`, ✓/✗/"never" + time ago, IP on
+ * success, error in a tooltip on failure). Row action **Check** (`px-check`) runs `POST /proxies/:id/check` and
+ * merges the 200 result into that row in place (no refetch needed — the response already has everything). Toolbar
+ * **Check all** (`px-check-all`) runs the same call for every row of the *current page*, three at a time
+ * (`PromisePool`-style worker loop), with a progress indicator (`px-check-progress`) and is disabled while running
+ * (AS-7: current page only, not every proxy in the system). Toolbar **Batch upload** (`px-batch-upload`) opens
+ * `ProxiesBatchModal`; a successful import refreshes the list back to page 1 (new rows sort by label).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { DeleteProxyResponse, ProxiesResponse, Proxy } from '#shared/types/proxies'
+import type { BatchProxiesResponse, CheckProxyResponse, DeleteProxyResponse, ProxiesResponse, Proxy } from '#shared/types/proxies'
 
 useSeoMeta({ title: 'Proxies' })
 
@@ -20,6 +30,7 @@ const LIMIT = 20
 const DEBOUNCE_MS = 300
 
 const api = useApi()
+const toast = useToast()
 
 // ── password reveal (per proxy id, owned here so a re-render never leaks a revealed cell to another row) ─────────────
 const revealed = ref(new Set<string>())
@@ -155,6 +166,69 @@ function onDeleted(_res: DeleteProxyResponse) {
   // last row of a page → step back one page, otherwise reload the current one (one request either way)
   reload(items.value.length === 1 && page.value > 1 ? page.value - 1 : undefined)
 }
+
+// ── check / check all (FEAT-027 §9, AC-9, AS-7) ─────────────────────────────────────────────────────────────────────
+const checking = ref(new Set<string>())
+function setChecking(id: string, on: boolean) {
+  const next = new Set(checking.value)
+  if (on) next.add(id)
+  else next.delete(id)
+  checking.value = next
+}
+
+const checkingAll = ref(false)
+const checkAllDone = ref(0)
+const checkAllTotal = ref(0)
+const CHECK_CONCURRENCY = 3
+
+/** one `POST /proxies/:id/check`; merges the 200 result into the row in place — no refetch needed */
+async function checkOne(proxy: Proxy) {
+  if (checking.value.has(proxy.id)) return
+  setChecking(proxy.id, true)
+  try {
+    // retry: 0 — exactly one check per click/slot (the endpoint always answers 200, ok/error is in the body)
+    const res = await api<CheckProxyResponse>(`/proxies/${encodeURIComponent(proxy.id)}/check`, { method: 'POST', retry: 0 })
+    const target = items.value.find(p => p.id === proxy.id)
+    if (target) target.lastCheck = { at: res.checkedAt, ok: res.ok, ip: res.ip, error: res.error }
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({
+      title: `Could not check ${proxy.label}`,
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: 'error'
+    })
+  } finally {
+    setChecking(proxy.id, false)
+  }
+}
+
+/** every row of the *current page*, `CHECK_CONCURRENCY` at a time (AS-7: not every proxy in the system) */
+async function checkAll() {
+  if (checkingAll.value || pending.value || items.value.length === 0) return
+  checkingAll.value = true
+  checkAllDone.value = 0
+  checkAllTotal.value = items.value.length
+  const queue = [...items.value]
+  async function worker() {
+    for (let proxy = queue.shift(); proxy; proxy = queue.shift()) {
+      await checkOne(proxy)
+      checkAllDone.value++
+    }
+  }
+  try {
+    await Promise.all(Array.from({ length: Math.min(CHECK_CONCURRENCY, queue.length) }, () => worker()))
+  } finally {
+    checkingAll.value = false
+  }
+}
+
+// ── batch upload (FEAT-027 §10/§11, AC-10) ──────────────────────────────────────────────────────────────────────────
+const batchOpen = ref(false)
+
+function onImported(_res: BatchProxiesResponse) {
+  // new rows sort by label — always come back to page 1 so they are visible
+  reload(1)
+}
 </script>
 
 <template>
@@ -166,7 +240,7 @@ function onDeleted(_res: DeleteProxyResponse) {
         </template>
 
         <template #right>
-          <!-- two labelled buttons clip the H1 (`truncate`) at 390 px → icon-only below `sm`, aria-label keeps the name -->
+          <!-- four buttons clip the H1 (`truncate`) at 390 px → icon-only below `sm`/`lg`, aria-label keeps the name -->
           <UButton
             label="Refresh"
             aria-label="Refresh"
@@ -177,6 +251,28 @@ function onDeleted(_res: DeleteProxyResponse) {
             :ui="{ label: 'hidden sm:inline' }"
             data-testid="px-refresh"
             @click="reload()"
+          />
+          <UButton
+            label="Check all"
+            aria-label="Check all"
+            icon="i-lucide-plug-zap"
+            color="neutral"
+            variant="outline"
+            :loading="checkingAll"
+            :disabled="pending || items.length === 0"
+            :ui="{ label: 'hidden lg:inline' }"
+            data-testid="px-check-all"
+            @click="checkAll()"
+          />
+          <UButton
+            label="Batch upload"
+            aria-label="Batch upload"
+            icon="i-lucide-file-up"
+            color="neutral"
+            variant="outline"
+            :ui="{ label: 'hidden lg:inline' }"
+            data-testid="px-batch-upload"
+            @click="batchOpen = true"
           />
           <UButton
             label="Add proxy"
@@ -201,6 +297,14 @@ function onDeleted(_res: DeleteProxyResponse) {
             placeholder="Search label or host"
             data-testid="px-search"
           />
+          <span
+            v-if="checkingAll"
+            class="flex items-center gap-1.5 text-sm text-muted"
+            data-testid="px-check-progress"
+          >
+            <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
+            Checking {{ checkAllDone }} / {{ checkAllTotal }}
+          </span>
         </div>
 
         <UAlert
@@ -288,6 +392,12 @@ function onDeleted(_res: DeleteProxyResponse) {
                   Scope
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  Bound to
+                </th>
+                <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  Last check
+                </th>
+                <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Created
                 </th>
                 <th class="rounded-r-lg border-y border-r border-default px-3 py-2 text-right font-semibold whitespace-nowrap text-highlighted">
@@ -297,7 +407,7 @@ function onDeleted(_res: DeleteProxyResponse) {
             </thead>
             <tbody :class="pending ? 'opacity-60' : ''">
               <tr v-if="pending && items.length === 0" data-testid="px-loading">
-                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="9">
+                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="11">
                   Loading proxies…
                 </td>
               </tr>
@@ -359,6 +469,44 @@ function onDeleted(_res: DeleteProxyResponse) {
                     {{ proxy.workspaceName ?? '—' }}
                   </UBadge>
                 </td>
+                <td class="border-b border-default px-3 py-2" data-testid="px-bound">
+                  <template v-if="proxy.boundProfile">
+                    <NuxtLink
+                      v-if="proxy.boundProfile.name"
+                      :to="`/browser-profiles?q=${encodeURIComponent(proxy.boundProfile.name)}`"
+                      class="font-medium whitespace-nowrap text-primary hover:underline"
+                      data-testid="px-bound-link"
+                    >
+                      {{ proxy.boundProfile.name }}
+                    </NuxtLink>
+                    <span v-else class="text-muted whitespace-nowrap">Bound (profile unknown)</span>
+                  </template>
+                  <div v-else class="flex items-center gap-1.5 whitespace-nowrap">
+                    <span class="text-muted">—</span>
+                    <UBadge
+                      color="success"
+                      variant="subtle"
+                      size="sm"
+                      data-testid="px-bound-free"
+                    >
+                      Free
+                    </UBadge>
+                  </div>
+                </td>
+                <td class="border-b border-default px-3 py-2" data-testid="px-last-check">
+                  <span v-if="!proxy.lastCheck" class="text-muted whitespace-nowrap">never</span>
+                  <UTooltip v-else :text="proxy.lastCheck.ok ? undefined : (proxy.lastCheck.error ?? 'Check failed')" :disabled="proxy.lastCheck.ok">
+                    <span class="inline-flex items-center gap-1 whitespace-nowrap" :title="proxy.lastCheck.at">
+                      <UIcon
+                        :name="proxy.lastCheck.ok ? 'i-lucide-check' : 'i-lucide-x'"
+                        :class="proxy.lastCheck.ok ? 'text-success' : 'text-error'"
+                        class="size-4"
+                      />
+                      {{ timeAgo(proxy.lastCheck.at) }}
+                      <span v-if="proxy.lastCheck.ok && proxy.lastCheck.ip" class="text-muted">({{ proxy.lastCheck.ip }})</span>
+                    </span>
+                  </UTooltip>
+                </td>
                 <td class="border-b border-default px-3 py-2">
                   <span class="whitespace-nowrap" :title="proxy.createdAt" data-testid="px-created">{{ timeAgo(proxy.createdAt) }}</span>
                 </td>
@@ -375,6 +523,21 @@ function onDeleted(_res: DeleteProxyResponse) {
                         aria-label="Edit"
                         data-testid="px-edit"
                         @click="openEdit(proxy)"
+                      />
+                    </UTooltip>
+                    <UTooltip text="Check" :disabled="wideActions">
+                      <UButton
+                        label="Check"
+                        icon="i-lucide-plug-zap"
+                        color="neutral"
+                        variant="outline"
+                        size="xs"
+                        :ui="ACTION_LABEL_UI"
+                        aria-label="Check"
+                        :loading="checking.has(proxy.id)"
+                        :disabled="checkingAll && !checking.has(proxy.id)"
+                        data-testid="px-check"
+                        @click="checkOne(proxy)"
                       />
                     </UTooltip>
                     <UTooltip text="Delete" :disabled="wideActions">
@@ -419,6 +582,10 @@ function onDeleted(_res: DeleteProxyResponse) {
         :proxy="formTarget"
         @created="onCreated"
         @updated="onUpdated"
+      />
+      <ProxiesBatchModal
+        v-model:open="batchOpen"
+        @imported="onImported"
       />
       <ProxiesDeleteModal
         v-model:open="deleteOpen"
