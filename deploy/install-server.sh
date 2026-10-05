@@ -7,7 +7,7 @@
 #   deploy/install-server.sh status
 #
 # ต้องมี: git · Node ≥ 24 · .env ของ repo (คัดลอกจาก .env.example: NUXT_SESSION_PASSWORD ≥ 32 ตัว · NUXT_API_BASE=http://127.0.0.1:20001 · BO_PORT=20000)
-# ★ .output/ ถูก build ใหม่ทุกครั้ง — log ของ pm2 อยู่ใน .output/pm2/ จึงหายไปด้วย · ดูย้อนหลังใช้ ~/.pm2/logs/ (pm2 เขียนสำเนาไว้) หรือย้าย out_file ใน ecosystem
+# log ของ pm2 อยู่ที่ <apollo-bo>/logs/ (gitignored · ecosystem.config.cjs สร้างให้เอง) — ไม่อยู่ใน .output/ จึงไม่หายตอน build ใหม่
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,7 +56,6 @@ build_bo() {
   (cd "$BO_DIR" && CI=1 NUXT_TELEMETRY_DISABLED=1 pnpm install --frozen-lockfile)
   log "pnpm build (nuxt build → .output/ · ใช้ RAM ~2 GB)"
   (cd "$BO_DIR" && NUXT_TELEMETRY_DISABLED=1 pnpm build)
-  mkdir -p "$BO_DIR/.output/pm2"
 }
 
 pm2_start() {

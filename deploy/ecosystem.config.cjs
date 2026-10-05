@@ -14,6 +14,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const boDir = process.env.GTTM_BO_DIR || path.resolve(__dirname, '..');
+// log อยู่ที่ <apollo-bo>/logs/ (gitignored) — ไม่ใช้ .output/pm2/ เพราะ nuxt build ลบ .output/ ทิ้งทุกครั้ง แล้ว pm2 reload จะ ENOENT
+// pm2 ไม่สร้าง directory ให้ จึงสร้างเองตรงนี้ทุกครั้งที่อ่าน config
+const logDir = path.join(boDir, 'logs');
+fs.mkdirSync(logDir, { recursive: true });
 
 function readEnvFile(file) {
   const out = {};
@@ -57,8 +61,8 @@ module.exports = {
         NUXT_API_BASE: apiBase,
         NUXT_TELEMETRY_DISABLED: '1',
       },
-      out_file: path.join(boDir, '.output', 'pm2', 'bo.out.log'),
-      error_file: path.join(boDir, '.output', 'pm2', 'bo.err.log'),
+      out_file: path.join(logDir, 'bo.out.log'),
+      error_file: path.join(logDir, 'bo.err.log'),
       merge_logs: true,
       time: true,
     },
