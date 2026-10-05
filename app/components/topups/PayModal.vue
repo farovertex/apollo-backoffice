@@ -50,7 +50,7 @@ const nowMs = computed(() => now.value.getTime())
 
 const leaseMs = computed(() => leaseRemainingMs(props.topup, nowMs.value))
 const qrMs = computed(() => qrRemainingMs(props.topup, nowMs.value))
-const title = computed(() => props.topup ? `จ่ายเงิน — ${props.topup.advertiser?.name ?? ''}` : 'จ่ายเงิน')
+const title = computed(() => props.topup ? `จ่ายเงิน — ${topupTargetName(props.topup)}` : 'จ่ายเงิน')
 
 watch(open, (isOpen) => {
   if (isOpen) {

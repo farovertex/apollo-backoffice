@@ -150,6 +150,13 @@ export function topupCheckInfo(topup: TopupView | null | undefined): string {
   return parts.join(' · ')
 }
 
+/** what the round tops up: the advertiser's name, or for an account-level round the BC name / account label */
+export function topupTargetName(topup: TopupView | null | undefined): string {
+  if (!topup) return ''
+  if (topup.level === 'account') return topup.account?.bcOrgName || topup.account?.label || 'BC'
+  return topup.advertiser?.name ?? ''
+}
+
 /** "400.00 THB" — ยอดคงเหลือหลังบวกเงินฝากที่ตรวจผ่าน */
 export function balanceText(amount: string | null | undefined, currency: string | null | undefined): string {
   if (!amount) return ''

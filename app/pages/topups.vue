@@ -185,6 +185,9 @@ function onCreated() {
   if (tab.value === 'history') void loadHistory()
 }
 
+/** "Top up หลายบัญชี" — account-level (BC) rounds for many TikTok accounts at once, one amount */
+const bulkOpen = ref(false)
+
 // ── chrome ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const STATUS_ITEMS = computed(() => [
   { label: 'ทุกสถานะ', value: 'all' },
@@ -246,6 +249,16 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
             <UIcon :name="liveMode === 'live' ? 'i-lucide-radio' : 'i-lucide-refresh-cw'" class="size-3.5 shrink-0" />
             {{ LIVE_LABEL[liveMode] }}
           </UBadge>
+          <UButton
+            v-if="!forbidden && canPayTopups(viewer)"
+            label="Top up หลายบัญชี"
+            aria-label="Top up หลายบัญชี"
+            icon="i-lucide-wallet-cards"
+            color="primary"
+            :ui="{ label: 'hidden sm:inline' }"
+            data-testid="tp-bulk-open"
+            @click="bulkOpen = true"
+          />
           <UButton
             v-if="!forbidden"
             label="Refresh"
@@ -375,7 +388,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
               <thead>
                 <tr class="bg-elevated/50">
                   <th scope="col" class="rounded-l-lg border-y border-l border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                    Advertiser
+                    Advertiser / BC
                   </th>
                   <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                     บัญชี
@@ -420,7 +433,29 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                   data-testid="tp-row"
                 >
                   <td class="border-b border-default px-2 py-2">
-                    <div class="flex max-w-56 min-w-0 flex-col">
+                    <div
+                      v-if="row.level === 'account'"
+                      class="flex max-w-56 min-w-0 flex-col"
+                      data-testid="tp-row-level"
+                      data-level="account"
+                    >
+                      <span class="flex min-w-0 items-center gap-1">
+                        <UBadge
+                          label="BC"
+                          color="info"
+                          variant="subtle"
+                          size="sm"
+                        />
+                        <span class="truncate font-medium text-highlighted" :title="topupTargetName(row)" data-testid="tp-row-advertiser">{{ topupTargetName(row) }}</span>
+                      </span>
+                      <span class="font-mono text-xs text-muted" data-testid="tp-row-advertiser-id">{{ row.bcOrgId || REPORT_DASH }}</span>
+                    </div>
+                    <div
+                      v-else
+                      class="flex max-w-56 min-w-0 flex-col"
+                      data-testid="tp-row-level"
+                      data-level="advertiser"
+                    >
                       <span class="truncate font-medium text-highlighted" :title="row.advertiser?.name" data-testid="tp-row-advertiser">{{ row.advertiser?.name || REPORT_DASH }}</span>
                       <span class="font-mono text-xs text-muted" data-testid="tp-row-advertiser-id">{{ row.advertiser?.tiktokAdvertiserId || REPORT_DASH }}</span>
                     </div>
@@ -504,6 +539,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
         @cancel="onCancelTopup"
         @expired="onLeaseExpired"
       />
+      <TopupsBulkAccountModal v-model:open="bulkOpen" @created="onCreated" />
     </template>
   </UDashboardPanel>
 </template>

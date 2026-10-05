@@ -21,6 +21,11 @@
  * refresh on `imported`). The Password column became **Email password** (`ta-email-password`) + **TikTok password**
  * (`ta-password`), each with its own reveal set, and a **First login** column (`ta-first-login`) shows
  * `email_fail 2/3` / "Pending" / `—`. The flag's field name is never printed as a label.
+ * Account-level (Business Center) top-up: column **Balance** (`ta-balance`, the BC's shared cash balance read from
+ * `query_payment_summary`) with **Reload balance** (`ta-balance-reload` → `POST /backend/topups/accounts/:id/balance`
+ * 202 `{ jobId }`, then the same 2 s account poll until that job is no longer the running one), and column **Top up**
+ * (`ta-topup`: the round badge + `TopupsRowActions` with `advertiserId: null` → `POST /backend/topups/accounts`).
+ * Rounds stay live through `useTopupsLive` (account-level events only) and are paid in `TopupsPayModal`.
  */
 import type { TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
@@ -29,6 +34,8 @@ import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { DiscoverJobResponse } from '#shared/types/advertisers'
 import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
+import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
+import type { TopupViewer } from '~/utils/topup'
 import PasswordCell from '~/components/PasswordCell.vue'
 
 useSeoMeta({ title: 'TikTok accounts' })
@@ -37,6 +44,8 @@ const UButton = resolveComponent('UButton')
 const UBadge = resolveComponent('UBadge')
 const UTooltip = resolveComponent('UTooltip')
 const UIcon = resolveComponent('UIcon')
+const TopupsStatusBadge = resolveComponent('TopupsStatusBadge')
+const TopupsRowActions = resolveComponent('TopupsRowActions')
 
 const POLL_MS = 2000
 
@@ -88,6 +97,7 @@ watch(data, () => {
   revealed.value = new Set()
   revealedEmail.value = new Set()
   polledById.value = new Map()
+  topupById.value = new Map()
 })
 
 // ── relative time ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -197,62 +207,203 @@ function askDelete(account: TikTokAccount) {
 // latest `GET /tiktok-accounts/:id` snapshot per polled account, merged into its row (so "Syncing…" is live without
 // re-fetching the whole list every 2 s); cleared whenever the list itself is refreshed
 const polledById = shallowRef(new Map<string, TikTokAccount>())
-const rows = computed<TikTokAccount[]>(() => filtered.value.map(a => polledById.value.get(a.id) ?? a))
+// account-level rounds pushed by the top-up stream / a mutation, newer than the row's own `topup`
+const topupById = shallowRef(new Map<string, TopupView>())
+const rows = computed<TikTokAccount[]>(() => filtered.value.map((a) => {
+  const row = polledById.value.get(a.id) ?? a
+  const topup = topupById.value.get(a.id)
+  return topup ? { ...row, topup } : row
+}))
 
 // account id whose POST …/discover is in flight (button spinner + no double click)
 const syncStarting = ref<string | null>(null)
-// one poll loop per account id
-const pollTimers = new Map<string, ReturnType<typeof setInterval>>()
+// one poll loop per (kind, account id) — a balance reload must not cancel a sync that is being followed;
+// `done` decides on each snapshot whether the job it follows has finished
+type PollKind = 'discover' | 'balance'
+interface AccountPoll {
+  accountId: string
+  timer: ReturnType<typeof setInterval>
+  done: (next: TikTokAccount) => boolean
+  onDone: (next: TikTokAccount) => void
+}
+const polls = new Map<string, AccountPoll>()
 const pollInFlight = new Set<string>()
 
-function stopDiscoverPoll(id: string) {
-  const t = pollTimers.get(id)
-  if (t) clearInterval(t)
-  pollTimers.delete(id)
-  pollInFlight.delete(id)
+function stopPoll(key: string) {
+  const p = polls.get(key)
+  if (p) clearInterval(p.timer)
+  polls.delete(key)
+  pollInFlight.delete(key)
 }
 
-async function pollDiscover(id: string) {
-  if (pollInFlight.has(id) || !pollTimers.has(id)) return
-  pollInFlight.add(id)
+async function pollAccount(key: string) {
+  const p = polls.get(key)
+  if (!p || pollInFlight.has(key)) return
+  const id = p.accountId
+  pollInFlight.add(key)
   try {
     // retry: 0 — one request per tick, ofetch must not re-issue it on 5xx
     const next = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(id)}`, { retry: 0 })
-    if (!pollTimers.has(id)) return // stopped meanwhile (unmount)
+    if (polls.get(key) !== p) return // stopped meanwhile (unmount / replaced)
     polledById.value = new Map(polledById.value).set(id, next)
-    if (next.runningJob === null) {
-      stopDiscoverPoll(id)
+    if (p.done(next)) {
+      stopPoll(key)
       await refresh()
-      const label = next.label ?? next.loginEmail
-      if (next.lastDiscoverError) {
-        toast.add({ title: 'Advertiser sync failed', description: `${label}: ${discoverErrorText(next.lastDiscoverError)}`, color: 'error' })
-      } else {
-        toast.add({ title: `Advertisers synced (${next.advertiserCount})`, description: label, color: 'success' })
-      }
+      p.onDone(next)
     }
   } catch (e) {
     const err = e as FetchError<Partial<ApiErrorBody>>
     // the account is gone → nothing left to follow; any other error is transient, the next tick retries
     if (err.statusCode === 404) {
-      stopDiscoverPoll(id)
+      stopPoll(key)
       await refresh()
     }
   } finally {
-    pollInFlight.delete(id)
+    pollInFlight.delete(key)
   }
 }
 
+function startPoll(kind: PollKind, id: string, done: AccountPoll['done'], onDone: AccountPoll['onDone']) {
+  const key = `${kind}:${id}`
+  if (polls.has(key)) return
+  polls.set(key, {
+    accountId: id,
+    timer: setInterval(() => {
+      void pollAccount(key)
+    }, POLL_MS),
+    done,
+    onDone
+  })
+  void pollAccount(key)
+}
+
 function startDiscoverPoll(id: string) {
-  if (pollTimers.has(id)) return
-  pollTimers.set(id, setInterval(() => {
-    void pollDiscover(id)
-  }, POLL_MS))
-  void pollDiscover(id)
+  startPoll('discover', id, next => next.runningJob === null, (next) => {
+    const label = next.label ?? next.loginEmail
+    if (next.lastDiscoverError) {
+      toast.add({ title: 'Advertiser sync failed', description: `${label}: ${discoverErrorText(next.lastDiscoverError)}`, color: 'error' })
+    } else {
+      toast.add({ title: `Advertisers synced (${next.advertiserCount})`, description: label, color: 'success' })
+    }
+  })
 }
 
 onUnmounted(() => {
-  for (const id of [...pollTimers.keys()]) stopDiscoverPoll(id)
+  for (const id of [...polls.keys()]) stopPoll(id)
 })
+
+// ── balance + account-level top-up ───────────────────────────────────────────────────────────────────────────────────
+const auth = useAuth()
+const viewer = computed<TopupViewer>(() => ({
+  id: auth.admin.value?.id ?? null,
+  roles: auth.admin.value?.roles ?? []
+}))
+const canPay = computed(() => canPayTopups(viewer.value))
+
+// account ids whose balance job is queued or running (spinner on the reload button)
+const balanceLoading = ref(new Set<string>())
+function setBalanceLoading(id: string, on: boolean) {
+  const next = new Set(balanceLoading.value)
+  if (on) next.add(id)
+  else next.delete(id)
+  balanceLoading.value = next
+}
+
+function balanceBlockedReason(account: TikTokAccount): string | null {
+  if (!account.isActive) return 'Account is disabled'
+  if (!account.bcOrgId) return 'BC unknown — run Sync first'
+  return null
+}
+
+async function onReloadBalance(account: TikTokAccount) {
+  if (balanceLoading.value.has(account.id) || balanceBlockedReason(account)) return
+  const label = account.label ?? account.loginEmail
+  setBalanceLoading(account.id, true)
+  try {
+    // retry: 0 — exactly one POST per click; an open balance job is reused by the API (`reused: true`)
+    const res = await api<AccountBalanceResponse>(`/topups/accounts/${encodeURIComponent(account.id)}/balance`, { method: 'POST', retry: 0 })
+    toast.add({ title: res.reused ? 'Balance reload already queued' : 'Reloading balance…', description: label, color: 'info' })
+    const before = account.balanceAt
+    // the view's `runningJob` is only the newest running job: ours is over once it was seen and is gone again
+    // (a reused job may sit behind a newer one, so "not seen yet" alone means nothing until no job runs at all)
+    let seen = false
+    startPoll(
+      'balance',
+      account.id,
+      (next) => {
+        if (next.runningJob?.id === res.jobId) seen = true
+        if (next.balanceAt !== null && next.balanceAt !== before) return true
+        return next.runningJob === null || (seen && next.runningJob.id !== res.jobId)
+      },
+      (next) => {
+        setBalanceLoading(account.id, false)
+        if (next.balanceAt !== before && next.balanceAmount) {
+          toast.add({ title: `Balance ${balanceText(next.balanceAmount, next.balanceCurrency)}`, description: label, color: 'success' })
+        } else if (next.balanceError) {
+          toast.add({ title: 'Could not read the balance', description: `${label}: ${next.balanceError}`, color: 'error' })
+        }
+      }
+    )
+  } catch (e) {
+    setBalanceLoading(account.id, false)
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({
+      title: 'Could not reload the balance',
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: 'error'
+    })
+  }
+}
+
+/** an SSE `topup` event (or the answer of a mutation) replaces the account-level round of its account */
+function patchTopup(topup: TopupView) {
+  if (topup.level !== 'account') return
+  topupById.value = new Map(topupById.value).set(topup.tiktokAccountId, topup)
+  // a paid round also moved the account's balance — re-read the list once so the Balance column follows
+  if (topup.status === 'paid') void refresh()
+}
+
+const { start: startLive, stop: stopLive } = useTopupsLive({ onTopup: patchTopup })
+const {
+  current: payingTopup,
+  qrImage,
+  modalOpen,
+  busyId,
+  staleId,
+  open: claimTopup,
+  cancel: cancelTopup,
+  confirm: confirmTopup,
+  recheck: recheckTopup,
+  release: releaseTopup,
+  closeModal,
+  notify
+} = useTopupPay(patchTopup)
+const modalBusy = computed(() => !!payingTopup.value && busyId.value === payingTopup.value.id)
+
+onMounted(startLive)
+onUnmounted(stopLive)
+
+/** "Ready to pay" / re-open my own round: claim first, the modal opens only on 200 */
+async function onOpenTopup(topup: TopupView) {
+  const claimed = await claimTopup(topup)
+  if (claimed || !staleId.value) return
+  // 409 "QR หมดอายุแล้ว" / "ไม่ได้อยู่ในสถานะพร้อมจ่าย" — what the row shows is stale
+  staleId.value = null
+  await refresh()
+}
+
+async function onConfirmTopup(topup: TopupView) {
+  if (await confirmTopup(topup)) closeModal()
+}
+
+async function onCancelTopup(topup: TopupView) {
+  if (await cancelTopup(topup)) closeModal()
+}
+
+function onLeaseExpired() {
+  closeModal()
+  notify('หมดเวลาจอง', 'รอบนี้ถูกคืนให้คนอื่นจ่ายต่อแล้ว')
+}
 
 function syncBlockedReason(account: TikTokAccount): string | null {
   if (account.runningJob) return account.runningJob.type === 'discover' ? 'Sync in progress' : 'Login in progress'
@@ -487,6 +638,86 @@ const columns: TableColumn<TikTokAccount>[] = [
     }
   },
   {
+    id: 'balance',
+    header: 'Balance',
+    cell: ({ row }) => {
+      const a = row.original
+      const text = balanceText(a.balanceAmount, a.balanceCurrency)
+      const blocked = balanceBlockedReason(a)
+      const loading = balanceLoading.value.has(a.id)
+      const amountLine = h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [
+        h('span', {
+          'class': text ? 'font-medium tabular-nums text-highlighted' : 'text-muted',
+          'data-testid': 'ta-balance',
+          'data-amount': a.balanceAmount ?? ''
+        }, text || '—'),
+        canPay.value
+          ? h(UTooltip, { text: blocked ?? 'Reload balance' }, () => h('span', { class: 'inline-flex' }, [
+              h(UButton, {
+                'icon': 'i-lucide-rotate-cw',
+                'color': 'neutral',
+                'variant': 'ghost',
+                'size': 'xs',
+                'disabled': !!blocked,
+                'loading': loading,
+                'aria-label': 'Reload balance',
+                'data-testid': 'ta-balance-reload',
+                'onClick': () => onReloadBalance(a)
+              })
+            ]))
+          : null
+      ])
+      const children = [amountLine]
+      if (loading) {
+        children.push(h('span', { class: 'text-xs text-muted' }, 'Reading…'))
+      } else if (a.balanceAt) {
+        children.push(h('span', { class: 'whitespace-nowrap text-xs text-muted', title: a.balanceAt }, shortAgo(a.balanceAt)))
+      }
+      if (a.balanceError && !loading) {
+        const err = a.balanceError
+        children.push(h(UTooltip, { text: err }, () => h(UBadge, {
+          'color': 'error',
+          'variant': 'subtle',
+          'size': 'sm',
+          'icon': 'i-lucide-triangle-alert',
+          'class': 'max-w-40 truncate whitespace-nowrap',
+          'title': err,
+          'data-testid': 'ta-balance-error'
+        }, () => err)))
+      }
+      return h('div', { class: 'flex flex-col items-start gap-0.5' }, children)
+    }
+  },
+  {
+    id: 'topup',
+    header: 'Top up',
+    cell: ({ row }) => {
+      const a = row.original
+      const topup = a.topup ?? null
+      const children = []
+      if (topup) children.push(h(TopupsStatusBadge, { topup, testid: 'ta-topup-badge' }))
+      // no BC yet → the API answers 400 "กด Sync ก่อน"; say it on the row instead of offering the button
+      if (!a.bcOrgId) {
+        if (canPay.value && !topup) children.push(h('span', { class: 'whitespace-nowrap text-xs text-muted' }, 'Sync first'))
+      } else if (a.isActive) {
+        children.push(h(TopupsRowActions, {
+          topup,
+          tiktokAccountId: a.id,
+          advertiserId: null,
+          viewer: viewer.value,
+          prefix: 'ta-topup',
+          busy: !!topup && busyId.value === topup.id,
+          onCreated: patchTopup,
+          onOpen: onOpenTopup,
+          onRecheck: recheckTopup,
+          onRelease: releaseTopup
+        }))
+      }
+      if (!children.length) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-topup' }, '—')
+      return h('div', { 'class': 'flex flex-wrap items-center gap-1', 'data-testid': 'ta-topup', 'data-status': topup?.status ?? '' }, children)
+    }
+  },
+  {
     accessorKey: 'createdAt',
     header: 'Created',
     cell: ({ row }) => h('span', { class: 'whitespace-nowrap', title: row.original.createdAt }, timeAgo(row.original.createdAt))
@@ -715,6 +946,15 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         v-model:open="advOpen"
         :account="advTarget"
         @sync="onSync"
+      />
+      <TopupsPayModal
+        v-model:open="modalOpen"
+        :topup="payingTopup"
+        :qr-image="qrImage"
+        :busy="modalBusy"
+        @confirm="onConfirmTopup"
+        @cancel="onCancelTopup"
+        @expired="onLeaseExpired"
       />
     </template>
   </UDashboardPanel>

@@ -9,15 +9,19 @@
  *
  * The inner ids are the same on both surfaces (slide-over and `/topups`); only the trigger differs
  * (`ta-adv-topup-pay` vs `tp-row-retry`), because the contract names them that way.
+ *
+ * `advertiserId: null` = an account-level round (BC payment page): `POST /topups/accounts` with this one account,
+ * whose per-account `error` is shown like any other failure.
  */
 import type { FetchError } from 'ofetch'
 import type { PopoverProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { TopupView } from '#shared/types/topups'
+import type { AccountTopupResponse, TopupView } from '#shared/types/topups'
 
 const props = withDefaults(defineProps<{
   tiktokAccountId: string
-  advertiserId: string
+  /** null → top up the TikTok account (BC) instead of one advertiser */
+  advertiserId: string | null
   /** the amount of the failed round, prefilled on a retry (L-2) */
   defaultAmount?: number
   /** `qrFailed` → the button reads "ลองใหม่" and carries `data-retry="true"` */
@@ -66,6 +70,19 @@ async function submit() {
   if (!canSubmit.value) return
   submitting.value = true
   try {
+    if (props.advertiserId === null) {
+      // retry: 0 — exactly one round per click
+      const res = await api<AccountTopupResponse>('/topups/accounts', {
+        method: 'POST',
+        retry: 0,
+        body: { tiktokAccountIds: [props.tiktokAccountId], amount: amount.value }
+      })
+      const row = res.results?.[0]
+      open.value = false
+      if (row?.ok && row.topup) emit('created', row.topup)
+      else failToast(row?.error ?? 'ทำรายการไม่สำเร็จ', 409)
+      return
+    }
     // retry: 0 — exactly one round per click
     const res = await api<{ topup: TopupView, jobId: string }>('/topups', {
       method: 'POST',
@@ -86,16 +103,20 @@ async function submit() {
       serverError.value = message
     } else {
       open.value = false
-      toast.add({
-        'title': 'ขอ QR ไม่สำเร็จ',
-        'description': message,
-        'color': status === 409 ? 'warning' : 'error',
-        'data-testid': 'ta-toast'
-      } as Parameters<typeof toast.add>[0])
+      failToast(message, status)
     }
   } finally {
     submitting.value = false
   }
+}
+
+function failToast(message: string, status: number | undefined) {
+  toast.add({
+    'title': 'ขอ QR ไม่สำเร็จ',
+    'description': message,
+    'color': status === 409 ? 'warning' : 'error',
+    'data-testid': 'ta-toast'
+  } as Parameters<typeof toast.add>[0])
 }
 </script>
 

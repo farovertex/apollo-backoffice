@@ -26,15 +26,26 @@ export interface TopupActor {
   displayName: string
 }
 
-/** api-contract §3.1 — the one view used by the list, the detail, the stream and `advertiser.topup`. */
+/**
+ * `advertiser` = a round paid on one advertiser's payment page (FEAT-021).
+ * `account` = a round paid on the Business Center payment page of the TikTok account — TikTok shares one balance
+ * across the whole BC, so there is no advertiser (`advertiserId` / `advertiser` are null).
+ */
+export type TopupLevel = 'advertiser' | 'account'
+
+/** api-contract §3.1 — the one view used by the list, the detail, the stream, `advertiser.topup` and `account.topup`. */
 export interface TopupView {
   id: string
   workspaceId: string
+  level: TopupLevel
   tiktokAccountId: string
-  advertiserId: string
-  /** `tiktokAdvertiserId` is masked to `****1234` by the API for Admin — the BO shows what it gets */
-  advertiser: { id: string, name: string, tiktokAdvertiserId: string }
-  account: { id: string, label: string }
+  /** null when `level === 'account'` */
+  advertiserId: string | null
+  /** `tiktokAdvertiserId` is masked to `****1234` by the API for Admin — the BO shows what it gets · null when `level === 'account'` */
+  advertiser: { id: string, name: string, tiktokAdvertiserId: string } | null
+  account: { id: string, label: string | null, bcOrgName: string | null }
+  /** BC `org_id` of an account-level round */
+  bcOrgId: string | null
   amount: number
   currency: string
   status: TopupStatus
@@ -80,6 +91,32 @@ export interface TopupsResponse {
 export interface TopupCreateResponse {
   topup: TopupView
   jobId: string
+}
+
+/** `POST /topups/accounts` body — one amount for every account (one round + one pay job per account) */
+export interface AccountTopupBody {
+  tiktokAccountIds: string[]
+  amount: number
+}
+
+/** one row of `POST /topups/accounts` 200 — an account that could not start does not fail the others */
+export interface AccountTopupResult {
+  tiktokAccountId: string
+  ok: boolean
+  topup: TopupView | null
+  jobId: string | null
+  /** the API's own text (Thai) when `ok` is false */
+  error: string | null
+}
+
+export interface AccountTopupResponse {
+  results: AccountTopupResult[]
+}
+
+/** `POST /topups/accounts/:id/balance` 202 — `reused` = a balance job of this account was already queued */
+export interface AccountBalanceResponse {
+  jobId: string
+  reused: boolean
 }
 
 /** `POST /topups/:id/claim` 200 — the only place the QR image travels */

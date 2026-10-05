@@ -15,6 +15,8 @@
  * (never logged, never screenshotted, never in a batch result row).
  */
 
+import type { TopupView } from './topups'
+
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
 
 /** Reason the last login job stopped (`tiktokAccounts.lastLoginError`); null after a success or a manual Login. */
@@ -105,6 +107,17 @@ export interface TikTokAccount {
   lastLoginError: LoginError | null
   /** Business Center `org_id` read by the discover job; null until the first successful discover */
   bcOrgId: string | null
+  /** Business Center name from the organizations API; null when unknown */
+  bcOrgName: string | null
+  /** BC cash balance (`query_payment_summary` `sum_cash_balance.total_amount`, a string as TikTok sends it); null until read */
+  balanceAmount: string | null
+  balanceCurrency: string | null
+  /** ISO | null — when `balanceAmount` was read (or credited by a paid account-level round) */
+  balanceAt: string | null
+  /** why the last balance read failed (Thai, shown as-is); null after a success */
+  balanceError: string | null
+  /** the account-level top-up round of this row (active, or the latest `notFound`); null when none */
+  topup: TopupView | null
   /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
   advertiserCount: number
   /** ISO | null — time of the last discover attempt (success or failure) */

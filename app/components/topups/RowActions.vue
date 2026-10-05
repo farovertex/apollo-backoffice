@@ -14,10 +14,11 @@ import type { TopupViewer } from '~/utils/topup'
 const props = withDefaults(defineProps<{
   topup: TopupView | null
   tiktokAccountId: string
-  advertiserId: string
+  /** null → an account-level (BC) round */
+  advertiserId: string | null
   viewer: TopupViewer
-  /** `ta-adv-topup` in the slide-over, `tp-row` in the `/topups` table */
-  prefix?: 'ta-adv-topup' | 'tp-row'
+  /** `ta-adv-topup` in the slide-over, `tp-row` in the `/topups` table, `ta-topup` on the accounts table (BC level) */
+  prefix?: 'ta-adv-topup' | 'tp-row' | 'ta-topup'
   /** a request for this round is in flight */
   busy?: boolean
   size?: 'xs' | 'sm'
@@ -37,7 +38,7 @@ const emit = defineEmits<{
 }>()
 
 const actions = computed(() => topupRowActions(props.topup, props.viewer))
-const payTestid = computed(() => props.prefix === 'tp-row' ? 'tp-row-retry' : 'ta-adv-topup-pay')
+const payTestid = computed(() => props.prefix === 'tp-row' ? 'tp-row-retry' : `${props.prefix}-pay`)
 const defaultAmount = computed(() => actions.value.retry ? retryAmount(props.topup) : undefined)
 /** a recheck job is already running for this round (409 "กำลังตรวจอยู่" is pending) */
 const recheckDisabled = computed(() => props.busy)
