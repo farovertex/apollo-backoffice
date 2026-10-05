@@ -18,6 +18,10 @@
  * FEAT-020 (api-contract §6.5): each row also shows the ads-report state of that advertiser (`adv-report`,
  * `data-state` = never|on|off|error) — it comes with the list view (AC-21), so no extra request — and links
  * to `/reports?advertiserId=<id>`. The link is rendered for GOD/Admin only, like the Reports nav item.
+ *
+ * FEAT-026 (api-contract v1 §3): `ta-adv-balance` is rendered for **every** row now (not just when non-empty) —
+ * `ยอดคงเหลือ <advertiserBalanceText(adv)>` or `ยอดคงเหลือ —`, `data-has-balance`, and a `title` carrying the
+ * local date-time of `balanceAt` (or "ยังไม่เคยอ่านยอด" when it was never credited).
  */
 import type { FetchError } from 'ofetch'
 import type { SlideoverProps } from '@nuxt/ui'
@@ -512,11 +516,12 @@ function onSync() {
             </NuxtLink>
 
             <p
-              v-if="advertiserBalanceText(adv)"
               class="text-xs text-muted tabular-nums"
               data-testid="ta-adv-balance"
+              :data-has-balance="advertiserBalanceText(adv) ? 'true' : 'false'"
+              :title="adv.balanceAt ? `อัปเดต ${formatDateTime(adv.balanceAt)}` : 'ยังไม่เคยอ่านยอด'"
             >
-              ยอดคงเหลือ {{ advertiserBalanceText(adv) }}
+              ยอดคงเหลือ {{ advertiserBalanceText(adv) || '—' }}
             </p>
             <p
               v-if="adv.topup?.status === 'readyToPay'"
