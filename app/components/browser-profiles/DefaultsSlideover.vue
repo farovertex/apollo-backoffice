@@ -7,6 +7,9 @@
  * Save → `PUT …/me` with the full body → 200 → toast + badge "Saved" (the slideover stays open).
  * Reset to system default → `DELETE …/me` → 204 → one re-`GET …/me` → the form shows the system values again.
  * A 400 / 404 on save is shown in `bp-defaults-error` and every typed value is kept.
+ * FEAT-027 v1.2 (BUG-030) — the saved default's proxy can be bound to another profile; the field then shows it by
+ * label (never a raw id) with an "in use" hint (`bp-defaults-proxy-hint`), and Save keeps sending the unchanged id
+ * (api-contract.md v1.2 §6: a 409 only fires when the id actually changed to a bound one).
  */
 import type { SlideoverProps } from '@nuxt/ui'
 import type { ProfileDefaults } from '#shared/types/browser-profiles'
@@ -16,7 +19,10 @@ const open = defineModel<boolean>('open', { default: false })
 const api = useApi()
 const toast = useToast()
 const settings = useProfileSettings()
-const { options, defaults, form, loading, loaded, loadError, proxyItems } = settings
+const { options, defaults, form, loading, loaded, loadError, proxyItems, proxyDefaultHint } = settings
+
+// FEAT-027 v1.2 (BUG-030) — shown under the Proxy field while it still holds a bound default
+const proxyHint = computed(() => (proxyDefaultHint.value ? 'Default proxy in use by another profile.' : null))
 
 const saving = ref(false)
 const resetting = ref(false)
@@ -135,6 +141,7 @@ async function resetToSystem() {
           test-id-prefix="bp-defaults"
           :options="options"
           :proxy-items="proxyItems"
+          :proxy-hint="proxyHint"
           :group="defaults?.group ?? null"
           :disabled="busy"
         />

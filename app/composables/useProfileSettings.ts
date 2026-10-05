@@ -19,6 +19,11 @@ import type { ProxiesResponse, Proxy } from '#shared/types/proxies'
  * responses (`kernel: 'chrome'` is the one constant — the contract allows no other kernel).
  * FEAT-027 §12 — the proxy list is **free-only** (`free=1`): a bound proxy cannot be picked here at all (an explicit
  * bound `proxyId` would 409). Each item is prefixed with the last-check glyph (✓ ok / ✗ failed / · never checked).
+ * FEAT-027 v1.2 (BUG-030) — the admin's default proxy can be *bound to another profile* and is then absent from the
+ * free-only list; `proxyItems` still shows it (by label, from `defaults.proxy`, never the raw id) so the field is
+ * never blank or a raw ObjectId. `proxyIsDefault` tells the two forms whether the field still holds that default
+ * value (bound or not) so the Create modal can omit `proxyId` and reach the API's AS-1 path instead of a 409
+ * (api-contract.md v1.2 §5); Default settings keeps sending the unchanged id (§6: 200 when it did not change).
  */
 
 /** "No proxy" sentinel: a `null` model value would render the select's placeholder instead of the item label */
@@ -72,9 +77,14 @@ export function useProfileSettings() {
   const loadError = ref<string | null>(null)
   // bumped on every load / reset so a late response from a previous open is dropped
   let session = 0
+  // FEAT-027 v1.2 (BUG-030) — the `proxyId` the last `apply()` copied in, to tell "still the default" from
+  // "the admin picked something" without a touched flag (re-picking the same value is indistinguishable from
+  // leaving it alone, which is the correct behaviour here)
+  const appliedProxyId = ref<string>(NO_PROXY)
 
   /** copy a defaults view (`GET …/me`, or the 200 body of a PUT) into the form */
   function apply(view: ProfileDefaults) {
+    const proxyId = view.proxyId ?? NO_PROXY
     form.value = {
       version: view.browser.version,
       os: view.os,
@@ -83,8 +93,9 @@ export function useProfileSettings() {
       audio: view.hardwareNoise.audio,
       cpu: view.hardwareNoise.cpu,
       ram: view.hardwareNoise.ram,
-      proxyId: view.proxyId ?? NO_PROXY
+      proxyId
     }
+    appliedProxyId.value = proxyId
   }
 
   /** the three GETs, concurrently, one each */
@@ -128,12 +139,14 @@ export function useProfileSettings() {
     defaults.value = null
     proxies.value = []
     form.value = blankForm()
+    appliedProxyId.value = NO_PROXY
     loading.value = false
     loaded.value = false
     loadError.value = null
   }
 
-  /** the body of `PUT /browser-profile-defaults/me` and the settings half of `POST /browser-profiles/create` */
+  /** the body of `PUT /browser-profile-defaults/me` (always sends `proxyId`, unchanged or not — api-contract.md
+   *  v1.2 §6: a 409 only fires when it *changed* and the changed-to proxy is bound) */
   function settings(): ProfileSettings {
     const f = form.value
     return {
@@ -145,13 +158,39 @@ export function useProfileSettings() {
     }
   }
 
+  /** FEAT-027 v1.2 (BUG-030) — true while the Proxy field still holds the value `apply()` last copied in (the
+   *  caller's default, bound or not); re-picking that same value counts as "still the default" on purpose. */
+  const proxyIsDefault = computed(() => form.value.proxyId === appliedProxyId.value)
+
+  /** FEAT-027 v1.2 (BUG-030) — the saved default's proxy ref when it is bound to another profile (absent from the
+   *  free-only list), so the field can show a label instead of blank/raw-id; null when the default is free (then
+   *  it is already in `proxies`) or there is no default proxy. */
+  const defaultProxyBound = computed(() => {
+    const d = defaults.value
+    if (!d?.proxyId || !d.proxy) return null
+    return proxies.value.some(p => p.id === d.proxyId) ? null : d.proxy
+  })
+
+  /** shown next to the Proxy field while it still holds a bound default; null otherwise */
+  const proxyDefaultHint = computed(() => (proxyIsDefault.value ? defaultProxyBound.value : null))
+
+  /** the body of `POST /browser-profiles/create` — FEAT-027 v1.2 (BUG-030, api-contract.md §5): the `proxyId` key
+   *  is **omitted** while the field still holds the caller's default (whether or not that default is bound), so
+   *  the API resolves it server-side and applies AS-1 (create without proxy + `proxyWarning`) instead of a 409;
+   *  sent only once the admin explicitly picks a different proxy or "No proxy". */
+  function createSettings(): Omit<ProfileSettings, 'proxyId'> & { proxyId?: string | null } {
+    const { proxyId, ...rest } = settings()
+    return proxyIsDefault.value ? rest : { ...rest, proxyId }
+  }
+
   /** FEAT-027 §12 — ✓ ok / ✗ failed / · never checked, prefixed to the item label */
   function lastCheckGlyph(proxy: Proxy): string {
     if (!proxy.lastCheck) return '·'
     return proxy.lastCheck.ok ? '✓' : '✗'
   }
 
-  /** "No proxy" first, then `<glyph> <label> · host:port` grouped by workspace (`USelectMenu` label items) */
+  /** "No proxy" first, then the bound default (if any — FEAT-027 v1.2/BUG-030, so the field never shows a raw id),
+   *  then `<glyph> <label> · host:port` grouped by workspace (`USelectMenu` label items) */
   const proxyItems = computed<SelectMenuItem[]>(() => {
     const groups = new Map<string, Proxy[]>()
     for (const proxy of proxies.value) {
@@ -162,6 +201,11 @@ export function useProfileSettings() {
     }
     // the option texts are exactly "No proxy" and `<glyph> <label> · <host>:<port>` (QA matches them literally)
     const items: SelectMenuItem[] = [{ label: 'No proxy', value: NO_PROXY }]
+    const bound = defaultProxyBound.value
+    if (bound) {
+      items.push({ label: 'Default', type: 'label' })
+      items.push({ label: `${bound.label} · ${bound.host}:${bound.port} (in use by another profile)`, value: bound.id })
+    }
     for (const [workspace, list] of groups) {
       items.push({ label: workspace, type: 'label' })
       for (const proxy of list) {
@@ -180,11 +224,14 @@ export function useProfileSettings() {
     loaded,
     loadError,
     proxyItems,
+    proxyIsDefault,
+    proxyDefaultHint,
     apply,
     load,
     reloadDefaults,
     reset,
     settings,
+    createSettings,
     messageOf
   }
 }

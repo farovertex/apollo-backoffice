@@ -199,9 +199,15 @@ export interface ProfileDefaults extends ProfileSettings {
 /** `PUT /browser-profile-defaults/me` body — full replacement. */
 export type PutDefaultsBody = ProfileSettings
 
-/** `POST /browser-profiles/create` body — the BO always sends every key (spec AC-9). */
-export interface CreateProfileBody extends ProfileSettings {
+/**
+ * `POST /browser-profiles/create` body — the BO always sends every key (spec AC-9) **except** `proxyId`.
+ * FEAT-027 v1.2 (BUG-030, api-contract.md §5) — `proxyId` is omitted while the Proxy field still holds the
+ * caller's default (bound or not), so the API resolves it server-side and applies AS-1 instead of a 409; sent
+ * only once the admin picks a different proxy or "No proxy" explicitly.
+ */
+export interface CreateProfileBody extends Omit<ProfileSettings, 'proxyId'> {
   name: string
+  proxyId?: string | null
 }
 
 /**

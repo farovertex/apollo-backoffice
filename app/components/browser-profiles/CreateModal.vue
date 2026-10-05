@@ -15,6 +15,9 @@
  * FEAT-027 — the proxy picker (`useProfileSettings`) now only lists **free** proxies (`?free=1`); an explicit bound
  * `proxyId` cannot reach this form, but the caller's *default* proxy can still be bound to another profile meanwhile
  * (AS-1) — the 201 body then carries `proxyWarning`, shown as a separate warning toast after the success toast.
+ * FEAT-027 v1.2 (BUG-030) — the create body uses `settings.createSettings()`, which **omits** `proxyId` while the
+ * field still holds the caller's default (bound or not), so a bound default reaches AS-1 instead of a 409; the
+ * field shows that default by label (never a raw id) with an "in use" hint (`bp-create-proxy-hint`).
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -33,7 +36,12 @@ const modalContent = { 'data-testid': 'bp-create-modal' } as ModalProps['content
 const api = useApi()
 const toast = useToast()
 const settings = useProfileSettings()
-const { options, defaults, form, loading, loaded, loadError, proxyItems } = settings
+const { options, defaults, form, loading, loaded, loadError, proxyItems, proxyDefaultHint } = settings
+
+// FEAT-027 v1.2 (BUG-030) — shown under the Proxy field while it still holds a bound default
+const proxyHint = computed(() =>
+  proxyDefaultHint.value ? 'Default proxy in use by another profile — profile will be created without proxy.' : null
+)
 
 const schema = z.object({
   name: z.string({ error: 'Name is required' })
@@ -84,7 +92,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value || !loaded.value) return
   submitting.value = true
   submitError.value = null
-  const body: CreateProfileBody = { name: event.data.name, ...settings.settings() }
+  const body: CreateProfileBody = { name: event.data.name, ...settings.createSettings() }
   try {
     // retry: 0 — exactly one POST per click (a retry would create a second profile in the provider)
     const profile = await api<CreatedProfile>('/browser-profiles/create', { method: 'POST', body, retry: 0 })
@@ -144,6 +152,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           test-id-prefix="bp-create"
           :options="options"
           :proxy-items="proxyItems"
+          :proxy-hint="proxyHint"
           :group="defaults?.group ?? null"
           :disabled="submitting"
         />

@@ -8,6 +8,8 @@
  * FEAT-007 — the "AdsPower group" field is now two read-only values: Group (= `group.name`, or the literal
  * "Ungrouped" when null) and Tag (= `group.tag`, the caller's username, rendered as a badge). The FEAT-006
  * "Will be created on first profile" / "Exists" badge is removed — there is no per-admin group left to create.
+ * FEAT-027 v1.2 (BUG-030) — `proxyHint` (built by the caller from `useProfileSettings().proxyDefaultHint`) renders
+ * under the Proxy field as `${testIdPrefix}-proxy-hint` while it still holds a bound default; null hides it.
  */
 import type { SelectMenuItem } from '@nuxt/ui'
 import type { ProfileDefaultsGroup, ProfileOptions } from '#shared/types/browser-profiles'
@@ -19,6 +21,8 @@ const props = defineProps<{
   options: ProfileOptions | null
   /** "No proxy" + the proxies grouped by workspace (built by `useProfileSettings`) */
   proxyItems: SelectMenuItem[]
+  /** FEAT-027 v1.2 (BUG-030) — "in use" hint while the field holds a bound default; null = no hint */
+  proxyHint?: string | null
   /** the one configured AdsPower group (or null = Ungrouped) + the caller's display-only tag */
   group: ProfileDefaultsGroup | null
   disabled?: boolean
@@ -148,6 +152,9 @@ const subDisabled = computed(() => props.disabled || noiseOff.value)
         :disabled="disabled"
         :data-testid="`${testIdPrefix}-proxy`"
       />
+      <p v-if="proxyHint" class="mt-1 text-xs text-muted" :data-testid="`${testIdPrefix}-proxy-hint`">
+        {{ proxyHint }}
+      </p>
     </UFormField>
 
     <UFormField label="AdsPower group" :name="`${testIdPrefix}-group`">
