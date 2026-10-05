@@ -14,9 +14,11 @@ import type { ProxiesResponse, Proxy } from '#shared/types/proxies'
  * FEAT-006 — shared state of the two browser-profile forms (Default settings slideover + Create profile modal;
  * api-contract.md v1 §"BO-side surfaces").
  * `load()` issues **exactly one** `GET /backend/browser-profiles/options`, `GET /backend/browser-profile-defaults/me`
- * and `GET /backend/proxies?limit=100&sort=label`, concurrently (`Promise.all`), and prefills the form from the
+ * and `GET /backend/proxies?free=1&limit=100`, concurrently (`Promise.all`), and prefills the form from the
  * defaults response. No option list and no default value is hard-coded in the BO: everything comes from those two
  * responses (`kernel: 'chrome'` is the one constant — the contract allows no other kernel).
+ * FEAT-027 §12 — the proxy list is **free-only** (`free=1`): a bound proxy cannot be picked here at all (an explicit
+ * bound `proxyId` would 409). Each item is prefixed with the last-check glyph (✓ ok / ✗ failed / · never checked).
  */
 
 /** "No proxy" sentinel: a `null` model value would render the select's placeholder instead of the item label */
@@ -95,7 +97,7 @@ export function useProfileSettings() {
       const [opts, me, list] = await Promise.all([
         api<ProfileOptions>('/browser-profiles/options', { retry: 0 }),
         api<ProfileDefaults>('/browser-profile-defaults/me', { retry: 0 }),
-        api<ProxiesResponse>('/proxies', { retry: 0, query: { limit: 100, sort: 'label' } })
+        api<ProxiesResponse>('/proxies', { retry: 0, query: { free: 1, limit: 100, sort: 'label' } })
       ])
       if (s !== session) return
       options.value = opts
@@ -143,7 +145,13 @@ export function useProfileSettings() {
     }
   }
 
-  /** "No proxy" first, then `label · host:port` grouped by workspace (`USelectMenu` label items) */
+  /** FEAT-027 §12 — ✓ ok / ✗ failed / · never checked, prefixed to the item label */
+  function lastCheckGlyph(proxy: Proxy): string {
+    if (!proxy.lastCheck) return '·'
+    return proxy.lastCheck.ok ? '✓' : '✗'
+  }
+
+  /** "No proxy" first, then `<glyph> <label> · host:port` grouped by workspace (`USelectMenu` label items) */
   const proxyItems = computed<SelectMenuItem[]>(() => {
     const groups = new Map<string, Proxy[]>()
     for (const proxy of proxies.value) {
@@ -152,12 +160,12 @@ export function useProfileSettings() {
       if (list) list.push(proxy)
       else groups.set(key, [proxy])
     }
-    // the option texts are exactly "No proxy" and `<label> · <host>:<port>` (QA matches them literally)
+    // the option texts are exactly "No proxy" and `<glyph> <label> · <host>:<port>` (QA matches them literally)
     const items: SelectMenuItem[] = [{ label: 'No proxy', value: NO_PROXY }]
     for (const [workspace, list] of groups) {
       items.push({ label: workspace, type: 'label' })
       for (const proxy of list) {
-        items.push({ label: `${proxy.label} · ${proxy.host}:${proxy.port}`, value: proxy.id })
+        items.push({ label: `${lastCheckGlyph(proxy)} ${proxy.label} · ${proxy.host}:${proxy.port}`, value: proxy.id })
       }
     }
     return items

@@ -63,7 +63,10 @@ const syncedAgo = useTimeAgo(() => syncedAt.value ?? 0)
 
 // ── filters (client-side) ────────────────────────────────────────────────────────────────────────────────────────────
 const ALL = '__all__'
-const search = ref('')
+// FEAT-027: the Proxies page "Bound to" link lands here as `?q=<profile name>` so the match is pre-filled.
+const route = useRoute()
+const initialQuery = typeof route.query.q === 'string' ? route.query.q : ''
+const search = ref(initialQuery)
 const searchDebounced = refDebounced(search, 250)
 const group = ref(ALL)
 const statusFilter = ref<'all' | AvailableProfileStatus>('all')

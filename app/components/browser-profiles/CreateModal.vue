@@ -12,6 +12,9 @@
  * FEAT-007 — the description (`bp-create-description`, rendered through UModal's `#description` slot so QA has a
  * precise locator) names the one configured AdsPower group (or "ungrouped") and the tag the API will derive
  * server-side (`ADMINS.username`); the create body never carries a group or a tag key.
+ * FEAT-027 — the proxy picker (`useProfileSettings`) now only lists **free** proxies (`?free=1`); an explicit bound
+ * `proxyId` cannot reach this form, but the caller's *default* proxy can still be bound to another profile meanwhile
+ * (AS-1) — the 201 body then carries `proxyWarning`, shown as a separate warning toast after the success toast.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -87,6 +90,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     const profile = await api<CreatedProfile>('/browser-profiles/create', { method: 'POST', body, retry: 0 })
     open.value = false
     toast.add({ title: 'Profile created', description: profile.name, color: 'success' })
+    // FEAT-027 AS-1: the default proxy was bound to another profile — created without one, surfaced as a warning
+    if (profile.proxyWarning) toast.add({ title: profile.proxyWarning, color: 'warning', icon: 'i-lucide-triangle-alert' })
     emit('created', profile)
   } catch (e) {
     submitError.value = errorState(e)
