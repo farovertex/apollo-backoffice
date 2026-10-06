@@ -3,21 +3,30 @@
  * FEAT-003 — Add account modal (function 3.1). zod schema mirrors the API's `createTikTokAccountSchema`
  * (api-contract.md v1): email trim / lowercase / valid / ≤ 254, password 1..128, label ≤ 100 optional.
  * Browser profile: pick a free profile, or check "Create new profile automatically". That path sends
- * `POST /browser-profiles/create` with only `{ name }` — omitted fingerprint and proxy fields use the caller's
- * saved defaults — then binds the new id. On every open: exactly one `GET /backend/browser-profiles/available`
- * (no query, the API syncs AdsPower + applies visibility) → picker of `status === 'free'` profiles, shown only
- * while automatic create is off. Submit → `POST /backend/tiktok-accounts` → 201 → close + toast + `created`;
+ * `POST /browser-profiles/create` with `{ name }` + the proxy choice — every fingerprint field keeps coming from
+ * the caller's saved defaults — then binds the new id. On every open: exactly one
+ * `GET /backend/browser-profiles/available` → picker of `status === 'free'` profiles (shown only while automatic
+ * create is off), plus the two FEAT-028 GETs below, concurrently and once each.
+ * Submit → `POST /backend/tiktok-accounts` → 201 → close + toast + `created`;
  * 4xx → `UAlert` under the form with the API `error`, modal stays open. If the profile was created but the
  * account request failed, automatic create turns off and that profile is selected so a retry does not create
  * a second one. The form (and the fetched list) is reset on close so the next open starts clean and refetches.
  * FEAT-023 (api-contract.md v1 §4): two passwords — **Email password** (`emailPassword`, the mailbox) and
  * **TikTok password** (`password`) — plus the **Auto first login** checkbox (`pendingFirstLogin`, default true).
  * The flag only marks the account; the create call never enqueues a login, the scheduler picks it up.
+ * FEAT-028 (api-contract.md v1 §8, AC-10): while "Create new profile automatically" is checked, the radio
+ * `ta-add-proxy-mode` (Auto / Pick a free proxy / No proxy) + the picker `ta-add-proxy` decide the proxy of the new
+ * profile. They are prefilled from `GET /backend/browser-profile-defaults/me` and filled from
+ * `GET /backend/proxies?free=1&limit=100&sort=label` (`useProfileSettings({ loadOptions: false })` — this modal
+ * needs no `/browser-profiles/options`). The create body carries exactly one proxy key
+ * (`{ name, proxyMode }` or `{ name, proxyId }`); a 409 (`no proxy available (tried N)`, bound proxy) renders in
+ * `ta-add-error` and **no** `POST /tiktok-accounts` is sent. Unchecked → the radio is hidden and no proxy key
+ * exists anywhere.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
 import type { FormSubmitEvent, ModalProps } from '@nuxt/ui'
-import type { AvailableProfile, AvailableResponse, CreatedProfile, CreateProfileErrorBody, ProviderErrorBody } from '#shared/types/browser-profiles'
+import type { AvailableProfile, AvailableResponse, CreatedProfile, CreateProfileAutoBody, CreateProfileErrorBody, ProviderErrorBody } from '#shared/types/browser-profiles'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { CreateAccountBody, TikTokAccount } from '#shared/types/tiktok-accounts'
 
@@ -32,6 +41,10 @@ const modalContent = { 'data-testid': 'ta-add-modal' } as ModalProps['content']
 
 const api = useApi()
 const toast = useToast()
+// FEAT-028 — proxy choice of the auto-created profile: `GET …/browser-profile-defaults/me` (prefill) +
+// `GET /proxies?free=1&limit=100&sort=label` (picker), no `/browser-profiles/options` on this surface
+const settings = useProfileSettings({ loadOptions: false })
+const { form: profileForm, proxyItems, proxyPickMissing, loading: settingsLoading, loadError: settingsLoadError } = settings
 
 // ── form ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const schema = z.object({
@@ -94,6 +107,11 @@ const showEmailPassword = ref(false)
 const showPassword = ref(false)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
+// FEAT-028 — set by a submit attempt with "Pick a free proxy" selected and nothing picked
+const proxySubmitted = ref(false)
+const proxyError = computed(() =>
+  proxySubmitted.value && proxyPickMissing.value ? PROXY_PICK_REQUIRED : settingsLoadError.value
+)
 
 function resetForm() {
   Object.assign(state, emptyState())
@@ -101,6 +119,7 @@ function resetForm() {
   showPassword.value = false
   submitting.value = false
   submitError.value = null
+  proxySubmitted.value = false
 }
 
 // ── free-profile picker ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -169,11 +188,13 @@ function resetProfiles() {
 }
 
 watch(open, (isOpen) => {
+  resetForm()
+  settings.reset()
   if (isOpen) {
-    resetForm()
-    loadProfiles()
+    // concurrently, once each: /browser-profiles/available · /browser-profile-defaults/me · /proxies?free=1
+    void loadProfiles()
+    void settings.load()
   } else {
-    resetForm()
     resetProfiles()
   }
 })
@@ -208,18 +229,27 @@ function profileNameFromEmail(loginEmail: string): string {
 
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value) return
+  if (event.data.createProfile && proxyPickMissing.value) {
+    proxySubmitted.value = true
+    return
+  }
   submitting.value = true
   submitError.value = null
 
   let browserProfileId = event.data.browserProfileId
   let createdProfile: CreatedProfile | null = null
   if (event.data.createProfile) {
-    const name = profileNameFromEmail(event.data.loginEmail)
+    // FEAT-028 — the create body always carries one explicit proxy key; `proxyMode: 'pick'` without a proxy is a
+    // form error, not a request
+    const body: CreateProfileAutoBody = {
+      name: profileNameFromEmail(event.data.loginEmail),
+      ...settings.proxyChoice()
+    }
     try {
       // retry: 0 — exactly one POST (a retry would create a second profile in the provider)
       createdProfile = await api<CreatedProfile>('/browser-profiles/create', {
         method: 'POST',
-        body: { name },
+        body,
         retry: 0
       })
       browserProfileId = createdProfile.id
@@ -376,6 +406,20 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           description="Uses your saved browser profile defaults. The profile is named after the login email."
           :disabled="submitting"
           data-testid="ta-add-create-profile"
+        />
+
+        <!-- FEAT-028 — proxy of the new profile; hidden (and never sent) while the checkbox is off -->
+        <BrowserProfilesProxyModeField
+          v-if="state.createProfile"
+          v-model:proxy-mode="profileForm.proxyMode"
+          v-model:proxy-id="profileForm.proxyId"
+          test-id-prefix="ta-add"
+          label="Proxy for the new profile"
+          :pick="true"
+          :proxy-items="proxyItems"
+          :help="PROXY_MODE_HELP"
+          :error="proxyError"
+          :disabled="submitting || settingsLoading"
         />
 
         <UFormField
