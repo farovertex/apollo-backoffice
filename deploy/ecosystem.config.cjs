@@ -9,6 +9,9 @@
  *   (parser เล็ก ๆ: KEY=VALUE ต่อบรรทัด · ข้าม # · ตัดเครื่องหมายคำพูดรอบค่า) — ไม่ใส่ค่าลับในไฟล์นี้
  * - bo ฟังที่ BO_BIND:BO_PORT (ค่าเริ่มต้น 0.0.0.0:20000) · ต่อ api ที่ NUXT_API_BASE (ค่าเริ่มต้น http://127.0.0.1:20001 = api ของ pm2ตัวเดียวกัน)
  * - ใช้ Caddy (deploy/Caddyfile.pm2) แล้วให้ตั้ง BO_BIND=127.0.0.1 ใน .env
+ * - เป็น **cluster** (`BO_INSTANCES` ใน .env, ค่าเริ่มต้น 2) ใช้พอร์ตเดียวกัน · session อยู่ใน cookie ไม่มี state ในโปรเซส ·
+ *   `pm2 reload` เปลี่ยนทีละตัว (ตัวใหม่ listen ก่อน ตัวเก่าค่อยปิด) จึงไม่มีช่วงที่ไม่มีใครรับ request
+ *   ★ เปลี่ยนจาก fork เป็น cluster ครั้งแรกต้อง `pm2 delete gttm-bo` แล้ว `pm2 start` ไฟล์นี้ (reload เปลี่ยน exec_mode ไม่ได้)
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -46,11 +49,12 @@ module.exports = {
       cwd: boDir,
       script: '.output/server/index.mjs',
       interpreter: 'node',
-      exec_mode: 'fork',
-      instances: 1, // session อยู่ใน cookie ไม่มี state ในโปรเซส → ขยายเป็น cluster ได้ถ้าต้องการ (instances: 2, exec_mode: 'cluster')
+      exec_mode: 'cluster',
+      instances: Number(fileEnv.BO_INSTANCES || process.env.BO_INSTANCES) || 2,
       autorestart: true,
       max_restarts: 50,
       restart_delay: 5000,
+      listen_timeout: 15_000,
       kill_timeout: 10_000,
       max_memory_restart: '600M',
       env: {

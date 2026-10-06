@@ -9,7 +9,7 @@
     "postinstall": "nuxt prepare",
     "lint": "eslint .",
     "typecheck": "nuxt typecheck",
-    "deploy": "pnpm build && pm2 reload gttm-bo"
+    "deploy": "node deploy/build-release.mjs && pm2 reload gttm-bo"
   },
   "dependencies": {
     "@iconify-json/lucide": "^1.2.131",

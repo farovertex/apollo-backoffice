@@ -4,6 +4,8 @@ import betterTailwindcss from 'eslint-plugin-better-tailwindcss'
 import { getDefaultAttributes } from 'eslint-plugin-better-tailwindcss/api/defaults'
 
 export default withNuxt(
+  // build output of deploy/build-release.mjs
+  { ignores: ['releases/**', '.nuxt-release/**'] },
   {
     rules: {
       'vue/no-multiple-template-root': 'off',

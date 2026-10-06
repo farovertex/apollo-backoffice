@@ -3,7 +3,8 @@
 #
 #   git clone git@github.com:<owner>/apollo-bo.git ~/gttm/apollo-backoffice && cd ~/gttm/apollo-backoffice
 #   deploy/install-server.sh install                 # ครั้งแรก: .env → install deps → nuxt build → pm2 start + save + startup
-#   deploy/install-server.sh update [--ref <tag|sha>]  # git pull/checkout → install → build → pm2 reload
+#   deploy/install-server.sh update [--ref <tag|sha>]  # git pull/checkout → install → build (releases/<id>) → pm2 reload
+#   deploy/install-server.sh rollback                # .output กลับไป release ก่อนหน้า (ไม่ build) → pm2 reload
 #   deploy/install-server.sh status
 #
 # ต้องมี: git · Node ≥ 24 · .env ของ repo (คัดลอกจาก .env.example: NUXT_SESSION_PASSWORD ≥ 32 ตัว · NUXT_API_BASE=http://127.0.0.1:20001 · BO_PORT=20000)
@@ -54,13 +55,21 @@ sync_repo() { # sync_repo [ref]
 build_bo() {
   log "pnpm install --frozen-lockfile"
   (cd "$BO_DIR" && CI=1 NUXT_TELEMETRY_DISABLED=1 pnpm install --frozen-lockfile)
-  log "pnpm build (nuxt build → .output/ · ใช้ RAM ~2 GB)"
-  (cd "$BO_DIR" && NUXT_TELEMETRY_DISABLED=1 pnpm build)
+  # build ลง releases/<id>/ แล้วสลับ .output (symlink) ทีเดียว — ตัวที่รันอยู่ไม่สะดุดระหว่าง build · build ล้ม = .output เดิม
+  (cd "$BO_DIR" && node deploy/build-release.mjs)
+}
+
+pm2_mode() { # pm2_mode <app> → cluster_mode | fork_mode | ""
+  pm2 jlist 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const p=JSON.parse(s).find(x=>x.name===process.argv[1]);console.log(p?.pm2_env?.exec_mode??"")}catch{console.log("")}})' "$1"
 }
 
 pm2_start() {
+  if [ "$(pm2_mode gttm-bo)" = fork_mode ]; then
+    warn "gttm-bo ยังเป็น fork (ตัวเดียว) — เปลี่ยนเป็น cluster ครั้งเดียว: pm2 delete + start (bo ดับไม่กี่วิ) · ครั้งต่อไปเป็น reload ไม่ดับ"
+    pm2 delete gttm-bo
+  fi
   if pm2 describe gttm-bo >/dev/null 2>&1; then
-    log "pm2 reload gttm-bo"; pm2 reload "$HERE/ecosystem.config.cjs" --update-env
+    log "pm2 reload gttm-bo (cluster: สลับทีละ instance)"; pm2 reload "$HERE/ecosystem.config.cjs" --update-env
   else
     log "pm2 start"; pm2 start "$HERE/ecosystem.config.cjs"
   fi
@@ -90,6 +99,7 @@ ref=""; while [ $# -gt 0 ]; do case "$1" in --ref) ref="$2"; shift ;; *) die "un
 case "$cmd" in
   install) need_node; ensure_env; build_bo; pm2_start; wait_bo; status ;;
   update)  need_node; sync_repo "$ref"; ensure_env; build_bo; pm2_start; wait_bo; status ;;
+  rollback) (cd "$BO_DIR" && node deploy/build-release.mjs rollback); pm2_start; wait_bo; status ;;
   status)  status ;;
-  *) sed -n '2,10p' "$0"; exit 2 ;;
+  *) sed -n '2,11p' "$0"; exit 2 ;;
 esac

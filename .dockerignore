@@ -1,7 +1,11 @@
 # build context ของ Dockerfile — เอาเฉพาะ source ที่ `nuxt build` ต้องใช้
 node_modules
 .output
+.output.next
+releases
 .nuxt
+.nuxt-release
+.nuxt-release-carry
 .nitro
 .cache
 .data
