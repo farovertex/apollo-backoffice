@@ -15,6 +15,9 @@
  * (never logged, never screenshotted, never in a batch result row).
  * FEAT-028 (api-contract.md v1 §6/§7): a batch row may carry an optional `proxy` (the CSV's 4th column) and the
  * result gains the row status `stopped` + the top-level `stopped` count (the pool of free proxies ran dry).
+ * FEAT-029 (api-contract.md v1 §4/§5): the view gains `launchingAds` + `launchingSince` (true while at least one
+ * advertiser of the account is launching ads, system-written), and `GET /tiktok-accounts` takes the optional
+ * query `launchingAds=1|true|0|false`.
  */
 
 import type { TopupView } from './topups'
@@ -120,6 +123,13 @@ export interface TikTokAccount {
   balanceError: string | null
   /** the account-level top-up round of this row (active, or the latest `notFound`); null when none */
   topup: TopupView | null
+  /**
+   * FEAT-029 — true while at least one advertiser of this account has `launchingAds: true`; recomputed by the
+   * publish write and by every kpi round that turns an advertiser off. Optional for an older API.
+   */
+  launchingAds?: boolean
+  /** ISO | null — when the account flag went false → true (cleared when it goes off) */
+  launchingSince?: string | null
   /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
   advertiserCount: number
   /** ISO | null — time of the last discover attempt (success or failure) */
@@ -131,6 +141,12 @@ export interface TikTokAccount {
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * FEAT-029 §5 — `launchingAds` query of `GET /tiktok-accounts`: `1` → only accounts that are launching ads,
+ * `0` → only the others, omitted → every account (today's behaviour).
+ */
+export type AccountsLaunchingFilter = '1' | '0'
 
 /** `GET /tiktok-accounts` 200 body (sorted `createdAt` desc, no pagination). */
 export interface AccountsResponse {

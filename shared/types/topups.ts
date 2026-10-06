@@ -6,6 +6,9 @@
  * One document per round lives in the API collection `topups`; the BO only ever sees `TopupView`, which
  * never carries `qrImage` — the image comes back exactly once, in the 200 body of `POST /topups/:id/claim`
  * (and from `GET /topups/:id/qr` for the admin holding the lease).
+ *
+ * FEAT-029 (api-contract.md v1 §4): a round carries `trigger` (`manual` | `auto`) and `requestedBy` is
+ * `null` for a round the system opened on its own (auto top-up) — every other key behaves as before.
  */
 import type { ApiErrorBody } from './auth'
 
@@ -25,6 +28,12 @@ export interface TopupActor {
   id: string
   displayName: string
 }
+
+/**
+ * FEAT-029 — who opened the round: `manual` = a human pressed "จ่ายเงิน" (`POST /topups`), `auto` = the kpi
+ * job saw a balance below `autoTopup.minBalance` and opened it. Rows written before the feature read `manual`.
+ */
+export type TopupTrigger = 'manual' | 'auto'
 
 /**
  * `advertiser` = a round paid on one advertiser's payment page (FEAT-021).
@@ -69,7 +78,10 @@ export interface TopupView {
   balanceCurrency: string | null
   /** `qrFailed` reason, or the error of the last check — shown as-is (Thai) */
   error: string | null
-  requestedBy: TopupActor
+  /** FEAT-029 — `manual` for a human round, `auto` for one the system opened */
+  trigger: TopupTrigger
+  /** FEAT-029 — `null` ⇔ `trigger: 'auto'` (the BO shows "ระบบ"); a manual round always carries the admin */
+  requestedBy: TopupActor | null
   requestedAt: string
   createdAt: string
   updatedAt: string

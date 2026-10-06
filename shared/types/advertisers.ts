@@ -7,12 +7,41 @@
  * `showPunishLink`. The filter-dropdown words are a different map and are not used here.
  * FEAT-016 (api-contract.md v1 §1): the view gains `bcOrder`, the 0-based position of the advertiser in the
  * Business Center list API, written by every successful discover run.
+ * FEAT-029 (api-contract.md v1 §4): the view gains `launchingAds`, `launchingSince`, `suspendedReason`,
+ * `balanceError` and `autoTopup` — all written by the system only (publish → on, kpi round → off / balance /
+ * auto round); the single writable part is `autoTopup.enabled/minBalance/amount` through
+ * `PATCH /advertisers/:id/auto-topup` (GOD / Payment).
  */
 
 import type { AdvertiserReport } from './reports'
 import type { TopupView } from './topups'
 
 export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
+
+/**
+ * FEAT-029 — why the kpi job suspended the advertiser. `noDelivery` = a complete kpi round of today saw no
+ * delivering ad at all; cleared by a new publish or by a round that sees one again. `null` for every other
+ * suspension (the Business Center one).
+ */
+export type AdvertiserSuspendedReason = 'noDelivery'
+
+/**
+ * FEAT-029 §4 — auto top-up configuration of one advertiser; always present on the view (old rows read as
+ * `{ enabled: false, minBalance: null, amount: null, lastTriggeredAt: null, lastRoundId: null }`).
+ * `enabled`/`minBalance`/`amount` are the only writable keys (`PATCH /advertisers/:id/auto-topup`);
+ * `lastTriggeredAt` / `lastRoundId` are written by the system when it opens an auto round.
+ */
+export interface AdvertiserAutoTopup {
+  enabled: boolean
+  /** baht, integer ≥ 0 — a balance strictly below this opens a round */
+  minBalance: number | null
+  /** baht, integer ≥ `TOPUP_MIN_AMOUNT` — the amount of the round the system opens */
+  amount: number | null
+  /** ISO | null — only set when a round was really created */
+  lastTriggeredAt: string | null
+  /** id of the round created last; null until then */
+  lastRoundId: string | null
+}
 
 /** `missing` query of `GET /tiktok-accounts/:id/advertisers`: `false` (default) → only current rows, `all` → every row. */
 export type AdvertiserMissingFilter = 'false' | 'true' | 'all'
@@ -67,11 +96,25 @@ export interface Advertiser {
    * image: it comes back only in the 200 body of `POST /topups/:id/claim`.
    */
   topup: TopupView | null
-  /** ยอดคงเหลือที่บวกจากรอบฝากที่ตรวจผ่านแล้ว · null = ยังไม่เคยฝากสำเร็จ */
+  /**
+   * FEAT-029 — a build of this advertiser reached `published` and the kpi job still sees at least one ad
+   * delivering. Written by the system only (publish → true, kpi OFF rule → false); optional for readers of an
+   * API that predates the feature.
+   */
+  launchingAds?: boolean
+  /** ISO | null — start of the current launching period (cleared when the flag goes off) */
+  launchingSince?: string | null
+  /** FEAT-029 — `noDelivery` when the kpi job suspended the advertiser; null for a Business Center suspension */
+  suspendedReason?: AdvertiserSuspendedReason | null
+  /** ยอดคงเหลือที่บวกจากรอบฝากที่ตรวจผ่านแล้ว · null = ยังไม่เคยฝากสำเร็จ (FEAT-029: also written by the kpi job) */
   balanceAmount?: string | null
   balanceCurrency?: string | null
   /** ISO | null */
   balanceAt?: string | null
+  /** FEAT-029 — Thai text of the last failed balance read (`อ่านยอดคงเหลือไม่ได้`); null after a success */
+  balanceError?: string | null
+  /** FEAT-029 — auto top-up config; the API always sends it, optional for an older API */
+  autoTopup?: AdvertiserAutoTopup
   /**
    * FEAT-020 (AC-21) — ads-report tracking state of this advertiser, served with the list so the slideover
    * needs no extra request. Optional for readers of an API that predates the feature.
@@ -85,6 +128,18 @@ export interface AdvertisersResponse {
   page: number
   limit: number
   total: number
+}
+
+/**
+ * FEAT-029 §5 — `PATCH /advertisers/:id/auto-topup` body (strict on the API side: all three keys, numbers).
+ * 200 answers the full `Advertiser` view. Roles GOD / Payment; Admin → 403.
+ */
+export interface AdvertiserAutoTopupBody {
+  enabled: boolean
+  /** integer ≥ 0 */
+  minBalance: number
+  /** integer ≥ `TOPUP_MIN_AMOUNT` */
+  amount: number
 }
 
 /** `POST /tiktok-accounts/:id/discover` 202 body. */
