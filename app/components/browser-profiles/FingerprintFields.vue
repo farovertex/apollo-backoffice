@@ -8,8 +8,10 @@
  * FEAT-007 — the "AdsPower group" field is now two read-only values: Group (= `group.name`, or the literal
  * "Ungrouped" when null) and Tag (= `group.tag`, the caller's username, rendered as a badge). The FEAT-006
  * "Will be created on first profile" / "Exists" badge is removed — there is no per-admin group left to create.
- * FEAT-027 v1.2 (BUG-030) — `proxyHint` (built by the caller from `useProfileSettings().proxyDefaultHint`) renders
- * under the Proxy field as `${testIdPrefix}-proxy-hint` while it still holds a bound default; null hides it.
+ * FEAT-028 — the Proxy `USelectMenu` is replaced by `BrowserProfilesProxyModeField` (the radio
+ * `${testIdPrefix}-proxy-mode` + the optional free-proxy picker `${testIdPrefix}-proxy`): two items in the
+ * Default settings slideover (`proxyPick: false`), three in the Create-profile modal (`proxyPick: true`).
+ * The FEAT-027/BUG-030 `${testIdPrefix}-proxy-hint` is gone with the per-admin default proxy.
  */
 import type { SelectMenuItem } from '@nuxt/ui'
 import type { ProfileDefaultsGroup, ProfileOptions } from '#shared/types/browser-profiles'
@@ -19,10 +21,12 @@ const props = defineProps<{
   /** `bp-defaults` or `bp-create` */
   testIdPrefix: string
   options: ProfileOptions | null
-  /** "No proxy" + the proxies grouped by workspace (built by `useProfileSettings`) */
-  proxyItems: SelectMenuItem[]
-  /** FEAT-027 v1.2 (BUG-030) — "in use" hint while the field holds a bound default; null = no hint */
-  proxyHint?: string | null
+  /** FEAT-028 — free proxies grouped by workspace (built by `useProfileSettings`); only read while Pick */
+  proxyItems?: SelectMenuItem[]
+  /** FEAT-028 — `true` adds "Pick a free proxy" + the picker (Create modal); `false` = Auto / No proxy only */
+  proxyPick?: boolean
+  /** FEAT-028 — form error under the Proxy field ("Choose a proxy"); null = none */
+  proxyError?: string | null
   /** the one configured AdsPower group (or null = Ungrouped) + the caller's display-only tag */
   group: ProfileDefaultsGroup | null
   disabled?: boolean
@@ -45,6 +49,7 @@ const noise = field('noise')
 const audio = field('audio')
 const cpu = field('cpu')
 const ram = field('ram')
+const proxyMode = field('proxyMode')
 const proxyId = field('proxyId')
 
 /** `ua_auto` is the only value with a friendlier label; every other version is shown exactly as the API sends it */
@@ -141,21 +146,16 @@ const subDisabled = computed(() => props.disabled || noiseOff.value)
       </p>
     </div>
 
-    <UFormField label="Proxy" :name="`${testIdPrefix}-proxy`">
-      <USelectMenu
-        v-model="proxyId"
-        :items="proxyItems"
-        value-key="value"
-        :search-input="{ placeholder: 'Search label or host' }"
-        icon="i-lucide-network"
-        class="w-full"
-        :disabled="disabled"
-        :data-testid="`${testIdPrefix}-proxy`"
-      />
-      <p v-if="proxyHint" class="mt-1 text-xs text-muted" :data-testid="`${testIdPrefix}-proxy-hint`">
-        {{ proxyHint }}
-      </p>
-    </UFormField>
+    <BrowserProfilesProxyModeField
+      v-model:proxy-mode="proxyMode"
+      v-model:proxy-id="proxyId"
+      :test-id-prefix="testIdPrefix"
+      :pick="proxyPick"
+      :proxy-items="proxyItems"
+      :help="PROXY_MODE_HELP"
+      :error="proxyError"
+      :disabled="disabled"
+    />
 
     <UFormField label="AdsPower group" :name="`${testIdPrefix}-group`">
       <div class="flex flex-wrap items-center gap-2">
