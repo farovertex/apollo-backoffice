@@ -4,9 +4,16 @@
  * The file is parsed in the browser (assumption A1) and POSTed as JSON to `POST /backend/tiktok-accounts/batch`;
  * the API stays the source of truth for `skip` (duplicate) and `fail` (profile create / bind) per row.
  *
- * Refused here, before any request: an empty file, a header that is not exactly
- * `email,email_password,tiktok_password`, more than 1000 rows, and structurally broken rows. Those messages name
- * line numbers only — never a cell value, because a headerless file's first line is a pair of passwords.
+ * Refused here, before any request: an empty file, a header that is neither `email,email_password,tiktok_password`
+ * nor `email,email_password,tiktok_password,proxy` (FEAT-028 §7), more than 1000 rows, and structurally broken rows
+ * (a row that does not have one cell per header column). Those messages name line numbers only — never a cell
+ * value, because a headerless file's first line is a pair of passwords.
+ *
+ * FEAT-028 — the optional 4th column decides the proxy per row: an empty cell = auto-select a free proxy, a
+ * `type://[user:pass@]host:port` URL = create-or-reuse that one, no column at all = the caller's Default settings
+ * mode. The BO never validates the URL (the API answers with a row `fail` and its text). When the free-proxy pool
+ * runs dry the API stops: the triggering row is `fail`, every later row comes back `stopped` and is shown with the
+ * "Stopped" badge + the `ta-batch-stopped` summary badge, and re-uploading the same file finishes the rest.
  *
  * The result table shows the email + status + reason of every row and **no password**. `pendingFirstLogin` applies
  * to the whole file and never enqueues a login here (AC-5); the scheduler picks the marked accounts up.
@@ -109,8 +116,8 @@ async function onSubmit() {
     result.value = res
     toast.add({
       title: `Imported ${res.ok} of ${res.rows.length} accounts`,
-      description: `${res.skip} skipped · ${res.fail} failed`,
-      color: res.fail > 0 ? 'warning' : 'success'
+      description: `${res.skip} skipped · ${res.fail} failed · ${res.stopped} stopped`,
+      color: res.fail > 0 || res.stopped > 0 ? 'warning' : 'success'
     })
     emit('imported', res)
   } catch (e) {
@@ -121,15 +128,22 @@ async function onSubmit() {
 }
 
 // ── result presentation ──────────────────────────────────────────────────────────────────────────────────────────────
-const STATUS_BADGE: Record<BatchRowResult['status'], { label: string, color: 'success' | 'neutral' | 'error' }> = {
+const STATUS_BADGE: Record<BatchRowResult['status'], { label: string, color: 'success' | 'neutral' | 'warning' | 'error' }> = {
   ok: { label: 'Created', color: 'success' },
   skip: { label: 'Skipped', color: 'neutral' },
-  fail: { label: 'Failed', color: 'error' }
+  fail: { label: 'Failed', color: 'error' },
+  // FEAT-028 §6 — the row was never processed: the free-proxy pool ran dry earlier in the file
+  stopped: { label: 'Stopped', color: 'warning' }
 }
 
-/** the only `error` code the contract names is `duplicate`; anything else is already a human sentence from the API */
+/**
+ * the only `error` code the contract names is `duplicate`; a `stopped` row gets the explanation of what to do
+ * next (FEAT-028), anything else is already a human sentence from the API (`proxy in use`,
+ * `no proxy available (tried N)`, a proxy-URL parse message…) and is shown as-is
+ */
 function reasonText(row: BatchRowResult): string {
   if (row.status === 'ok') return 'Account and browser profile created'
+  if (row.status === 'stopped') return 'Stopped — no free proxy left; upload the file again to continue'
   if (row.error === 'duplicate') return 'This email already exists in the file or in the workspace'
   return row.error ?? 'No reason given'
 }
@@ -171,9 +185,15 @@ function reasonText(row: BatchRowResult): string {
             data-testid="ta-batch-file"
             @change="onFile"
           >
+          <!-- `break-all` on every mono run: at 390 px the 4-column header is wider than the modal body and
+               would be clipped at the right edge -->
           <template #help>
-            Header <span class="font-mono">{{ BATCH_CSV_HEADER.join(',') }}</span>, UTF-8, at most
+            Header <span class="font-mono break-all">{{ BATCH_CSV_HEADERS[0] }}</span>, UTF-8, at most
             {{ BATCH_CSV_MAX_ROWS }} rows. Put a password in double quotes if it contains a comma.
+            The optional last column <span class="font-mono">proxy</span>
+            (<span class="font-mono break-all">{{ BATCH_CSV_HEADERS[1] }}</span>) takes
+            <span class="font-mono break-all">type://[user:pass@]host:port</span> per row — leave a cell empty to
+            auto-select a free proxy, or omit the column to use your Default settings.
           </template>
         </UFormField>
 
@@ -229,6 +249,7 @@ function reasonText(row: BatchRowResult): string {
           :data-ok="result.ok"
           :data-skip="result.skip"
           :data-fail="result.fail"
+          :data-stopped="result.stopped"
         >
           <div class="flex flex-wrap items-center gap-1.5">
             <UBadge color="success" variant="subtle" data-testid="ta-batch-ok">
@@ -239,6 +260,9 @@ function reasonText(row: BatchRowResult): string {
             </UBadge>
             <UBadge :color="result.fail ? 'error' : 'neutral'" variant="subtle" data-testid="ta-batch-fail">
               {{ result.fail }} failed
+            </UBadge>
+            <UBadge :color="result.stopped ? 'warning' : 'neutral'" variant="subtle" data-testid="ta-batch-stopped">
+              {{ result.stopped }} stopped
             </UBadge>
           </div>
 
