@@ -9,8 +9,11 @@
  * Business Center list API, written by every successful discover run.
  * FEAT-029 (api-contract.md v1 §4): the view gains `launchingAds`, `launchingSince`, `suspendedReason`,
  * `balanceError` and `autoTopup` — all written by the system only (publish → on, kpi round → off / balance /
- * auto round); the single writable part is `autoTopup.enabled/minBalance/amount` through
- * `PATCH /advertisers/:id/auto-topup` (GOD / Payment).
+ * auto round).
+ * FEAT-030 (api-contract.md v1 §4): the auto top-up **configuration** moved to the system settings
+ * (`shared/types/settings.ts`, `GET`/`PATCH /settings/auto-topup`, GOD only). `autoTopup` on an advertiser is
+ * pure system bookkeeping now — `{ lastTriggeredAt, lastRoundId }` — and nothing in the BO writes it;
+ * `PATCH /advertisers/:id/auto-topup` is gone.
  */
 
 import type { AdvertiserReport } from './reports'
@@ -26,17 +29,11 @@ export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
 export type AdvertiserSuspendedReason = 'noDelivery'
 
 /**
- * FEAT-029 §4 — auto top-up configuration of one advertiser; always present on the view (old rows read as
- * `{ enabled: false, minBalance: null, amount: null, lastTriggeredAt: null, lastRoundId: null }`).
- * `enabled`/`minBalance`/`amount` are the only writable keys (`PATCH /advertisers/:id/auto-topup`);
- * `lastTriggeredAt` / `lastRoundId` are written by the system when it opens an auto round.
+ * FEAT-030 §4 — auto top-up **bookkeeping** of one advertiser; always present on the view (old rows read as
+ * `{ lastTriggeredAt: null, lastRoundId: null }`). Written by the system only, when it opens an auto round;
+ * the configuration (enabled / minBalance / amount / cooldown) lives in the system settings since FEAT-030.
  */
 export interface AdvertiserAutoTopup {
-  enabled: boolean
-  /** baht, integer ≥ 0 — a balance strictly below this opens a round */
-  minBalance: number | null
-  /** baht, integer ≥ `TOPUP_MIN_AMOUNT` — the amount of the round the system opens */
-  amount: number | null
   /** ISO | null — only set when a round was really created */
   lastTriggeredAt: string | null
   /** id of the round created last; null until then */
@@ -113,7 +110,7 @@ export interface Advertiser {
   balanceAt?: string | null
   /** FEAT-029 — Thai text of the last failed balance read (`อ่านยอดคงเหลือไม่ได้`); null after a success */
   balanceError?: string | null
-  /** FEAT-029 — auto top-up config; the API always sends it, optional for an older API */
+  /** FEAT-030 — auto top-up bookkeeping (`lastTriggeredAt` / `lastRoundId`); the API always sends it */
   autoTopup?: AdvertiserAutoTopup
   /**
    * FEAT-020 (AC-21) — ads-report tracking state of this advertiser, served with the list so the slideover
@@ -128,18 +125,6 @@ export interface AdvertisersResponse {
   page: number
   limit: number
   total: number
-}
-
-/**
- * FEAT-029 §5 — `PATCH /advertisers/:id/auto-topup` body (strict on the API side: all three keys, numbers).
- * 200 answers the full `Advertiser` view. Roles GOD / Payment; Admin → 403.
- */
-export interface AdvertiserAutoTopupBody {
-  enabled: boolean
-  /** integer ≥ 0 */
-  minBalance: number
-  /** integer ≥ `TOPUP_MIN_AMOUNT` */
-  amount: number
 }
 
 /** `POST /tiktok-accounts/:id/discover` 202 body. */

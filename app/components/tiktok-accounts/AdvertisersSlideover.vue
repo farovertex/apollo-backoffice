@@ -25,12 +25,12 @@
  *
  * FEAT-029 (api-contract v1 §4/§5/§7, spec "UI behaviour"): a row additionally carries
  * `data-launching` / `data-suspended-reason`, the **Launching ads · since …** badge (`ta-adv-launching`), the
- * kpi reason in the suspended tooltip, the last-read line `ta-adv-balance-at` + `ta-adv-balance-error`, and the
- * per-row **Auto top-up** block (`ta-adv-autotopup*`): a draft (switch + min balance + amount) that Save sends as
- * exactly one `PATCH /backend/advertisers/:id/auto-topup { enabled, minBalance, amount }` (numbers, `retry: 0`);
- * 200 replaces the row's `autoTopup` from the answered view, 400/403/404 render the API text in
- * `ta-adv-autotopup-error`. Client zod (integers, amount ≥ `TOPUP_MIN_AMOUNT`) blocks a bad value without a
- * request; an admin without GOD / Payment sees every control disabled.
+ * kpi reason in the suspended tooltip and the last-read line `ta-adv-balance-at` + `ta-adv-balance-error`.
+ *
+ * FEAT-030 (api-contract v1 §7, spec "UI behaviour"): the per-row auto top-up configuration is **gone** — the
+ * rule lives in the system settings (`/settings/auto-topup`, GOD only) and `PATCH /advertisers/:id/auto-topup`
+ * no longer exists. A row only reports the system's own bookkeeping now: one read-only line
+ * `ta-adv-autotopup-last` (`เติมอัตโนมัติล่าสุด <time>` / `ยังไม่เคยเติมอัตโนมัติ`), for every role.
  */
 import type { FetchError } from 'ofetch'
 import type { SlideoverProps } from '@nuxt/ui'
@@ -269,16 +269,13 @@ onUnmounted(() => {
   stopLive()
 })
 
-// ── auto top-up (FEAT-029) ───────────────────────────────────────────────────────────────────────────────────────────
+// ── launching / balance lines (FEAT-029) · auto top-up bookkeeping (FEAT-030) ────────────────────────────────────────
 const NO_DELIVERY_TIP = 'ปิดเพราะโฆษณาทั้งหมดไม่ส่งแล้ว (ตรวจจาก kpi)'
 
-/** only GOD / Payment may change money config (same rule as the Pay button, spec AS-8) */
-const canConfigureAutoTopup = computed(() => canPayTopups(viewer.value))
-
-/** the PATCH answered the whole advertiser view — only its `autoTopup` replaces what the row shows */
-function onAutoTopupSaved(updated: Advertiser) {
-  const row = items.value.find(a => a.id === updated.id)
-  if (row) row.autoTopup = updated.autoTopup
+/** FEAT-030 — read-only: when the system last opened an auto round for this advertiser */
+function autoTopupLastLine(adv: Advertiser): string {
+  const at = adv.autoTopup?.lastTriggeredAt
+  return at ? `เติมอัตโนมัติล่าสุด ${formatDateTime(at)}` : 'ยังไม่เคยเติมอัตโนมัติ'
 }
 
 /** the suspended badge explains the kpi rule when the kpi job was the one that suspended the advertiser */
@@ -596,12 +593,14 @@ function onSync() {
               </UBadge>
             </div>
 
-            <!-- FEAT-029 — auto top-up of this advertiser (GOD / Payment write, Admin reads) -->
-            <TiktokAccountsAutoTopupBlock
-              :advertiser="adv"
-              :can-configure="canConfigureAutoTopup"
-              @updated="onAutoTopupSaved"
-            />
+            <!-- FEAT-030 — read-only: when the system last topped this advertiser up (config: /settings/auto-topup) -->
+            <span
+              class="text-xs text-muted"
+              data-testid="ta-adv-autotopup-last"
+              :data-at="adv.autoTopup?.lastTriggeredAt ?? ''"
+            >
+              {{ autoTopupLastLine(adv) }}
+            </span>
             <p
               v-if="adv.topup?.status === 'readyToPay'"
               class="text-xs text-muted tabular-nums"

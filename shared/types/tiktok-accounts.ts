@@ -130,6 +130,12 @@ export interface TikTokAccount {
   launchingAds?: boolean
   /** ISO | null — when the account flag went false → true (cleared when it goes off) */
   launchingSince?: string | null
+  /**
+   * FEAT-030 §4 — `true` = the kpi job never opens an auto top-up round for any advertiser of this account.
+   * **Read-only**: no endpoint body accepts it (a human sets it directly in Mongo) and the BO shows no control
+   * for it. Optional for an API that predates the feature (missing ⇒ `false`).
+   */
+  autoTopupDisabled?: boolean
   /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
   advertiserCount: number
   /** ISO | null — time of the last discover attempt (success or failure) */
