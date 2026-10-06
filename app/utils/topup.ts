@@ -5,9 +5,11 @@
  * drift apart.
  *
  * Nothing here talks to the API and nothing invents a state: the API owns the status, the BO owns the words.
+ * FEAT-029 adds the two words of an auto round: `topupTrigger()` (missing field ⇒ `manual`) and
+ * `topupRequesterName()` (`requestedBy: null` ⇒ "ระบบ").
  */
 import type { AdminRole } from '#shared/types/auth'
-import type { TopupStatus, TopupView } from '#shared/types/topups'
+import type { TopupStatus, TopupTrigger, TopupView } from '#shared/types/topups'
 
 /** `TOPUP_MIN_AMOUNT` of the API (api-contract §1). The API's 400 body stays the authority — this is the hint. */
 export const TOPUP_MIN_AMOUNT = 400
@@ -155,6 +157,17 @@ export function topupTargetName(topup: TopupView | null | undefined): string {
   if (!topup) return ''
   if (topup.level === 'account') return topup.account?.bcOrgName || topup.account?.label || 'BC'
   return topup.advertiser?.name ?? ''
+}
+
+/** FEAT-029 — ชื่อคนขอรอบ: `requestedBy === null` ⇔ รอบที่ระบบเปิดเอง (trigger `auto`) */
+export function topupRequesterName(topup: Pick<TopupView, 'requestedBy'> | null | undefined): string {
+  if (!topup) return REPORT_DASH
+  return topup.requestedBy ? topup.requestedBy.displayName || REPORT_DASH : 'ระบบ'
+}
+
+/** FEAT-029 — `manual` for rows written before the field existed */
+export function topupTrigger(topup: Pick<TopupView, 'trigger'> | null | undefined): TopupTrigger {
+  return topup?.trigger === 'auto' ? 'auto' : 'manual'
 }
 
 /** "400.00 THB" — ยอดคงเหลือหลังบวกเงินฝากที่ตรวจผ่าน */

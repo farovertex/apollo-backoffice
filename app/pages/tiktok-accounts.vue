@@ -26,7 +26,13 @@
  * 202 `{ jobId }`, then the same 2 s account poll until that job is no longer the running one), and column **Top up**
  * (`ta-topup`: the round badge + `TopupsRowActions` with `advertiserId: null` → `POST /backend/topups/accounts`).
  * Rounds stay live through `useTopupsLive` (account-level events only) and are paid in `TopupsPayModal`.
+ * FEAT-029 (api-contract.md v1 §4/§5/§7): the Advertisers cell shows the **Launching ads** badge (`ta-launching`)
+ * of an account that has at least one launching advertiser, and the toolbar has the **Launching only** switch
+ * (`ta-filter-launching`) — on → the list is re-read as `GET /backend/tiktok-accounts?launchingAds=1`, off →
+ * without the param (one request per toggle, server-side filter per AS-12, not persisted). Search still composes
+ * client-side on top, the per-account poll is untouched. An empty filtered list renders `ta-empty-launching`.
  */
+import type { VNode } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
 import type { UseTimeAgoMessages } from '@vueuse/core'
@@ -52,12 +58,20 @@ const POLL_MS = 2000
 const api = useApi()
 const toast = useToast()
 
+// FEAT-029 — "Launching only": the filter is a server param (AS-12), so flipping the switch re-reads the list
+// exactly once; it is never persisted (every load starts with every account).
+const launchingOnly = ref(false)
+
 // `server: false`: one visible XHR per load (stubbable by QA with page.route), never blocks SSR.
 const { data, status, error, refresh } = useLazyAsyncData(
   'tiktok-accounts',
   // retry: 0 — one request per load, ofetch must not re-issue it on 5xx
-  () => api<AccountsResponse>('/tiktok-accounts', { retry: 0 }),
-  { server: false }
+  () => api<AccountsResponse>('/tiktok-accounts', {
+    retry: 0,
+    // no key at all while the switch is off — the request must stay the FEAT-003 one
+    query: launchingOnly.value ? { launchingAds: 1 } : undefined
+  }),
+  { server: false, watch: [launchingOnly] }
 )
 
 // `idle` = SSR HTML / before the client fetch starts (server: false) — show it as loading, never as "no data"
@@ -154,6 +168,23 @@ const SESSION_BADGE: Record<SessionStatus, { label: string, color: 'neutral' | '
 }
 function sessionBadge(s: SessionStatus) {
   return SESSION_BADGE[s] ?? { label: s, color: 'neutral', variant: 'subtle' }
+}
+
+// ── launching ads (FEAT-029) ─────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * UTable renders the `<tr>` itself and only lets a column add classes to it, so the row-level flag lives on
+ * `ta-row` (the Label cell wrapper, one per row) and is mirrored onto the enclosing `<tr>` from the cell's own
+ * vnode — that keeps both `[data-testid="ta-row"][data-launching]` and `tr[data-launching]` usable as selectors.
+ */
+function markRowLaunching(launching: boolean) {
+  return (vnode: VNode) => {
+    const el = vnode.el as HTMLElement | null
+    el?.closest('tr')?.setAttribute('data-launching', launching ? 'true' : 'false')
+  }
+}
+
+function launchingTitle(since: string | null | undefined): string {
+  return since ? `since ${formatDateTime(since)}` : 'since —'
 }
 
 // ── actions ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -459,9 +490,22 @@ const columns: TableColumn<TikTokAccount>[] = [
   {
     accessorKey: 'label',
     header: 'Label',
-    cell: ({ row }) => row.original.label
-      ? h('span', { class: 'font-medium text-highlighted' }, row.original.label)
-      : h('span', { class: 'text-muted' }, '—')
+    cell: ({ row }) => {
+      const a = row.original
+      const launching = a.launchingAds === true
+      return h('div', {
+        'class': 'flex min-w-0 flex-col',
+        'data-testid': 'ta-row',
+        'data-id': a.id,
+        'data-launching': launching ? 'true' : 'false',
+        'onVnodeMounted': markRowLaunching(launching),
+        'onVnodeUpdated': markRowLaunching(launching)
+      }, [
+        a.label
+          ? h('span', { class: 'font-medium text-highlighted' }, a.label)
+          : h('span', { class: 'text-muted' }, '—')
+      ])
+    }
   },
   {
     accessorKey: 'loginEmail',
@@ -609,6 +653,19 @@ const columns: TableColumn<TikTokAccount>[] = [
           'onClick': () => openAdvertisers(a)
         })
       ]
+      // FEAT-029 — at least one advertiser of this account is launching ads right now
+      if (a.launchingAds) {
+        children.push(h(UBadge, {
+          'color': 'success',
+          'variant': 'subtle',
+          'size': 'sm',
+          'icon': 'i-lucide-rocket',
+          'class': 'whitespace-nowrap',
+          'title': launchingTitle(a.launchingSince),
+          'data-testid': 'ta-launching',
+          'data-since': a.launchingSince ?? ''
+        }, () => 'Launching ads'))
+      }
       if (syncing) {
         children.push(h('span', { 'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted', 'data-testid': 'ta-adv-syncing' }, [
           h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
@@ -789,6 +846,8 @@ const errorDescription = computed<string | undefined>(() => {
   return body?.error ?? error.value.message ?? undefined
 })
 const isEmpty = computed(() => status.value === 'success' && !error.value && accounts.value.length === 0)
+// FEAT-029 — empty **because of** the filter: its own state so "No TikTok accounts yet" keeps its meaning
+const isLaunchingEmpty = computed(() => isEmpty.value && launchingOnly.value)
 const showTable = computed(() => !error.value && !isEmpty.value)
 </script>
 
@@ -837,8 +896,13 @@ const showTable = computed(() => !error.value && !isEmpty.value)
     </template>
 
     <template #body>
-      <div data-testid="ta-page" :data-status="status" class="flex flex-1 flex-col gap-4">
-        <div class="flex flex-wrap items-center gap-1.5">
+      <div
+        data-testid="ta-page"
+        :data-status="status"
+        :data-launching-only="launchingOnly ? 'true' : 'false'"
+        class="flex flex-1 flex-col gap-4"
+      >
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
           <UInput
             v-model="search"
             class="w-full sm:max-w-sm"
@@ -846,6 +910,12 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             placeholder="Search label, email, profile name or id"
             :disabled="pending"
             data-testid="ta-search"
+          />
+          <!-- FEAT-029 — server-side filter: one GET per toggle, never persisted -->
+          <USwitch
+            v-model="launchingOnly"
+            label="Launching only"
+            data-testid="ta-filter-launching"
           />
         </div>
 
@@ -871,6 +941,25 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             />
           </template>
         </UAlert>
+
+        <!-- FEAT-029 — the filter is on and no account is launching ads; the button turns the switch off -->
+        <UEmpty
+          v-else-if="isLaunchingEmpty"
+          icon="i-lucide-rocket"
+          title="No account is launching ads"
+          description="Only accounts with at least one launching advertiser are listed while the filter is on."
+          data-testid="ta-empty-launching"
+        >
+          <template #actions>
+            <UButton
+              label="Show all"
+              icon="i-lucide-list"
+              color="primary"
+              data-testid="ta-filter-launching-off"
+              @click="launchingOnly = false"
+            />
+          </template>
+        </UEmpty>
 
         <UEmpty
           v-else-if="isEmpty"

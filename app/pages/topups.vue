@@ -11,6 +11,11 @@
  * Row actions are the same component and the same semantics as the advertisers slide-over
  * (`TopupsRowActions`, `TopupsPayModal`); Admin sees badges only (D17), GOD additionally sees "ปลดการจอง".
  * A 403 (an admin with none of GOD/Payment/Admin that typed the URL) renders `tp-forbidden`, no redirect.
+ *
+ * FEAT-029 (api-contract v1 §4/§7): both tabs have a **Trigger** column (`tp-row-trigger[data-trigger]`) — an
+ * `auto` badge for a round the kpi job opened on its own, the word `manual` otherwise — and "คนขอ"
+ * (`tp-row-requested`) reads **ระบบ** when `requestedBy` is `null`. The history filters are unchanged (the API
+ * also takes `?trigger=`, which this page does not use yet).
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
@@ -403,6 +408,9 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                     สถานะ
                   </th>
                   <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                    Trigger
+                  </th>
+                  <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                     คนจอง
                   </th>
                   <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
@@ -421,7 +429,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
               </thead>
               <tbody :class="pending ? 'opacity-60' : ''">
                 <tr v-if="pending && rows.length === 0" data-testid="tp-table-loading">
-                  <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="10">
+                  <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="11">
                     กำลังโหลด…
                   </td>
                 </tr>
@@ -481,6 +489,22 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                       {{ topupBalanceText(row) }}
                     </p>
                   </td>
+                  <td
+                    class="border-b border-default px-2 py-2"
+                    data-testid="tp-row-trigger"
+                    :data-trigger="topupTrigger(row)"
+                  >
+                    <UBadge
+                      v-if="topupTrigger(row) === 'auto'"
+                      label="auto"
+                      color="info"
+                      variant="subtle"
+                      size="sm"
+                      icon="i-lucide-zap"
+                      class="whitespace-nowrap"
+                    />
+                    <span v-else class="text-xs whitespace-nowrap text-muted">manual</span>
+                  </td>
                   <td class="border-b border-default px-2 py-2 whitespace-nowrap" data-testid="tp-row-paying-by">
                     {{ row.payingBy?.displayName || REPORT_DASH }}
                   </td>
@@ -491,7 +515,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                     {{ row.status === 'paying' ? formatRemain(leaseRemainingMs(row, nowMs)) : REPORT_DASH }}
                   </td>
                   <td class="border-b border-default px-2 py-2 whitespace-nowrap" data-testid="tp-row-requested">
-                    <span class="block">{{ row.requestedBy?.displayName || REPORT_DASH }}</span>
+                    <span class="block">{{ topupRequesterName(row) }}</span>
                     <span class="block text-xs text-muted">{{ formatDateTime(row.requestedAt) }}</span>
                   </td>
                   <td class="border-b border-default px-2 py-2">

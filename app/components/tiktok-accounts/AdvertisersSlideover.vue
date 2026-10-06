@@ -22,6 +22,15 @@
  * FEAT-026 (api-contract v1 §3): `ta-adv-balance` is rendered for **every** row now (not just when non-empty) —
  * `ยอดคงเหลือ <advertiserBalanceText(adv)>` or `ยอดคงเหลือ —`, `data-has-balance`, and a `title` carrying the
  * local date-time of `balanceAt` (or "ยังไม่เคยอ่านยอด" when it was never credited).
+ *
+ * FEAT-029 (api-contract v1 §4/§5/§7, spec "UI behaviour"): a row additionally carries
+ * `data-launching` / `data-suspended-reason`, the **Launching ads · since …** badge (`ta-adv-launching`), the
+ * kpi reason in the suspended tooltip, the last-read line `ta-adv-balance-at` + `ta-adv-balance-error`, and the
+ * per-row **Auto top-up** block (`ta-adv-autotopup*`): a draft (switch + min balance + amount) that Save sends as
+ * exactly one `PATCH /backend/advertisers/:id/auto-topup { enabled, minBalance, amount }` (numbers, `retry: 0`);
+ * 200 replaces the row's `autoTopup` from the answered view, 400/403/404 render the API text in
+ * `ta-adv-autotopup-error`. Client zod (integers, amount ≥ `TOPUP_MIN_AMOUNT`) blocks a bad value without a
+ * request; an admin without GOD / Payment sees every control disabled.
  */
 import type { FetchError } from 'ofetch'
 import type { SlideoverProps } from '@nuxt/ui'
@@ -260,6 +269,31 @@ onUnmounted(() => {
   stopLive()
 })
 
+// ── auto top-up (FEAT-029) ───────────────────────────────────────────────────────────────────────────────────────────
+const NO_DELIVERY_TIP = 'ปิดเพราะโฆษณาทั้งหมดไม่ส่งแล้ว (ตรวจจาก kpi)'
+
+/** only GOD / Payment may change money config (same rule as the Pay button, spec AS-8) */
+const canConfigureAutoTopup = computed(() => canPayTopups(viewer.value))
+
+/** the PATCH answered the whole advertiser view — only its `autoTopup` replaces what the row shows */
+function onAutoTopupSaved(updated: Advertiser) {
+  const row = items.value.find(a => a.id === updated.id)
+  if (row) row.autoTopup = updated.autoTopup
+}
+
+/** the suspended badge explains the kpi rule when the kpi job was the one that suspended the advertiser */
+function statusTip(adv: Advertiser): string {
+  return adv.suspendedReason === 'noDelivery' ? NO_DELIVERY_TIP : accountStatusTip(adv.accountStatus)
+}
+
+function launchingLabel(adv: Advertiser): string {
+  return adv.launchingSince ? `Launching ads · since ${formatDateTime(adv.launchingSince)}` : 'Launching ads'
+}
+
+function balanceAtLine(adv: Advertiser): string {
+  return adv.balanceAt ? `อ่านล่าสุด ${formatDateTime(adv.balanceAt)}` : 'ยังไม่เคยอ่านยอด'
+}
+
 // ── state ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const state = computed<ListState>(() => {
   if (error.value) return 'error'
@@ -429,6 +463,8 @@ function onSync() {
             :data-advertiser-id="adv.tiktokAdvertiserId"
             :data-status="adv.status"
             :data-missing="adv.missingSince ? 'true' : 'false'"
+            :data-launching="adv.launchingAds ? 'true' : 'false'"
+            :data-suspended-reason="adv.suspendedReason ?? ''"
           >
             <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
               <span class="min-w-0 break-words font-medium text-highlighted" data-testid="ta-adv-name">{{ adv.name }}</span>
@@ -445,7 +481,20 @@ function onSync() {
                 >
                   Not seen since {{ formatDate(adv.missingSince) }}
                 </UBadge>
-                <UTooltip :text="accountStatusTip(adv.accountStatus)">
+                <UBadge
+                  v-if="adv.launchingAds"
+                  color="success"
+                  variant="subtle"
+                  size="sm"
+                  icon="i-lucide-rocket"
+                  class="whitespace-nowrap"
+                  :title="launchingLabel(adv)"
+                  data-testid="ta-adv-launching"
+                  :data-since="adv.launchingSince ?? ''"
+                >
+                  {{ launchingLabel(adv) }}
+                </UBadge>
+                <UTooltip :text="statusTip(adv)">
                   <UBadge
                     :color="statusBadge(adv.status).color"
                     variant="subtle"
@@ -516,14 +565,43 @@ function onSync() {
               <span>{{ reportLine(adv) }}</span>
             </NuxtLink>
 
-            <p
-              class="text-xs text-muted tabular-nums"
-              data-testid="ta-adv-balance"
-              :data-has-balance="advertiserBalanceText(adv) ? 'true' : 'false'"
-              :title="adv.balanceAt ? `อัปเดต ${formatDateTime(adv.balanceAt)}` : 'ยังไม่เคยอ่านยอด'"
-            >
-              ยอดคงเหลือ {{ advertiserBalanceText(adv) || '—' }}
-            </p>
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <p
+                class="text-xs text-muted tabular-nums"
+                data-testid="ta-adv-balance"
+                :data-has-balance="advertiserBalanceText(adv) ? 'true' : 'false'"
+                :title="adv.balanceAt ? `อัปเดต ${formatDateTime(adv.balanceAt)}` : 'ยังไม่เคยอ่านยอด'"
+              >
+                ยอดคงเหลือ {{ advertiserBalanceText(adv) || '—' }}
+              </p>
+              <!-- FEAT-029 — when the kpi job last read it (or that it never did) -->
+              <span
+                class="text-xs text-muted"
+                data-testid="ta-adv-balance-at"
+                :data-at="adv.balanceAt ?? ''"
+              >
+                {{ balanceAtLine(adv) }}
+              </span>
+              <UBadge
+                v-if="adv.balanceError"
+                color="warning"
+                variant="subtle"
+                size="sm"
+                icon="i-lucide-triangle-alert"
+                class="min-w-0 break-words"
+                title="อ่านล่าสุดล้ม · ยอดเดิมคงไว้"
+                data-testid="ta-adv-balance-error"
+              >
+                {{ adv.balanceError }}
+              </UBadge>
+            </div>
+
+            <!-- FEAT-029 — auto top-up of this advertiser (GOD / Payment write, Admin reads) -->
+            <TiktokAccountsAutoTopupBlock
+              :advertiser="adv"
+              :can-configure="canConfigureAutoTopup"
+              @updated="onAutoTopupSaved"
+            />
             <p
               v-if="adv.topup?.status === 'readyToPay'"
               class="text-xs text-muted tabular-nums"

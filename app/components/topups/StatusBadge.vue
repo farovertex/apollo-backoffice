@@ -3,6 +3,8 @@
  * FEAT-021 — the status badge of one round (spec table "สถานะของหนึ่งรอบ"). `ta-adv-topup-badge` in the
  * advertisers slide-over, `tp-row-status` in the `/topups` table; **every badge carries `data-status`**
  * (api-contract v1.1 §C). `paying` reads "กำลังจ่ายเงิน · <ชื่อคนจอง>".
+ * FEAT-029 §7: the badge also carries `data-trigger` (`manual` | `auto`) so a round the system opened is
+ * recognisable wherever the badge is rendered; rows from an API that predates the feature read `manual`.
  */
 import type { TopupView } from '#shared/types/topups'
 
@@ -25,6 +27,7 @@ withDefaults(defineProps<{
     class="whitespace-nowrap"
     :data-testid="testid"
     :data-status="topup.status"
+    :data-trigger="topup.trigger ?? 'manual'"
   >
     {{ topupBadgeLabel(topup) }}
   </UBadge>
