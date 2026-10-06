@@ -12,6 +12,10 @@
  * (`providerProfileId: null`, `syncedAt: null`, `runState: 'provisioning'`) or a failed one (`runState: 'error'` +
  * `provisionError`); the response gained a top-level `sync` block (the state of the `syncList` job / node) and
  * `POST /browser-profiles/sync` (`SyncResponse`) replaces the implicit sync that used to happen behind every GET.
+ * FEAT-028 v1 (api-contract §3/§4/§8): the per-admin default proxy is gone — Default settings hold a
+ * `proxyMode: 'auto' | 'none'` (`ProfileSettings`), the defaults view has 8 keys (no `proxyId`, no `proxy`), and
+ * `POST /browser-profiles/create` takes **either** `proxyMode` **or** `proxyId` (`ProfileProxyChoice`), never both
+ * and never neither. The FEAT-027 AS-1 `proxyWarning` is removed from the 201 body.
  */
 
 export interface AvailableProfileProxy {
@@ -160,10 +164,25 @@ export interface ProxyRef {
   country: string | null
 }
 
-/** fingerprint + proxy choice: the body of `PUT /browser-profile-defaults/me` and `options.systemDefault`. */
+/**
+ * FEAT-028 — proxy mode of the Default settings and of a create call: `auto` = take the oldest free proxy that
+ * passes the connectivity check (up to 5 tries), `none` = create the profile without a proxy.
+ */
+export type ProxyMode = 'auto' | 'none'
+
+/** fingerprint + proxy mode: the body of `PUT /browser-profile-defaults/me` and `options.systemDefault`. */
 export interface ProfileSettings extends ProfileFingerprint {
-  proxyId: string | null
+  /** FEAT-028 — replaces the FEAT-006 `proxyId`; the system default is `none` */
+  proxyMode: ProxyMode
 }
+
+/**
+ * FEAT-028 §4/§8 — the proxy choice of `POST /browser-profiles/create`: **exactly one** of the two keys.
+ * `proxyMode` for Auto / No proxy, `proxyId` for an explicitly picked free proxy. Sending both is a 400.
+ */
+export type ProfileProxyChoice
+  = { proxyMode: ProxyMode, proxyId?: never }
+    | { proxyId: string, proxyMode?: never }
 
 /** `GET /browser-profiles/options` 200 body — the BO hard-codes none of these lists. */
 export interface ProfileOptions {
@@ -185,43 +204,46 @@ export interface ProfileDefaultsGroup {
   tag: string
 }
 
-/** `GET /browser-profile-defaults/me` 200 body (function 2.10). */
+/**
+ * `GET /browser-profile-defaults/me` 200 body (function 2.10).
+ * FEAT-028 §3 — exactly 8 keys: `source`, `browser`, `os`, `webrtc`, `hardwareNoise`, `proxyMode`, `group`,
+ * `updatedAt`. The FEAT-006 `proxyId` and the FEAT-027 `proxy` ref are **gone** from the view.
+ */
 export interface ProfileDefaults extends ProfileSettings {
   /** `system` = no saved row yet (values = system default), `saved` = the admin saved their own set */
   source: 'system' | 'saved'
-  /** resolved `proxyId` (no credentials); null when no proxy or it is gone / not accessible */
-  proxy: ProxyRef | null
   group: ProfileDefaultsGroup
   /** ISO of the saved row, null for `source: 'system'` */
   updatedAt: string | null
 }
 
-/** `PUT /browser-profile-defaults/me` body — full replacement. */
+/** `PUT /browser-profile-defaults/me` body — full replacement; `proxyMode` is required, a `proxyId` key is ignored. */
 export type PutDefaultsBody = ProfileSettings
 
 /**
- * `POST /browser-profiles/create` body — the BO always sends every key (spec AC-9) **except** `proxyId`.
- * FEAT-027 v1.2 (BUG-030, api-contract.md §5) — `proxyId` is omitted while the Proxy field still holds the
- * caller's default (bound or not), so the API resolves it server-side and applies AS-1 instead of a 409; sent
- * only once the admin picks a different proxy or "No proxy" explicitly.
+ * `POST /browser-profiles/create` body — the BO always sends every fingerprint key (spec AC-9) plus **one**
+ * explicit proxy key (FEAT-028 §8): `proxyMode: 'auto' | 'none'` for Auto / No proxy, `proxyId` for a picked free
+ * proxy. The FEAT-027/BUG-030 "omit `proxyId` while it is still the default" rule is gone with the default proxy.
  */
-export interface CreateProfileBody extends Omit<ProfileSettings, 'proxyId'> {
-  name: string
-  proxyId?: string | null
-}
+export type CreateProfileBody = ProfileFingerprint & { name: string } & ProfileProxyChoice
+
+/**
+ * FEAT-028 — the create body of the Add-TikTok-account modal ("Create new profile automatically"): the name and the
+ * proxy choice only; every fingerprint key is resolved from the caller's Default settings server-side.
+ */
+export type CreateProfileAutoBody = { name: string } & ProfileProxyChoice
 
 /**
  * `POST /browser-profiles/create` 201 body = the `/available` item + `createdBy` / `createdAt`.
  * FEAT-024: the row is only **reserved** at this point (`providerProfileId: null`, `runState: 'provisioning'`) and
  * `jobId` is the `provider{create}` job that will fill it in.
- * FEAT-027 AS-1: `proxyWarning` is present only when no explicit `proxyId` was sent and the caller's default proxy
- * was bound to another profile — the profile is created **without** a proxy; the BO shows it as a warning toast.
+ * FEAT-028: the FEAT-027 AS-1 `proxyWarning` key is removed (there is no default proxy left to skip); an
+ * exhausted auto-select is a 409 `no proxy available (tried N)` instead.
  */
 export interface CreatedProfile extends AvailableProfile {
   createdBy: string
   createdAt: string
   jobId: string
-  proxyWarning?: string
 }
 
 /**
@@ -233,4 +255,6 @@ export interface CreateProfileErrorBody {
   kind?: 'busy' | 'unreachable' | 'permanent'
   issues?: { path: string, message: string }[]
   providerProfileId?: string
+  /** FEAT-028 §4 — connectivity checks performed before the auto-select gave up (409 `no proxy available (tried N)`) */
+  tried?: number
 }

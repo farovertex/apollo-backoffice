@@ -13,6 +13,8 @@
  * `pendingFirstLogin`; `POST /tiktok-accounts/batch` takes `BatchAccountsBody` and answers 201 `BatchAccountsResponse`.
  * `password` is the TikTok password, `emailPassword` the mailbox one — both plaintext in the account view only
  * (never logged, never screenshotted, never in a batch result row).
+ * FEAT-028 (api-contract.md v1 §6/§7): a batch row may carry an optional `proxy` (the CSV's 4th column) and the
+ * result gains the row status `stopped` + the top-level `stopped` count (the pool of free proxies ran dry).
  */
 
 import type { TopupView } from './topups'
@@ -154,6 +156,12 @@ export interface BatchAccountRow {
   loginEmail: string
   emailPassword: string
   password: string
+  /**
+   * FEAT-028 §6/§7 — present **only** when the CSV had the 4th `proxy` column: `''` (empty cell) = auto-select a
+   * free proxy for that row, a `type://[user:pass@]host:port` URL = create-or-reuse that proxy. The key is absent
+   * for a 3-column file, which means "use the caller's Default settings mode" (AS-3). No client-side URL check.
+   */
+  proxy?: string
 }
 
 /** FEAT-023 — `POST /tiktok-accounts/batch` body (§5): 1..1000 rows, one flag for the whole file. */
@@ -165,10 +173,12 @@ export interface BatchAccountsBody {
 /**
  * FEAT-023 — result of one batch row. `skip` = the email already exists in the file or in the workspace
  * (`error: 'duplicate'`), `fail` = profile create / bind failed. Never carries a password.
+ * FEAT-028 §6 — `stopped` = the row was never processed because an earlier row exhausted the free-proxy pool
+ * (`error: 'stopped: no proxy available'`); nothing was created for it, re-uploading the file continues there.
  */
 export interface BatchRowResult {
   loginEmail: string
-  status: 'ok' | 'skip' | 'fail'
+  status: 'ok' | 'skip' | 'fail' | 'stopped'
   id?: string
   error?: string
 }
@@ -178,6 +188,8 @@ export interface BatchAccountsResponse {
   ok: number
   skip: number
   fail: number
+  /** FEAT-028 §6 — rows left unprocessed after the free-proxy pool ran dry; always present, `0` when none */
+  stopped: number
   rows: BatchRowResult[]
 }
 
