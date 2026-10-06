@@ -2,22 +2,24 @@
 /**
  * FEAT-006 — Create profile (function 2.3; api-contract.md v1 `POST /browser-profiles/create`).
  * On every open: exactly one `GET /backend/browser-profiles/options`, one `GET /backend/browser-profile-defaults/me`
- * and one `GET /backend/proxies?limit=100&sort=label`, concurrently; the fields are prefilled from the defaults and
- * can be overridden for this one profile (the admin's saved defaults are not touched).
+ * and one `GET /backend/proxies?free=1&limit=100&sort=label`, concurrently; the fields are prefilled from the
+ * defaults and can be overridden for this one profile (the admin's saved defaults are not touched).
  * Submit → `POST /backend/browser-profiles/create` with the **full body**
- * `{ name, browser: { kernel: 'chrome', version }, os, webrtc, hardwareNoise, proxyId }` → 201 → close + toast +
- * `created` (the page re-requests `/browser-profiles/available` once).
+ * `{ name, browser: { kernel: 'chrome', version }, os, webrtc, hardwareNoise }` + exactly one proxy key → 201 →
+ * close + toast + `created` (the page re-requests `/browser-profiles/available` once).
  * 400 / 404 / 422 / 429 / 502 / 500 → `bp-create-error` with the API `error` text (500 also shows the
  * `providerProfileId` the provider created), the modal stays open and every typed value is kept.
  * FEAT-007 — the description (`bp-create-description`, rendered through UModal's `#description` slot so QA has a
  * precise locator) names the one configured AdsPower group (or "ungrouped") and the tag the API will derive
  * server-side (`ADMINS.username`); the create body never carries a group or a tag key.
- * FEAT-027 — the proxy picker (`useProfileSettings`) now only lists **free** proxies (`?free=1`); an explicit bound
- * `proxyId` cannot reach this form, but the caller's *default* proxy can still be bound to another profile meanwhile
- * (AS-1) — the 201 body then carries `proxyWarning`, shown as a separate warning toast after the success toast.
- * FEAT-027 v1.2 (BUG-030) — the create body uses `settings.createSettings()`, which **omits** `proxyId` while the
- * field still holds the caller's default (bound or not), so a bound default reaches AS-1 instead of a 409; the
- * field shows that default by label (never a raw id) with an "in use" hint (`bp-create-proxy-hint`).
+ * FEAT-027 — the proxy picker (`useProfileSettings`) only lists **free** proxies (`?free=1`): an explicit bound
+ * `proxyId` cannot reach this form.
+ * FEAT-028 (api-contract.md v1 §4/§8) — the Proxy field is the three-item radio `bp-create-proxy-mode` prefilled
+ * from `defaults.proxyMode`; the body carries **exactly one** proxy key (`settings.createSettings()`):
+ * `proxyMode: 'auto' | 'none'` for Auto / No proxy, `proxyId` for Pick. Pick with nothing chosen blocks submit with
+ * the form error "Choose a proxy" and sends nothing. A 409 (`no proxy available (tried N)`, or the FEAT-027 bound
+ * 409) renders in `bp-create-error` with the API text while the modal stays open; the AS-1 `proxyWarning` toast and
+ * `bp-create-proxy-hint` are gone.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -36,12 +38,7 @@ const modalContent = { 'data-testid': 'bp-create-modal' } as ModalProps['content
 const api = useApi()
 const toast = useToast()
 const settings = useProfileSettings()
-const { options, defaults, form, loading, loaded, loadError, proxyItems, proxyDefaultHint } = settings
-
-// FEAT-027 v1.2 (BUG-030) — shown under the Proxy field while it still holds a bound default
-const proxyHint = computed(() =>
-  proxyDefaultHint.value ? 'Default proxy in use by another profile — profile will be created without proxy.' : null
-)
+const { options, defaults, form, loading, loaded, loadError, proxyItems, proxyPickMissing } = settings
 
 const schema = z.object({
   name: z.string({ error: 'Name is required' })
@@ -58,6 +55,10 @@ const formRef = useTemplateRef<Form<Schema>>('formRef')
 const state = reactive<{ name: string }>({ name: '' })
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
+// FEAT-028 — set by a submit attempt with "Pick a free proxy" selected and nothing picked; the message disappears
+// again as soon as a proxy (or another mode) is chosen
+const proxySubmitted = ref(false)
+const proxyError = computed(() => (proxySubmitted.value && proxyPickMissing.value ? PROXY_PICK_REQUIRED : null))
 
 const groupName = computed(() => defaults.value?.group.name ?? null)
 const tag = computed(() => defaults.value?.group.tag ?? '')
@@ -72,6 +73,7 @@ watch(open, (isOpen) => {
   state.name = ''
   submitError.value = null
   submitting.value = false
+  proxySubmitted.value = false
   if (isOpen) void settings.load()
 })
 
@@ -90,6 +92,11 @@ function errorState(e: unknown): { title: string, description?: string } {
 
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value || !loaded.value) return
+  // FEAT-028 — "Pick a free proxy" without a proxy is a form error, not a request
+  if (proxyPickMissing.value) {
+    proxySubmitted.value = true
+    return
+  }
   submitting.value = true
   submitError.value = null
   const body: CreateProfileBody = { name: event.data.name, ...settings.createSettings() }
@@ -98,8 +105,6 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     const profile = await api<CreatedProfile>('/browser-profiles/create', { method: 'POST', body, retry: 0 })
     open.value = false
     toast.add({ title: 'Profile created', description: profile.name, color: 'success' })
-    // FEAT-027 AS-1: the default proxy was bound to another profile — created without one, surfaced as a warning
-    if (profile.proxyWarning) toast.add({ title: profile.proxyWarning, color: 'warning', icon: 'i-lucide-triangle-alert' })
     emit('created', profile)
   } catch (e) {
     submitError.value = errorState(e)
@@ -151,8 +156,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           v-model="form"
           test-id-prefix="bp-create"
           :options="options"
+          :proxy-pick="true"
           :proxy-items="proxyItems"
-          :proxy-hint="proxyHint"
+          :proxy-error="proxyError"
           :group="defaults?.group ?? null"
           :disabled="submitting"
         />

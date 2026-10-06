@@ -2,16 +2,27 @@
  * FEAT-023 — client-side CSV parsing for the batch upload modal (assumption A1: the BO parses the file in the
  * browser and POSTs JSON; the API stays the source of truth for duplicate / fail per row).
  *
- * Rules from spec.md + api-contract.md v1 §5:
- * - header must be exactly `email,email_password,tiktok_password` (case-sensitive, surrounding spaces ignored)
+ * Rules from spec.md + api-contract.md v1 §5 (FEAT-028 §7 added the optional 4th column):
+ * - the header must be exactly `email,email_password,tiktok_password` **or**
+ *   `email,email_password,tiktok_password,proxy` (case-sensitive, that order, surrounding spaces ignored)
+ * - every row has exactly as many cells as the header; with the 4th column an **empty** proxy cell is allowed and
+ *   means "auto-select a free proxy", while a 3-column file sends no `proxy` key at all (FEAT-028 AS-3: the
+ *   caller's Default settings mode decides)
  * - 1..1000 data rows; an empty file or a bigger one is refused here, before any request
  * - unquoted cells are trimmed, quoted cells are kept verbatim so a password may contain `,` or a leading space
+ * - the proxy cell is passed through as typed (trimmed, never validated here — the API owns the URL rules)
  * - no error message ever repeats a cell value — a headerless file's first line *is* a pair of passwords
  */
 import type { BatchAccountRow } from '#shared/types/tiktok-accounts'
 
 /** CSV columns, in order, as the human agreed them. `email` → `loginEmail`, `tiktok_password` → `password`. */
 export const BATCH_CSV_HEADER = ['email', 'email_password', 'tiktok_password'] as const
+
+/** FEAT-028 §7 — the accepted 4-column header; `proxy` is always last. */
+export const BATCH_CSV_HEADER_PROXY = [...BATCH_CSV_HEADER, 'proxy'] as const
+
+/** both accepted headers, as the help text and the error message print them */
+export const BATCH_CSV_HEADERS = [BATCH_CSV_HEADER.join(','), BATCH_CSV_HEADER_PROXY.join(',')] as const
 
 export const BATCH_CSV_MAX_ROWS = 1000
 
@@ -107,13 +118,17 @@ export function parseBatchCsv(raw: string): BatchCsvResult {
 
   const records = parseRecords(text)
   const header = records[0]
-  if (!header || header.cells.join(',') !== BATCH_CSV_HEADER.join(',')) {
+  const headerText = header?.cells.join(',')
+  // FEAT-028 §7 — the `proxy` column is optional, but when it is there every row must have the 4th cell
+  const withProxy = headerText === BATCH_CSV_HEADERS[1]
+  if (!withProxy && headerText !== BATCH_CSV_HEADERS[0]) {
     return {
       ok: false,
-      error: `The first line must be exactly "${BATCH_CSV_HEADER.join(',')}".`,
+      error: `The first line must be exactly "${BATCH_CSV_HEADERS[0]}" or "${BATCH_CSV_HEADERS[1]}".`,
       detail: 'Column names are case-sensitive and must be in that order — download the template to get them right.'
     }
   }
+  const columns = withProxy ? BATCH_CSV_HEADER_PROXY.length : BATCH_CSV_HEADER.length
 
   const body = records.slice(1)
   if (body.length === 0) {
@@ -132,14 +147,17 @@ export function parseBatchCsv(raw: string): BatchCsvResult {
   const incomplete: number[] = []
   const tooLong: number[] = []
   for (const record of body) {
-    const [email = '', emailPassword = '', password = ''] = record.cells
+    const [email = '', emailPassword = '', password = '', proxy = ''] = record.cells
     const loginEmail = email.trim().toLowerCase()
-    if (record.cells.length !== BATCH_CSV_HEADER.length || !emailPassword || !password) {
+    if (record.cells.length !== columns || !emailPassword || !password) {
       incomplete.push(record.line)
     } else if (!isEmail(loginEmail)) {
       badEmail.push(record.line)
     } else if (emailPassword.length > 128 || password.length > 128) {
       tooLong.push(record.line)
+    } else if (withProxy) {
+      // FEAT-028 §7 — `''` (empty cell) means auto-select; the key exists only for a 4-column file
+      rows.push({ loginEmail, emailPassword, password, proxy: proxy.trim() })
     } else {
       rows.push({ loginEmail, emailPassword, password })
     }
@@ -148,7 +166,7 @@ export function parseBatchCsv(raw: string): BatchCsvResult {
   if (incomplete.length) {
     return {
       ok: false,
-      error: `${incomplete.length} row${incomplete.length > 1 ? 's are' : ' is'} incomplete — every row needs all three columns.`,
+      error: `${incomplete.length} row${incomplete.length > 1 ? 's are' : ' is'} incomplete — every row needs all ${withProxy ? 'four' : 'three'} columns.`,
       detail: lineList(incomplete)
     }
   }

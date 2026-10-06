@@ -1,15 +1,15 @@
 <script setup lang="ts">
 /**
  * FEAT-006 — Default settings per admin (function 2.10; api-contract.md v1 `/browser-profile-defaults/me`).
- * On every open: exactly one `GET /backend/browser-profiles/options`, one `GET /backend/browser-profile-defaults/me`
- * and one `GET /backend/proxies?limit=100&sort=label`, issued concurrently (`useProfileSettings().load()`), skeleton
- * until all three resolved.
+ * On every open: exactly **two** GETs, issued concurrently (`useProfileSettings({ loadProxies: false }).load()`) —
+ * `GET /backend/browser-profiles/options` and `GET /backend/browser-profile-defaults/me` — skeleton until both
+ * resolved. FEAT-028 AC-8: no proxy list is requested here any more; the Proxy field is a two-item radio.
  * Save → `PUT …/me` with the full body → 200 → toast + badge "Saved" (the slideover stays open).
  * Reset to system default → `DELETE …/me` → 204 → one re-`GET …/me` → the form shows the system values again.
- * A 400 / 404 on save is shown in `bp-defaults-error` and every typed value is kept.
- * FEAT-027 v1.2 (BUG-030) — the saved default's proxy can be bound to another profile; the field then shows it by
- * label (never a raw id) with an "in use" hint (`bp-defaults-proxy-hint`), and Save keeps sending the unchanged id
- * (api-contract.md v1.2 §6: a 409 only fires when the id actually changed to a bound one).
+ * A 400 on save is shown in `bp-defaults-error` and every typed value is kept.
+ * FEAT-028 (api-contract.md v1 §3) — the per-admin default proxy is replaced by `proxyMode`: the radio
+ * `bp-defaults-proxy-mode` holds "Auto" or "No proxy", Save sends `proxyMode` and never a `proxyId` key, and
+ * `bp-defaults-proxy` / `bp-defaults-proxy-hint` no longer exist (there is no 409 on this endpoint any more).
  */
 import type { SlideoverProps } from '@nuxt/ui'
 import type { ProfileDefaults } from '#shared/types/browser-profiles'
@@ -18,11 +18,9 @@ const open = defineModel<boolean>('open', { default: false })
 
 const api = useApi()
 const toast = useToast()
-const settings = useProfileSettings()
-const { options, defaults, form, loading, loaded, loadError, proxyItems, proxyDefaultHint } = settings
-
-// FEAT-027 v1.2 (BUG-030) — shown under the Proxy field while it still holds a bound default
-const proxyHint = computed(() => (proxyDefaultHint.value ? 'Default proxy in use by another profile.' : null))
+// FEAT-028 AC-8 — no `/proxies` GET on this surface: the Proxy field is a radio without a picker
+const settings = useProfileSettings({ loadProxies: false })
+const { options, defaults, form, loading, loaded, loadError } = settings
 
 const saving = ref(false)
 const resetting = ref(false)
@@ -140,8 +138,7 @@ async function resetToSystem() {
           v-model="form"
           test-id-prefix="bp-defaults"
           :options="options"
-          :proxy-items="proxyItems"
-          :proxy-hint="proxyHint"
+          :proxy-pick="false"
           :group="defaults?.group ?? null"
           :disabled="busy"
         />
