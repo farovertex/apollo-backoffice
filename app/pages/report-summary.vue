@@ -46,7 +46,7 @@ const page = computed(() => {
   const n = Number(route.query.page)
   return Number.isInteger(n) && n > 0 ? n : 1
 })
-const sort = computed(() => queryString('sort') ?? DEFAULT_SORT)
+const sort = computed(() => parseAdsSort(queryString('sort')))
 const gsort = computed(() => queryString('gsort') ?? DEFAULT_SORT)
 const workspaceId = computed(() => queryString('workspaceId') ?? 'all')
 const accountId = computed(() => queryString('tiktokAccountId') ?? 'all')
