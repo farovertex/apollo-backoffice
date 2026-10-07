@@ -19,18 +19,19 @@
  * `data-state` = never|on|off|error) — it comes with the list view (AC-21), so no extra request — and links
  * to `/reports?advertiserId=<id>`. The link is rendered for GOD/Admin only, like the Reports nav item.
  *
- * FEAT-026 (api-contract v1 §3): `ta-adv-balance` is rendered for **every** row now (not just when non-empty) —
- * `ยอดคงเหลือ <advertiserBalanceText(adv)>` or `ยอดคงเหลือ —`, `data-has-balance`, and a `title` carrying the
- * local date-time of `balanceAt` (or "ยังไม่เคยอ่านยอด" when it was never credited).
- *
  * FEAT-029 (api-contract v1 §4/§5/§7, spec "UI behaviour"): a row additionally carries
- * `data-launching` / `data-suspended-reason`, the **Launching ads · since …** badge (`ta-adv-launching`), the
- * kpi reason in the suspended tooltip and the last-read line `ta-adv-balance-at` + `ta-adv-balance-error`.
+ * `data-launching` / `data-suspended-reason` and the **Launching ads · since …** badge (`ta-adv-launching`), the
+ * kpi reason shown in the suspended tooltip.
  *
- * FEAT-030 (api-contract v1 §7, spec "UI behaviour"): the per-row auto top-up configuration is **gone** — the
- * rule lives in the system settings (`/settings/auto-topup`, GOD only) and `PATCH /advertisers/:id/auto-topup`
- * no longer exists. A row only reports the system's own bookkeeping now: one read-only line
- * `ta-adv-autotopup-last` (`เติมอัตโนมัติล่าสุด <time>` / `ยังไม่เคยเติมอัตโนมัติ`), for every role.
+ * FEAT-030 (api-contract v1 §7, spec "UI behaviour"): the auto top-up configuration lives in the system
+ * settings (`/settings/auto-topup`, GOD only); `PATCH /advertisers/:id/auto-topup` no longer exists.
+ *
+ * FEAT-034 (api-contract v1 §4, spec "UI behaviour" AC-18) — the balance block (`ta-adv-balance`,
+ * `ta-adv-balance-at`, `ta-adv-balance-error`) and the auto top-up bookkeeping line (`ta-adv-autotopup-last`)
+ * are **gone**: TikTok keeps one shared cash balance per Business Center and it is shown only on the TikTok
+ * account (`/tiktok-accounts` `ta-balance` / `ta-autotopup-last`). A row keeps its badges, the report link,
+ * `ta-adv-topup-qr-remain` / `ta-adv-topup-lease-remain` / `ta-adv-topup-check-info` and the per-advertiser
+ * top-up actions unchanged — the manual top-up button is a different entry point to the same wallet.
  */
 import type { FetchError } from 'ofetch'
 import type { SlideoverProps } from '@nuxt/ui'
@@ -269,14 +270,8 @@ onUnmounted(() => {
   stopLive()
 })
 
-// ── launching / balance lines (FEAT-029) · auto top-up bookkeeping (FEAT-030) ────────────────────────────────────────
+// ── launching line (FEAT-029) ────────────────────────────────────────────────────────────────────────────────────────
 const NO_DELIVERY_TIP = 'ปิดเพราะโฆษณาทั้งหมดไม่ส่งแล้ว (ตรวจจาก kpi)'
-
-/** FEAT-030 — read-only: when the system last opened an auto round for this advertiser */
-function autoTopupLastLine(adv: Advertiser): string {
-  const at = adv.autoTopup?.lastTriggeredAt
-  return at ? `เติมอัตโนมัติล่าสุด ${formatDateTime(at)}` : 'ยังไม่เคยเติมอัตโนมัติ'
-}
 
 /** the suspended badge explains the kpi rule when the kpi job was the one that suspended the advertiser */
 function statusTip(adv: Advertiser): string {
@@ -285,10 +280,6 @@ function statusTip(adv: Advertiser): string {
 
 function launchingLabel(adv: Advertiser): string {
   return adv.launchingSince ? `Launching ads · since ${formatDateTime(adv.launchingSince)}` : 'Launching ads'
-}
-
-function balanceAtLine(adv: Advertiser): string {
-  return adv.balanceAt ? `อ่านล่าสุด ${formatDateTime(adv.balanceAt)}` : 'ยังไม่เคยอ่านยอด'
 }
 
 // ── state ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -562,45 +553,6 @@ function onSync() {
               <span>{{ reportLine(adv) }}</span>
             </NuxtLink>
 
-            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <p
-                class="text-xs text-muted tabular-nums"
-                data-testid="ta-adv-balance"
-                :data-has-balance="advertiserBalanceText(adv) ? 'true' : 'false'"
-                :title="adv.balanceAt ? `อัปเดต ${formatDateTime(adv.balanceAt)}` : 'ยังไม่เคยอ่านยอด'"
-              >
-                ยอดคงเหลือ {{ advertiserBalanceText(adv) || '—' }}
-              </p>
-              <!-- FEAT-029 — when the kpi job last read it (or that it never did) -->
-              <span
-                class="text-xs text-muted"
-                data-testid="ta-adv-balance-at"
-                :data-at="adv.balanceAt ?? ''"
-              >
-                {{ balanceAtLine(adv) }}
-              </span>
-              <UBadge
-                v-if="adv.balanceError"
-                color="warning"
-                variant="subtle"
-                size="sm"
-                icon="i-lucide-triangle-alert"
-                class="min-w-0 break-words"
-                title="อ่านล่าสุดล้ม · ยอดเดิมคงไว้"
-                data-testid="ta-adv-balance-error"
-              >
-                {{ adv.balanceError }}
-              </UBadge>
-            </div>
-
-            <!-- FEAT-030 — read-only: when the system last topped this advertiser up (config: /settings/auto-topup) -->
-            <span
-              class="text-xs text-muted"
-              data-testid="ta-adv-autotopup-last"
-              :data-at="adv.autoTopup?.lastTriggeredAt ?? ''"
-            >
-              {{ autoTopupLastLine(adv) }}
-            </span>
             <p
               v-if="adv.topup?.status === 'readyToPay'"
               class="text-xs text-muted tabular-nums"

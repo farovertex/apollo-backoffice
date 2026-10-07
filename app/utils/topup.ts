@@ -181,16 +181,6 @@ export function topupBalanceText(topup: TopupView | null | undefined): string {
   return balanceText(topup?.balanceAmount, topup?.balanceCurrency)
 }
 
-/** ยอดที่โชว์บนแถว advertiser — รอบที่เพิ่ง paid มาก่อน ไม่งั้นใช้ยอดสะสมบนแถว */
-export function advertiserBalanceText(adv: {
-  balanceAmount?: string | null
-  balanceCurrency?: string | null
-  topup?: TopupView | null
-}): string {
-  if (adv.topup?.status === 'paid' && adv.topup.balanceAmount) return topupBalanceText(adv.topup)
-  return balanceText(adv.balanceAmount, adv.balanceCurrency)
-}
-
 /** integer baht ≥ `TOPUP_MIN_AMOUNT`; the message mirrors the API's 400 text (api-contract §4) */
 export function topupAmountError(amount: number | undefined | null): string | null {
   if (amount === undefined || amount === null || Number.isNaN(amount)) return 'กรอกจำนวนเงิน'
