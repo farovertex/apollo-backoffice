@@ -28,7 +28,10 @@
 import type { TableColumn } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
 import { getPaginationRowModel } from '@tanstack/table-core'
+import { formatTimeAgo } from '@vueuse/core'
+import type { UseTimeAgoMessages } from '@vueuse/core'
 import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, ForceCloseResponse, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
+import type { ProviderNodeView, ProviderNodesResponse } from '#shared/types/provider-nodes'
 import type { ProfilesPollReason } from '~/composables/useProfilesPoll'
 
 useSeoMeta({ title: 'Browser profiles' })
@@ -250,6 +253,57 @@ watch([syncRunning, provisioningCount, forceClosingCount], () => {
   if (forceClosingCount.value > 0) reasons.push('forceClose')
   poll.track(reasons)
 }, { immediate: true })
+
+// ── provider nodes (FEAT-031, api-contract §4.1/§7) ─────────────────────────────────────────────────────────────────
+/** secondary information under `bp-synced`: never blocks or toasts — a down node registry must not hide the table */
+const nodesState = ref<'loading' | 'ready' | 'error'>('loading')
+const nodes = ref<ProviderNodeView[]>([])
+
+/** `GET /backend/provider-nodes`, `retry: 0` — called on load, on the Refresh button and once a sync job finishes;
+ * never from the 2 s sync/provisioning/forceClose poll (api-contract §7 request count). */
+async function loadNodes() {
+  nodesState.value = 'loading'
+  try {
+    const res = await api<ProviderNodesResponse>('/provider-nodes', { retry: 0 })
+    nodes.value = res.nodes
+    nodesState.value = 'ready'
+  } catch {
+    // no toast, no alert, no console error — the footer chip is secondary information (spec "UI behaviour")
+    nodes.value = []
+    nodesState.value = 'error'
+  }
+}
+if (import.meta.client) void loadNodes()
+
+// "after a sync finishes" = the running → idle transition, not every poll tick that still sees `running`
+watch(syncRunning, (running, wasRunning) => {
+  if (wasRunning && !running) void loadNodes()
+})
+
+const nodesNow = useNow({ interval: 30_000 })
+const NODE_AGO_MESSAGES: UseTimeAgoMessages = {
+  justNow: 'just now',
+  past: n => n.match(/\d/) ? `${n} ago` : n,
+  future: n => n.match(/\d/) ? `in ${n}` : n,
+  invalid: '—',
+  second: n => `${n}s`,
+  minute: n => `${n}m`,
+  hour: n => `${n}h`,
+  day: n => `${n}d`,
+  week: n => `${n}w`,
+  month: n => `${n}mo`,
+  year: n => `${n}y`
+}
+/** `<id> · <timeAgo(lastHeartbeatAt)>` per instance, joined with ` · ` — the `bp-node` tooltip (api-contract §7) */
+function nodeTooltip(node: ProviderNodeView): string {
+  return node.instances
+    .map((inst) => {
+      const d = new Date(inst.lastHeartbeatAt)
+      const ago = Number.isNaN(d.getTime()) ? '—' : formatTimeAgo(d, { messages: NODE_AGO_MESSAGES }, nodesNow.value)
+      return `${inst.id} · ${ago}`
+    })
+    .join(' · ')
+}
 
 /** `POST /backend/browser-profiles/sync` — exactly one request per click, then the poll takes over */
 async function syncNow() {
@@ -540,7 +594,7 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
             :loading="pending"
             :ui="{ label: 'hidden sm:inline' }"
             data-testid="bp-refresh"
-            @click="refresh()"
+            @click="() => { refresh(); loadNodes() }"
           />
           <!-- FEAT-024: the explicit profile-list sync (the GET above no longer touches AdsPower) -->
           <UButton
@@ -711,6 +765,24 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
               :title="syncedAt ?? 'Never synced'"
               data-testid="bp-synced"
             >Synced {{ syncedAt ? syncedAgo : '—' }}</span>
+            <!-- FEAT-031: node chips (per-instance heartbeat) — secondary info, hidden while loading/error -->
+            <span
+              data-testid="bp-nodes"
+              :data-state="nodesState"
+              class="inline-flex flex-wrap items-center gap-x-3 gap-y-1"
+            >
+              <span
+                v-for="node in nodes"
+                :key="node.id"
+                data-testid="bp-node"
+                :data-node="node.name"
+                :data-alive="node.alive ? 'true' : 'false'"
+                :data-alive-instances="node.aliveInstances"
+                :data-instances="node.instanceCount"
+                :class="node.alive ? 'text-success' : 'text-error'"
+                :title="nodeTooltip(node)"
+              >{{ node.name }} · {{ node.aliveInstances }}/{{ node.instanceCount }} workers</span>
+            </span>
             <!-- FEAT-024: state of the sync job + the node's last sync error, next to / under Synced -->
             <span
               v-if="syncing"

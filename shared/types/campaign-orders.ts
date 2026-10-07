@@ -191,6 +191,8 @@ export interface BuildView {
   startedAt: string | null
   finishedAt: string | null
   createdAt: string
+  /** FEAT-031 — WORKER_INSTANCE of the process that ran this build's job; `null` before it starts or without a job */
+  workerInstance: string | null
 }
 
 /** `POST /campaign-orders` 201 body. */

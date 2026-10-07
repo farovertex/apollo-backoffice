@@ -694,7 +694,16 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                         <span data-testid="od-build-step">{{ stepCell(build) }}</span>
                       </td>
                       <td class="border-b border-default px-3 py-2">
-                        <span class="whitespace-nowrap" :title="build.startedAt ?? ''">{{ timeAgo(build.startedAt) }}</span>
+                        <div class="flex flex-col">
+                          <span class="whitespace-nowrap" :title="build.startedAt ?? ''">{{ timeAgo(build.startedAt) }}</span>
+                          <!-- FEAT-031: WORKER_INSTANCE that ran this build's job; absent when `workerInstance` is null -->
+                          <span
+                            v-if="typeof build.workerInstance === 'string'"
+                            class="whitespace-nowrap text-xs text-muted"
+                            data-testid="od-build-worker"
+                            :data-instance="build.workerInstance"
+                          >{{ build.workerInstance }}</span>
+                        </div>
                       </td>
                       <td class="border-b border-default px-3 py-2">
                         <span class="whitespace-nowrap" :title="build.finishedAt ?? ''">{{ timeAgo(build.finishedAt) }}</span>

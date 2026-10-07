@@ -143,6 +143,13 @@ const stepText = computed<string>(() => {
 
 const errorText = computed(() => loginErrorText(account.value?.lastLoginError))
 
+// FEAT-031 — `on <id>` under the step text while an active login job carries a WORKER_INSTANCE (`ta-login-worker`)
+const loginWorkerInstance = computed<string | null>(() => {
+  const job = account.value?.runningJob
+  if (!job || job.type !== 'login') return null
+  return job.workerInstance
+})
+
 // ── otp task (one GET per task id) ───────────────────────────────────────────────────────────────────────────────────
 const task = ref<HumanTask | null>(null)
 const taskPending = ref(false)
@@ -361,6 +368,9 @@ onUnmounted(() => {
           <div class="min-w-0">
             <p class="text-sm font-medium text-highlighted" data-testid="ta-login-step">
               {{ stepText }}
+            </p>
+            <p v-if="loginWorkerInstance" class="text-xs text-muted" data-testid="ta-login-worker">
+              on {{ loginWorkerInstance }}
             </p>
             <p class="text-xs text-muted">
               You can close this window, the login keeps running.
