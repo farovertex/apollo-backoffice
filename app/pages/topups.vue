@@ -16,6 +16,12 @@
  * `auto` badge for a round the kpi job opened on its own, the word `manual` otherwise — and "คนขอ"
  * (`tp-row-requested`) reads **ระบบ** when `requestedBy` is `null`. The history filters are unchanged (the API
  * also takes `?trigger=`, which this page does not use yet).
+ *
+ * FEAT-033 (api-contract v1 §5/§7): the navbar starts with the per-admin QR sound switch (`tp-sound-toggle`) and
+ * the test button (`tp-sound-test`), the page body carries the one `<audio>` element, and `tp-page` publishes the
+ * detector's state (`data-sound`, `data-sound-events`, `data-sound-played`, `data-sound-blocked`). All of it lives
+ * in `useTopupQrSound`, wired to the **active** rows of `useTopupsLive`, so the sound exists on this page only (G-6)
+ * and both tabs share it (the stream runs on both).
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
@@ -56,6 +62,27 @@ const {
   start: startLive,
   stop: stopLive
 } = useTopupsLive({ workspaceId: liveWorkspaceId })
+
+// ── QR-ready sound (FEAT-033) ────────────────────────────────────────────────────────────────────────────────────────
+const {
+  audioRef: soundAudio,
+  enabled: soundEnabled,
+  state: soundState,
+  busy: soundBusy,
+  events: soundEvents,
+  played: soundPlayed,
+  blocked: soundBlocked,
+  toggle: toggleSound,
+  test: testSound,
+  observe: observeSound
+} = useTopupQrSound()
+
+/** `/sounds/topup-sound.mp3`, the file already tracked on `main` (G-1) */
+const soundSrc = TOPUP_SOUND_SRC
+
+// the active rows are the live set the admin is looking at (workspace filter included, G-5); watching them covers
+// the SSE upserts, the `ready` refetch, every poll tick and `tp-refresh` alike (F2)
+observeSound(activeRows, activeLoaded)
 
 // ── history ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 const historyRows = ref<TopupView[]>([])
@@ -242,6 +269,33 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
         </template>
 
         <template #right>
+          <!-- FEAT-033 §7 — the switch is a toggle button (no USwitch): `aria-pressed` + the icon are the state -->
+          <UButton
+            v-if="!forbidden"
+            label="เสียง"
+            aria-label="เสียงแจ้งเตือน QR"
+            :icon="soundEnabled ? 'i-lucide-volume-2' : 'i-lucide-volume-x'"
+            :color="soundEnabled ? 'primary' : 'neutral'"
+            :variant="soundEnabled ? 'solid' : 'outline'"
+            :aria-pressed="soundEnabled ? 'true' : 'false'"
+            :data-enabled="soundEnabled ? 'true' : 'false'"
+            :disabled="soundState === 'loading' || soundBusy"
+            :ui="{ label: 'hidden sm:inline' }"
+            data-testid="tp-sound-toggle"
+            @click="toggleSound()"
+          />
+          <UButton
+            v-if="!forbidden"
+            label="ทดสอบเสียง"
+            aria-label="ทดสอบเสียง"
+            icon="i-lucide-play"
+            color="neutral"
+            variant="outline"
+            :disabled="soundState === 'loading'"
+            :ui="{ label: 'hidden sm:inline' }"
+            data-testid="tp-sound-test"
+            @click="testSound()"
+          />
           <UBadge
             v-if="!forbidden"
             :color="liveMode === 'live' ? 'success' : liveMode === 'polling' ? 'warning' : 'neutral'"
@@ -252,7 +306,13 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
             :data-mode="liveMode"
           >
             <UIcon :name="liveMode === 'live' ? 'i-lucide-radio' : 'i-lucide-refresh-cw'" class="size-3.5 shrink-0" />
-            {{ LIVE_LABEL[liveMode] }}
+            <!--
+              FEAT-033 — the two sound controls made the right group 92 px wider, which pushed the navbar title into
+              an ellipsis at 390 px. The badge keeps its colour, its icon, `data-testid="tp-live"` and `data-mode`
+              (what FEAT-021 asserts); only the wordy Thai label follows the same `hidden sm:inline` rule as every
+              other navbar label here.
+            -->
+            <span class="hidden sm:inline">{{ LIVE_LABEL[liveMode] }}</span>
           </UBadge>
           <UButton
             v-if="!forbidden && canPayTopups(viewer)"
@@ -281,7 +341,15 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
     </template>
 
     <template #body>
-      <div data-testid="tp-page" :data-tab="tab" class="flex flex-1 flex-col gap-4">
+      <div
+        data-testid="tp-page"
+        :data-tab="tab"
+        :data-sound="soundState"
+        :data-sound-events="soundEvents"
+        :data-sound-played="soundPlayed"
+        :data-sound-blocked="soundBlocked ? 'true' : 'false'"
+        class="flex flex-1 flex-col gap-4"
+      >
         <UAlert
           v-if="forbidden"
           color="error"
@@ -564,6 +632,19 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
         @expired="onLeaseExpired"
       />
       <TopupsBulkAccountModal v-model:open="bulkOpen" @created="onCreated" />
+
+      <!--
+        FEAT-033 — the one sound source of the page: an element (not `new Audio()`), so it is removed with the page
+        and nothing can sound after a route change (G-6). `preload="auto"` keeps the first real alert instant (AS-9).
+      -->
+      <audio
+        ref="soundAudio"
+        data-testid="tp-sound-audio"
+        :src="soundSrc"
+        preload="auto"
+        aria-hidden="true"
+        class="hidden"
+      />
     </template>
   </UDashboardPanel>
 </template>
