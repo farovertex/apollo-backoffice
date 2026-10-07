@@ -8,10 +8,10 @@
  * opened with a click or Enter; the scroll happens in the wrapper, never on the page (AC-28).
  * A row whose `metrics` is `null` replaces the seven metric cells with one `rp-row-nodata` cell.
  *
- * FEAT-029 (api-contract v1 §4/§7): the Advertiser cell gains `rp-row-balance` — the balance the kpi job last
- * read (`<amount> <currency> · <timeAgoTh>`, `—` when it never read one, ` · ⚠ <balanceError>` after a failed
- * read) with the full timestamp in `title`. The cell only exists in the full table: the order Report tab runs
- * this component with `compact`, which hides the Order and Advertiser columns altogether.
+ * FEAT-034 (api-contract v1 §4) — the balance moved off the advertiser entirely (one shared cash balance per
+ * Business Center, shown only on the TikTok account): the Advertiser cell's `rp-row-balance` line is gone.
+ * The cell only exists in the full table: the order Report tab runs this component with `compact`, which
+ * hides the Order and Advertiser columns altogether.
  */
 import type { AdReportRow, ReportSortField } from '#shared/types/reports'
 
@@ -62,17 +62,6 @@ function toggleSort(field: ReportSortField) {
 }
 
 const columnCount = computed(() => (props.compact ? 11 : 13))
-
-/**
- * FEAT-029 — "950.00 THB · 3 นาทีที่แล้ว" / "—", with " · ⚠ <error>" appended when the last read failed.
- * The amount is printed as the API sends it (a string from TikTok), never reformatted.
- */
-function balanceLine(row: AdReportRow): string {
-  const adv = row.advertiser
-  const text = balanceText(adv?.balanceAmount, adv?.balanceCurrency)
-  const base = text ? `${text} · ${timeAgoTh(adv?.balanceAt, props.nowMs)}` : REPORT_DASH
-  return adv?.balanceError ? `${base} · ⚠ ${adv.balanceError}` : base
-}
 
 /** "กลุ่ม: <ad group>" — the second line of the ad cell */
 function adGroupLine(row: AdReportRow): string {
@@ -224,15 +213,6 @@ function adGroupLine(row: AdReportRow): string {
               </span>
               <span class="text-xs text-muted" :title="row.advertiser?.tiktokAdvertiserId ?? ''">
                 aadvid {{ last4(row.advertiser?.tiktokAdvertiserId) }}
-              </span>
-              <!-- FEAT-029 — ยอดคงเหลือที่ kpi job อ่านไว้ล่าสุด -->
-              <span
-                class="text-xs text-muted tabular-nums"
-                data-testid="rp-row-balance"
-                :data-has-balance="row.advertiser?.balanceAmount ? 'true' : 'false'"
-                :title="`อ่านล่าสุด ${formatDateTime(row.advertiser?.balanceAt)}`"
-              >
-                {{ balanceLine(row) }}
               </span>
             </div>
           </td>
