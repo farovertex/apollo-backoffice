@@ -306,7 +306,13 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
             :data-mode="liveMode"
           >
             <UIcon :name="liveMode === 'live' ? 'i-lucide-radio' : 'i-lucide-refresh-cw'" class="size-3.5 shrink-0" />
-            {{ LIVE_LABEL[liveMode] }}
+            <!--
+              FEAT-033 — the two sound controls made the right group 92 px wider, which pushed the navbar title into
+              an ellipsis at 390 px. The badge keeps its colour, its icon, `data-testid="tp-live"` and `data-mode`
+              (what FEAT-021 asserts); only the wordy Thai label follows the same `hidden sm:inline` rule as every
+              other navbar label here.
+            -->
+            <span class="hidden sm:inline">{{ LIVE_LABEL[liveMode] }}</span>
           </UBadge>
           <UButton
             v-if="!forbidden && canPayTopups(viewer)"
