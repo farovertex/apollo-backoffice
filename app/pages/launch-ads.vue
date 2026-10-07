@@ -13,16 +13,20 @@
  *   reason texts of api-contract §4 (`app/utils/launch-reasons.ts`). Search and the workspace filter are
  *   client-side over that one response (spec A6); the workspace filter is hidden with a single workspace.
  *
- *   FEAT-026 — "Only with balance" (`la-acc-funded`) is **on** at every page open (not persisted, A4): the
- *   table then lists only available accounts with ≥ 1 `selectable` advertiser whose `hasBalance` is true
- *   (`fundedAdvertisers`/`isFunded`), composed with search/workspace by AND, client-side, no extra request.
- *   The shown/auto-picked advertiser of a row (`advertiserOf`/`isAutoAdvertiser`/`setSelected`) is the first
- *   funded selectable advertiser when the switch is on, else the API's `defaultAdvertiserId` — an explicit
- *   `selection` pick always wins. Turning the switch **on** drops every account without a funded advertiser
- *   from `selection` (A6); turning it off keeps the selection. The header checkbox (`la-acc-select-all`)
+ *   FEAT-026 / FEAT-034 — "Only with balance" (`la-acc-funded`) is **on** at every page open (not persisted, A4):
+ *   the table then lists only available accounts with a funded Business Center and ≥ 1 `selectable` advertiser
+ *   (`isFunded`), composed with search/workspace by AND, client-side, no extra request. TikTok keeps one shared
+ *   cash balance per Business Center (FEAT-034), so funding is a property of the **account** now
+ *   (`account.hasBalance`), not of an individual advertiser — the old funded-first default-advertiser rule
+ *   collapses (AS-8): the shown/auto-picked advertiser of a row (`advertiserOf`/`isAutoAdvertiser`/`setSelected`)
+ *   is the API's `defaultAdvertiserId` when it is still `selectable`, else the first `selectable` advertiser of
+ *   the account — an explicit `selection` pick always wins. Turning the switch **on** drops every unfunded
+ *   account from `selection` (A6); turning it off keeps the selection. The header checkbox (`la-acc-select-all`)
  *   replaces the old "Select all" button: true/indeterminate/false over the **visible** rows only, and acts
  *   on those same visible rows (`toggleSelectAllVisible`). `la-acc-unfunded-hint`/`la-acc-nofunded` explain
- *   and undo the filter (`la-acc-show-all`); `la-acc-clear-search` also turns the switch off.
+ *   and undo the filter (`la-acc-show-all`); `la-acc-clear-search` also turns the switch off. The account row
+ *   shows the account's own balance (`la-acc-balance`, `<account.balanceAmount> <account.balanceCurrency>` or
+ *   `—`, title = last read time); advertiser options carry no balance of their own any more.
  * Step 2 · Templates — the existing list endpoints (`?limit=100`) + their `/options`, requested **once per
  *   page lifetime** when the step is first opened. A card whose `catalogVersion` differs from the one
  *   `/options` serves is disabled with the re-save message (spec A8) — the API refuses it anyway (400).
@@ -136,19 +140,20 @@ const fundedOnly = ref(true)
 const unavailableOpen = ref(false)
 const expanded = ref<string[]>([])
 
-/** account.advertisers.filter(selectable && hasBalance), BC order — non-empty ⇔ the account is "funded" */
-function fundedAdvertisers(account: LaunchAccount): LaunchAdvertiser[] {
-  return account.advertisers.filter(a => a.selectable && a.hasBalance)
-}
-
+/**
+ * FEAT-034 — TikTok keeps one shared cash balance per Business Center, so "funded" is a property of the
+ * account (`account.hasBalance`), not of an individual advertiser any more; an account still needs ≥ 1
+ * `selectable` advertiser to be launchable at all.
+ */
 function isFunded(account: LaunchAccount): boolean {
-  return fundedAdvertisers(account).length > 0
+  return account.available && account.hasBalance && account.advertisers.some(a => a.selectable)
 }
 
-/** BO presentation rule (api-contract §3): funded-first when the switch is on, else the API default */
+/** AS-8 — the API default when it is still selectable, else the first selectable advertiser of the account */
 function computedDefaultId(account: LaunchAccount): string | null {
-  if (fundedOnly.value) return fundedAdvertisers(account)[0]?.id ?? null
-  return account.defaultAdvertiserId
+  const def = account.defaultAdvertiserId
+  if (def && account.advertisers.find(a => a.id === def)?.selectable) return def
+  return account.advertisers.find(a => a.selectable)?.id ?? null
 }
 
 const workspaceItems = computed(() => {
@@ -288,10 +293,15 @@ function showAllAccounts() {
   fundedOnly.value = false
 }
 
-/** `<balanceAmount> <balanceCurrency>` of the given advertiser, printed as stored, or `—` (api-contract §3) */
-function balanceCell(advertiser: LaunchAdvertiser | null): string {
-  if (!advertiser?.balanceAmount) return '—'
-  return advertiser.balanceCurrency ? `${advertiser.balanceAmount} ${advertiser.balanceCurrency}` : advertiser.balanceAmount
+/** FEAT-034 — `<balanceAmount> <balanceCurrency>` of the account, printed as stored, or `—` (api-contract §4) */
+function balanceCell(account: LaunchAccount | null): string {
+  if (!account?.balanceAmount) return '—'
+  return account.balanceCurrency ? `${account.balanceAmount} ${account.balanceCurrency}` : account.balanceAmount
+}
+
+/** `title` of `la-acc-balance` — when the account's balance was last read, or that it never was */
+function balanceAtTitle(account: LaunchAccount): string {
+  return account.balanceAt ? `อัปเดต ${formatDateTime(account.balanceAt)}` : 'ยังไม่เคยอ่านยอด'
 }
 
 // ── step 2 · templates (one request set per page lifetime) ────────────────────────────────────────────────────────────
@@ -991,8 +1001,12 @@ onUnmounted(() => {
                                   auto
                                 </UBadge>
                               </span>
-                              <span class="text-xs text-muted tabular-nums" data-testid="la-acc-balance">
-                                {{ balanceCell(advertiserOf(account)) }}
+                              <span
+                                class="text-xs text-muted tabular-nums"
+                                data-testid="la-acc-balance"
+                                :title="balanceAtTitle(account)"
+                              >
+                                {{ balanceCell(account) }}
                               </span>
                             </div>
                           </td>
@@ -1041,9 +1055,6 @@ onUnmounted(() => {
                                 >
                                   {{ advertiserBadge(advertiser).label }}
                                 </UBadge>
-                                <span class="text-xs text-muted tabular-nums" data-testid="la-adv-balance">
-                                  {{ balanceCell(advertiser) }}
-                                </span>
                               </li>
                             </ul>
                           </td>
@@ -1401,7 +1412,7 @@ onUnmounted(() => {
                       <span class="text-highlighted">{{ advertiserOf(account)?.name ?? '—' }}</span>
                       <span class="text-xs text-muted">{{ advertiserOf(account)?.tiktokAdvertiserId ?? '—' }}</span>
                       <span class="text-xs text-muted tabular-nums" data-testid="la-review-balance">
-                        {{ balanceCell(advertiserOf(account)) }}
+                        {{ balanceCell(account) }}
                       </span>
                       <UBadge
                         color="neutral"
