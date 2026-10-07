@@ -146,6 +146,18 @@ function reasonText(row: BatchProxyRowResult): string {
     <template #body>
       <div class="space-y-4">
         <UFormField label="CSV file" name="file" required>
+          <template #hint>
+            <!-- plain <a download>: the template is a static file in `public/`, so no component has to forward `download` -->
+            <a
+              :href="PROXY_BATCH_CSV_TEMPLATE_URL"
+              :download="PROXY_BATCH_CSV_TEMPLATE_FILENAME"
+              class="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+              data-testid="px-batch-template"
+            >
+              <UIcon name="i-lucide-download" class="size-3.5" />
+              Download template
+            </a>
+          </template>
           <!-- a plain input (not UFileUpload): QA sets the file on this exact element, and a dropzone adds nothing here -->
           <input
             ref="fileInput"

@@ -16,6 +16,10 @@ export const PROXY_BATCH_OPTIONAL_COLUMNS = ['label', 'country'] as const
 export const PROXY_BATCH_COLUMNS = [PROXY_BATCH_PROXY_COLUMN, ...PROXY_BATCH_OPTIONAL_COLUMNS] as const
 export const PROXY_BATCH_MAX_ROWS = 1000
 
+/** Static template in `public/` (same header + one example row with throw-away values). */
+export const PROXY_BATCH_CSV_TEMPLATE_URL = '/templates/proxies-batch.csv'
+export const PROXY_BATCH_CSV_TEMPLATE_FILENAME = 'proxies-batch.csv'
+
 export interface ParsedProxyRow {
   /** 1-based line in the file (header is line 1) */
   line: number
