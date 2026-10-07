@@ -120,10 +120,18 @@ const links = computed(() => [[{
   }
 }, ...(isGod.value
   ? [{
-      // FEAT-009 — Admin Management (functions 0.2–0.5), after Proxies
+      // FEAT-009 — Admin Management (functions 0.2–0.5), after Proxies; Settings stays last
       label: 'Admin Management',
       icon: 'i-lucide-shield-check',
       to: '/admins',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
+      // BUG-037 — Settings (only content is the GOD-only Auto top-up tab, FEAT-030), last item
+      label: 'Settings',
+      icon: 'i-lucide-settings',
+      to: '/settings',
       onSelect: () => {
         open.value = false
       }

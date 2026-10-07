@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /**
- * Settings area of the dashboard template (tab bar + `<NuxtPage/>` for `app/pages/settings/*`).
+ * Settings area (tab bar + `<NuxtPage/>` for `app/pages/settings/*`).
  *
- * FEAT-030 (spec AS-13): the tab list is a **computed** over the session so the GOD-only `Auto top-up` tab
- * (after `Security`) is rendered for a GOD admin only. The route itself stays registered — `god-only` on
- * `app/pages/settings/auto-topup.vue` is the guard, and the API (`@Roles('GOD')`) is the authority.
+ * BUG-037: the dashboard-template tabs (General / Members / Notifications / Security) and the Documentation
+ * link were unimplemented sample content and are gone. The only implemented screen is the GOD-only
+ * `Auto top-up` tab from FEAT-030 (spec AS-13) — kept as a **computed** over the session so it only renders
+ * for a GOD admin. The route itself stays registered — `god-only` on `app/pages/settings/auto-topup.vue` is
+ * the guard, and the API (`@Roles('GOD')`) is the authority.
  */
 import type { NavigationMenuItem } from '@nuxt/ui'
 
@@ -12,35 +14,13 @@ const { admin } = useAuth()
 
 const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
 
-const links = computed<NavigationMenuItem[][]>(() => [[{
-  label: 'General',
-  icon: 'i-lucide-user',
-  to: '/settings',
-  exact: true
-}, {
-  label: 'Members',
-  icon: 'i-lucide-users',
-  to: '/settings/members'
-}, {
-  label: 'Notifications',
-  icon: 'i-lucide-bell',
-  to: '/settings/notifications'
-}, {
-  label: 'Security',
-  icon: 'i-lucide-shield',
-  to: '/settings/security'
-}, ...(isGod.value
+const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
   ? [{
       label: 'Auto top-up',
       icon: 'i-lucide-zap',
       to: '/settings/auto-topup'
     }]
-  : [])], [{
-  label: 'Documentation',
-  icon: 'i-lucide-book-open',
-  to: 'https://ui.nuxt.com/docs/getting-started/installation/nuxt',
-  target: '_blank'
-}]])
+  : [])]])
 </script>
 
 <template>
