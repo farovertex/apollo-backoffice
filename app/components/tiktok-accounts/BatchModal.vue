@@ -192,7 +192,7 @@ function reasonText(row: BatchRowResult): string {
             {{ BATCH_CSV_MAX_ROWS }} rows. Put a password in double quotes if it contains a comma.
             The optional last column <span class="font-mono">proxy</span>
             (<span class="font-mono break-all">{{ BATCH_CSV_HEADERS[1] }}</span>) takes
-            <span class="font-mono break-all">type://[user:pass@]host:port</span> per row — leave a cell empty to
+            <span class="font-mono break-all">type://user:pass@host:port</span> per row — leave a cell empty to
             auto-select a free proxy, or omit the column to use your Default settings.
           </template>
         </UFormField>
