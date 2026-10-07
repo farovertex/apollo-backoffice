@@ -31,6 +31,10 @@
  * (`ta-filter-launching`) — on → the list is re-read as `GET /backend/tiktok-accounts?launchingAds=1`, off →
  * without the param (one request per toggle, server-side filter per AS-12, not persisted). Search still composes
  * client-side on top, the per-account poll is untouched. An empty filtered list renders `ta-empty-launching`.
+ * FEAT-034 (api-contract.md v1 §4, spec "UI behaviour" AC-17) — the Balance cell gains a second, read-only line
+ * `ta-autotopup-last` (`data-at` = `account.autoTopup.lastTriggeredAt` ISO or `''`): "เติมอัตโนมัติล่าสุด <time>"
+ * or "ยังไม่เคยเติมอัตโนมัติ". The auto top-up decision moved to the account (was per advertiser); `ta-balance`,
+ * `ta-balance-reload` and `ta-balance-error` are unchanged.
  */
 import type { VNode } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
@@ -742,6 +746,13 @@ const columns: TableColumn<TikTokAccount>[] = [
           'data-testid': 'ta-balance-error'
         }, () => err)))
       }
+      // FEAT-034 — read-only: when the system last opened an auto top-up round for this account
+      const autoAt = a.autoTopup?.lastTriggeredAt ?? null
+      children.push(h('span', {
+        'class': 'whitespace-nowrap text-xs text-muted',
+        'data-testid': 'ta-autotopup-last',
+        'data-at': autoAt ?? ''
+      }, autoAt ? `เติมอัตโนมัติล่าสุด ${formatDateTime(autoAt)}` : 'ยังไม่เคยเติมอัตโนมัติ'))
       return h('div', { class: 'flex flex-col items-start gap-0.5' }, children)
     }
   },
