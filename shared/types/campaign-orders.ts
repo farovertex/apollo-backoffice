@@ -10,6 +10,11 @@
  * everything human-readable about a template config comes from the templates' own `/options`
  * (`#shared/types/ad-group-templates`, `#shared/types/ad-templates`). The reason texts of
  * `unavailableReasons` are fixed English page chrome and live in `app/utils/launch-reasons.ts`.
+ *
+ * FEAT-034 (api-contract.md v1 §4) — TikTok keeps one shared cash balance per Business Center: the balance
+ * moved off `LaunchAdvertiser` entirely (no `balanceAmount/Currency/At`, no `hasBalance`) and onto
+ * `LaunchAccount` (`balanceAmount`, `balanceCurrency`, `balanceAt`, `hasBalance`). The "Only with balance"
+ * filter and the default-advertiser rule both key off the account now (`app/pages/launch-ads.vue`).
  */
 import type { AdvertiserStatus } from './advertisers'
 import type { SessionStatus } from './tiktok-accounts'
@@ -35,16 +40,6 @@ export interface LaunchAdvertiser {
   bcOrder: number | null
   /** `status === 'active' && missingSince === null` — only these can be picked */
   selectable: boolean
-  /**
-   * FEAT-026 (api-contract v1 §1) — the stored, app-credited balance (`ADVERTISERS.balanceAmount/Currency/At`,
-   * written only by `TopupService.applyCheck` on a `paid` round, FEAT-021). **Not** TikTok's live balance.
-   */
-  balanceAmount: string | null
-  balanceCurrency: string | null
-  /** ISO | null — time of the last credit */
-  balanceAt: string | null
-  /** `Number(balanceAmount.replace(/,/g, '')) > 0` — computed by the API */
-  hasBalance: boolean
 }
 
 /** One TikTok account of `GET /launch/targets` (available accounts first, then label/loginEmail). */
@@ -57,6 +52,17 @@ export interface LaunchAccount {
   bcOrgName: string | null
   sessionStatus: SessionStatus
   isActive: boolean
+  /**
+   * FEAT-034 (api-contract v1 §4) — the account's stored, app-credited balance (`TIKTOK_ACCOUNTS.balanceAmount/
+   * Currency/At`, written by the kpi job and by a `paid` round of either top-up level). **Not** TikTok's live
+   * balance.
+   */
+  balanceAmount: string | null
+  balanceCurrency: string | null
+  /** ISO | null — time of the last credit or kpi read */
+  balanceAt: string | null
+  /** `hasBalance(account.balanceAmount)` — computed by the API */
+  hasBalance: boolean
   /** true ⇔ `unavailableReasons` is empty */
   available: boolean
   unavailableReasons: UnavailableReason[]

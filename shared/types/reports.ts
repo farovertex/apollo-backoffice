@@ -9,9 +9,9 @@
  * `creative_id` = **ad**. Every metric that can have a zero denominator is `number | null` and is rendered
  * as `—`; the BO never recomputes a rate the API already summed (spec A7).
  *
- * FEAT-029 (api-contract.md v1 §4): `AdReportRow.advertiser` also carries the advertiser's balance as the kpi
- * job last read it (`balanceAmount`, `balanceCurrency`, `balanceAt`, `balanceError`) — rendered under the
- * advertiser name of every row (`rp-row-balance`).
+ * FEAT-034 (api-contract.md v1 §4) — the balance moved off the advertiser entirely: `AdReportRow.advertiser`
+ * is back to the three FEAT-020 identity keys only (`id`, `name`, `tiktokAdvertiserId`); no balance key, no
+ * account balance added. `rp-row-balance` is gone from `AdsTable.vue`.
  */
 import type { OrderStatus, PublishMode } from './campaign-orders'
 
@@ -75,20 +75,13 @@ export interface AdvertiserReport {
 }
 
 /**
- * FEAT-029 §4 — the advertiser block of one ad row: the three FEAT-020 keys plus the balance the kpi job read
- * last. The balance keys are optional for readers of an API that predates the feature (then the row shows `—`).
+ * FEAT-020 §2 — the advertiser block of one ad row, identity only (contract §4). FEAT-034 removed the
+ * advertiser's balance; the balance lives on the TikTok account only and is not part of this view.
  */
 export interface AdRowAdvertiser {
   id: string
   name: string
   tiktokAdvertiserId: string
-  /** ยอดคงเหลือ as the kpi job last read it (string, exactly as TikTok sends it) */
-  balanceAmount?: string | null
-  balanceCurrency?: string | null
-  /** ISO | null — when the balance above was read */
-  balanceAt?: string | null
-  /** Thai text of the last failed read (`อ่านยอดคงเหลือไม่ได้`); null after a success */
-  balanceError?: string | null
 }
 
 /** One row of `GET /reports/ads` — also the row of the order Report tab and the header of the slideover. */

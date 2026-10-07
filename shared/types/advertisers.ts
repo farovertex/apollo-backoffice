@@ -7,13 +7,15 @@
  * `showPunishLink`. The filter-dropdown words are a different map and are not used here.
  * FEAT-016 (api-contract.md v1 §1): the view gains `bcOrder`, the 0-based position of the advertiser in the
  * Business Center list API, written by every successful discover run.
- * FEAT-029 (api-contract.md v1 §4): the view gains `launchingAds`, `launchingSince`, `suspendedReason`,
- * `balanceError` and `autoTopup` — all written by the system only (publish → on, kpi round → off / balance /
- * auto round).
+ * FEAT-029 (api-contract.md v1 §4): the view gains `launchingAds`, `launchingSince` and `suspendedReason` —
+ * all written by the system only (publish → on, kpi round → off).
  * FEAT-030 (api-contract.md v1 §4): the auto top-up **configuration** moved to the system settings
- * (`shared/types/settings.ts`, `GET`/`PATCH /settings/auto-topup`, GOD only). `autoTopup` on an advertiser is
- * pure system bookkeeping now — `{ lastTriggeredAt, lastRoundId }` — and nothing in the BO writes it;
- * `PATCH /advertisers/:id/auto-topup` is gone.
+ * (`shared/types/settings.ts`, `GET`/`PATCH /settings/auto-topup`, GOD only).
+ * FEAT-034 (api-contract.md v1 §4) — TikTok keeps one shared cash balance per Business Center: `balanceAmount`,
+ * `balanceCurrency`, `balanceAt`, `balanceError` and `autoTopup` move off the advertiser entirely (they never
+ * appear in `AdvertiserView` any more) and live only on the TikTok account (`shared/types/tiktok-accounts.ts`,
+ * `AccountAutoTopup`). The per-advertiser top-up button stays — it is a different entry point to the same
+ * wallet — but the advertiser itself carries no balance or auto-top-up state.
  */
 
 import type { AdvertiserReport } from './reports'
@@ -27,18 +29,6 @@ export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
  * suspension (the Business Center one).
  */
 export type AdvertiserSuspendedReason = 'noDelivery'
-
-/**
- * FEAT-030 §4 — auto top-up **bookkeeping** of one advertiser; always present on the view (old rows read as
- * `{ lastTriggeredAt: null, lastRoundId: null }`). Written by the system only, when it opens an auto round;
- * the configuration (enabled / minBalance / amount / cooldown) lives in the system settings since FEAT-030.
- */
-export interface AdvertiserAutoTopup {
-  /** ISO | null — only set when a round was really created */
-  lastTriggeredAt: string | null
-  /** id of the round created last; null until then */
-  lastRoundId: string | null
-}
 
 /** `missing` query of `GET /tiktok-accounts/:id/advertisers`: `false` (default) → only current rows, `all` → every row. */
 export type AdvertiserMissingFilter = 'false' | 'true' | 'all'
@@ -103,15 +93,6 @@ export interface Advertiser {
   launchingSince?: string | null
   /** FEAT-029 — `noDelivery` when the kpi job suspended the advertiser; null for a Business Center suspension */
   suspendedReason?: AdvertiserSuspendedReason | null
-  /** ยอดคงเหลือที่บวกจากรอบฝากที่ตรวจผ่านแล้ว · null = ยังไม่เคยฝากสำเร็จ (FEAT-029: also written by the kpi job) */
-  balanceAmount?: string | null
-  balanceCurrency?: string | null
-  /** ISO | null */
-  balanceAt?: string | null
-  /** FEAT-029 — Thai text of the last failed balance read (`อ่านยอดคงเหลือไม่ได้`); null after a success */
-  balanceError?: string | null
-  /** FEAT-030 — auto top-up bookkeeping (`lastTriggeredAt` / `lastRoundId`); the API always sends it */
-  autoTopup?: AdvertiserAutoTopup
   /**
    * FEAT-020 (AC-21) — ads-report tracking state of this advertiser, served with the list so the slideover
    * needs no extra request. Optional for readers of an API that predates the feature.

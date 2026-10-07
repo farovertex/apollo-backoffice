@@ -18,6 +18,11 @@
  * FEAT-029 (api-contract.md v1 §4/§5): the view gains `launchingAds` + `launchingSince` (true while at least one
  * advertiser of the account is launching ads, system-written), and `GET /tiktok-accounts` takes the optional
  * query `launchingAds=1|true|0|false`.
+ * FEAT-034 (api-contract.md v1 §4) — the balance moved fully to the account (`balanceAmount/Currency/At/Error`
+ * are unchanged, now the only balance in the system) and the view gains `autoTopup` (`AccountAutoTopup`,
+ * always an object, appended after `autoTopupDisabled`): system bookkeeping of the last auto top-up round
+ * opened for this account. `GET /launch/targets` also carries the account balance now
+ * (`shared/types/campaign-orders.ts`).
  */
 
 import type { TopupView } from './topups'
@@ -57,6 +62,19 @@ export interface FirstLoginTries {
   captcha: number
   otp: number
   other: number
+}
+
+/**
+ * FEAT-034 §4 — auto top-up **bookkeeping** of one TikTok account; always present on the view (old rows read as
+ * `{ lastTriggeredAt: null, lastRoundId: null }`). Written by the system only, when it opens an auto round for
+ * this account; the configuration (enabled / minBalance / amount / cooldown) lives in the system settings
+ * (FEAT-030, unchanged).
+ */
+export interface AccountAutoTopup {
+  /** ISO | null — only set when a round was really created */
+  lastTriggeredAt: string | null
+  /** id of the round created last; null until then */
+  lastRoundId: string | null
 }
 
 /** Populated browser profile (subset of BROWSER_PROFILES); `null` on the account view if the profile row is gone. */
@@ -138,6 +156,8 @@ export interface TikTokAccount {
    * for it. Optional for an API that predates the feature (missing ⇒ `false`).
    */
   autoTopupDisabled?: boolean
+  /** FEAT-034 — system bookkeeping of the last auto top-up round opened for this account; always present */
+  autoTopup: AccountAutoTopup
   /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
   advertiserCount: number
   /** ISO | null — time of the last discover attempt (success or failure) */
