@@ -84,6 +84,8 @@ export interface RunningJob {
   step: JobStep | null
   trigger: JobTrigger
   startedAt: string | null
+  /** FEAT-031 — WORKER_INSTANCE of the process running this job; `null` while `waiting` */
+  workerInstance: string | null
 }
 
 export interface TikTokAccount {
