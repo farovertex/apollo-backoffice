@@ -1,13 +1,13 @@
 /**
- * FEAT-035 — client-side sorting of table 1 (`rs-groups`, api-contract.md §3 `rs-gsort-<field>`). Table 1 is
- * never paginated (AS-3), so the whole grouped set is already on the client and sorting it is pure JS; table 2
- * (`rs-ads`) is paginated and therefore sorts server-side instead (`sort` query, AS-9).
+ * FEAT-035 — client-side sorting of the page's one table (`rs-groups`, api-contract.md §3 `rs-gsort-<field>`,
+ * contract v1.2 "table 2 removed" — the page no longer has a second, server-sorted/paginated table). The
+ * grouped set is never paginated (AS-3), so it is already whole on the client and sorting it is pure JS.
  *
  * A pure, readable helper on purpose: no test runner lives in the BO (brief T2), so this is meant to be
  * verified by reading plus the Playwright loop, not by a unit test.
  */
 import type { GroupedAccount, GroupSortField } from '#shared/types/report-summary'
-import type { KpiMetrics, ReportSortField } from '#shared/types/reports'
+import type { KpiMetrics } from '#shared/types/reports'
 
 export const GROUP_SORT_FIELDS: GroupSortField[] = [
   'adCount', 'spend', 'impressions', 'clicks', 'ctr', 'cpc', 'conversions', 'conversionCost'
@@ -22,30 +22,6 @@ export function parseGroupSort(value: string | null | undefined): { field: Group
   const field = (desc ? raw.slice(1) : raw) as GroupSortField
   if (!GROUP_SORT_FIELDS.includes(field)) return { field: 'spend', desc: true }
   return { field, desc }
-}
-
-/**
- * Sortable fields of table 2's `sort` URL value (`rs-sort-<field>`, api-contract.md v1.1 §3): every header
- * the page actually renders. `lastSeenAt` is still a valid `ReportSortField` and the API (`GET /reports/ads`)
- * still accepts it, but table 2 has no "last seen" column to attach a header to (contract v1.1 note), so this
- * page treats it the same as any other unknown value — fell back to the default rather than forwarded.
- */
-export const ADS_SORT_FIELDS: Exclude<ReportSortField, 'lastSeenAt'>[] = [
-  'creativeName', 'spend', 'impressions', 'clicks', 'ctr', 'cpc', 'conversions', 'conversionCost'
-]
-
-const DEFAULT_ADS_SORT = '-spend'
-
-/**
- * Validates table 2's `sort` URL value (BUG-038): an unknown field, `lastSeenAt` (see `ADS_SORT_FIELDS`) or an
- * empty value falls back to `-spend` instead of being forwarded to `GET /reports/ads`, which would 400 on
- * anything outside its enum. Mirrors `parseGroupSort`'s fallback behaviour but — because `sort` is sent
- * server-side verbatim rather than parsed into `{ field, desc }` for client sorting — returns the full string.
- */
-export function parseAdsSort(value: string | null | undefined): string {
-  const raw = value || DEFAULT_ADS_SORT
-  const field = (raw.startsWith('-') ? raw.slice(1) : raw) as ReportSortField
-  return (ADS_SORT_FIELDS as ReportSortField[]).includes(field) ? raw : DEFAULT_ADS_SORT
 }
 
 /** First click on a new column = descending (every table-1 field is a metric, there is no name column). */

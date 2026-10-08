@@ -1,8 +1,10 @@
 /**
- * FEAT-035 — Report summary (`/reports/summary`, api-contract.md §3). The page groups the same per-ad sums
- * `GET /reports/ads` already returns by advertiser and TikTok account; `KpiMetrics` / `AdReportRow` /
- * `AdsReportResponse` / `ReportRangeInfo` / `ReportSortField` are reused from `./reports` unchanged (G-4 —
- * `shared/types/reports.ts` is owned by FEAT-034 in this round, not edited here).
+ * FEAT-035 — Report summary (`/reports/summary`, api-contract.md §3, contract v1.2 "table 2 removed"). The
+ * page's one table groups the per-ad sums of `GET /reports/grouped` by advertiser and TikTok account;
+ * `KpiMetrics` / `ReportRangeInfo` are reused from `./reports` unchanged (G-4 — `shared/types/reports.ts` is
+ * owned by FEAT-034 in this round, not edited here). Types that only the removed ads table used (it reused
+ * `AdReportRow`/`AdsReportResponse` directly from `./reports`, nothing table-2-specific lived in this file)
+ * never existed here, so there is nothing to drop from this module besides this note.
  */
 import type { KpiMetrics, ReportRangeInfo } from './reports'
 
