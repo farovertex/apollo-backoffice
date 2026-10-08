@@ -27,8 +27,10 @@ export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
  * FEAT-029 — why the kpi job suspended the advertiser. `noDelivery` = a complete kpi round of today saw no
  * delivering ad at all; cleared by a new publish or by a round that sees one again. `null` for every other
  * suspension (the Business Center one).
+ * FEAT-037 (api-contract.md v1 §2.1) — `banned` = a kpi round read TikTok's permission endpoint
+ * (`data.account.status === 8`); cleared only when a later round reads `status === 4` again.
  */
-export type AdvertiserSuspendedReason = 'noDelivery'
+export type AdvertiserSuspendedReason = 'noDelivery' | 'banned'
 
 /** `missing` query of `GET /tiktok-accounts/:id/advertisers`: `false` (default) → only current rows, `all` → every row. */
 export type AdvertiserMissingFilter = 'false' | 'true' | 'all'

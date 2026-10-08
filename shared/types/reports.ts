@@ -38,8 +38,12 @@ export type AdState = 'delivering' | 'pending' | 'rejected' | 'ended' | 'unknown
 /** Shared `range` query of every report endpoint. */
 export type ReportRange = 'today' | '7d' | 'all'
 
-/** `advertisers.report.lastError` / `AdReportRow.fetchError`. */
-export type ReportError = 'notLoggedIn' | 'listApiFailed' | 'partial' | 'timeout' | 'profileLocked' | 'unknown'
+/**
+ * `advertisers.report.lastError` / `AdReportRow.fetchError`.
+ * FEAT-037 (api-contract.md v1 §2.2) — `banned`: the kpi job read TikTok's permission endpoint
+ * (`data.account.status === 8`) and stopped fetching this advertiser's report.
+ */
+export type ReportError = 'notLoggedIn' | 'listApiFailed' | 'partial' | 'timeout' | 'profileLocked' | 'banned' | 'unknown'
 
 /** `AdvertiserReport.state` — the four states the UI shows (contract §5 "AdvertiserReport"). */
 export type AdvertiserReportState = 'never' | 'on' | 'off' | 'error'

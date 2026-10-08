@@ -97,6 +97,8 @@ export const REPORT_ERROR_TEXT: Record<ReportError, string> = {
   partial: 'ได้ข้อมูลไม่ครบทุกหน้า',
   timeout: 'ใช้เวลานานเกินไป',
   profileLocked: 'โปรไฟล์กำลังถูกใช้งาน',
+  // FEAT-037 (api-contract.md v1 §5) — exact string asserted by QA
+  banned: 'บัญชีโฆษณาถูกระงับ',
   unknown: 'เกิดข้อผิดพลาด'
 }
 

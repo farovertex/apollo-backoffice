@@ -272,10 +272,14 @@ onUnmounted(() => {
 
 // ── launching line (FEAT-029) ────────────────────────────────────────────────────────────────────────────────────────
 const NO_DELIVERY_TIP = 'ปิดเพราะโฆษณาทั้งหมดไม่ส่งแล้ว (ตรวจจาก kpi)'
+// FEAT-037 (api-contract.md v1 §5) — exact string asserted by QA
+const BANNED_TIP = 'TikTok ระงับบัญชีโฆษณานี้ (ตรวจจาก kpi)'
 
 /** the suspended badge explains the kpi rule when the kpi job was the one that suspended the advertiser */
 function statusTip(adv: Advertiser): string {
-  return adv.suspendedReason === 'noDelivery' ? NO_DELIVERY_TIP : accountStatusTip(adv.accountStatus)
+  if (adv.suspendedReason === 'noDelivery') return NO_DELIVERY_TIP
+  if (adv.suspendedReason === 'banned') return BANNED_TIP
+  return accountStatusTip(adv.accountStatus)
 }
 
 function launchingLabel(adv: Advertiser): string {
