@@ -20,6 +20,8 @@
  * the form error "Choose a proxy" and sends nothing. A 409 (`no proxy available (tried N)`, or the FEAT-027 bound
  * 409) renders in `bp-create-error` with the API text while the modal stays open; the AS-1 `proxyWarning` toast and
  * `bp-create-proxy-hint` are gone.
+ * BUG-034 — the form validates on `input` / `change` and on submit, never on `blur`: the blur of the empty
+ * autofocused Name used to insert its error line and shift the field set under the mouse, eating the first click.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -131,11 +133,19 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         <USkeleton v-for="n in 6" :key="n" class="h-12 w-full" />
       </div>
 
+      <!-- BUG-034 — no `blur` in `validate-on`: Name is `autofocus` and empty on open, so with Nuxt UI's default
+           (`['input', 'blur', 'change']`) the first click anywhere below it blurred the field, inserted
+           "Name is required" and moved everything 14 px down between mousedown and mouseup — the click landed on
+           nothing (measured on the Proxy radio "Pick a free proxy" and, before, on the FEAT-006 OS control).
+           Submit-time validation is unaffected (`formRef.submit()` always validates and shows every message), and
+           `input` still clears / re-checks a field the user has already left, so the error texts and the moment
+           they appear are otherwise unchanged. -->
       <UForm
         v-else
         ref="formRef"
         :schema="schema"
         :state="state"
+        :validate-on="['input', 'change']"
         class="space-y-4"
         @submit="onSubmit"
       >
