@@ -1,2 +1,2 @@
-email,email_password,tiktok_password,proxy
-ads-demo-1@hotmail.com,replace-with-mailbox-password,replace-with-tiktok-password,http://user:pass@203.0.113.9:8080
+email,email_password,tiktok_password,proxy,recovery_email
+ads-demo-1@hotmail.com,replace-with-mailbox-password,replace-with-tiktok-password,http://user:pass@203.0.113.9:8080,recovery-demo-1@example.com

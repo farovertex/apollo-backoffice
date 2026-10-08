@@ -15,6 +15,12 @@
  * runs dry the API stops: the triggering row is `fail`, every later row comes back `stopped` and is shown with the
  * "Stopped" badge + the `ta-batch-stopped` summary badge, and re-uploading the same file finishes the rest.
  *
+ * FEAT-036 §7 — the optional 5th column `recovery_email` (needs the `proxy` column too, AS-3) sets the per-row
+ * recovery email: an empty cell sends no key (→ `null` on the account), a non-empty one is checked here (trim +
+ * lowercase + email shape) before any request — a malformed value never reaches the API. `ta-batch-parsed` always
+ * carries `data-recovery` = rows that will carry a recovery email; the ` · <n> with a recovery email` suffix shows
+ * only when the file used the 5-column header.
+ *
  * The result table shows the email + status + reason of every row and **no password**. `pendingFirstLogin` applies
  * to the whole file and never enqueues a login here (AC-5); the scheduler picks the marked accounts up.
  */
@@ -41,6 +47,9 @@ const toast = useToast()
 const pendingFirstLogin = ref(true)
 const fileName = ref<string | null>(null)
 const rows = ref<BatchAccountRow[]>([])
+// FEAT-036 §7 — true only when the parsed file used the 5-column header (drives the ` · <n> with a recovery
+// email` suffix even when every cell of column 5 was empty)
+const withRecovery = ref(false)
 const parseError = ref<{ title: string, description?: string } | null>(null)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
@@ -48,10 +57,12 @@ const result = ref<BatchAccountsResponse | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
 const canSubmit = computed(() => rows.value.length > 0 && !parseError.value && !submitting.value)
+const recoveryCount = computed(() => rows.value.filter(r => r.recoveryEmail).length)
 
 function resetFile() {
   fileName.value = null
   rows.value = []
+  withRecovery.value = false
   parseError.value = null
   submitError.value = null
   result.value = null
@@ -93,6 +104,7 @@ async function onFile(event: Event) {
     return
   }
   rows.value = parsed.rows
+  withRecovery.value = parsed.withRecovery
 }
 
 function batchErrorState(e: unknown): { title: string, description?: string } {
@@ -185,15 +197,21 @@ function reasonText(row: BatchRowResult): string {
             data-testid="ta-batch-file"
             @change="onFile"
           >
-          <!-- `break-all` on every mono run: at 390 px the 4-column header is wider than the modal body and
-               would be clipped at the right edge -->
+          <!-- `break-all` on every mono run: at 390 px the 4/5-column header is wider than the modal body and
+               would be clipped at the right edge. `data-testid` on this wrapper (not on UFormField's own help
+               slot element, which carries none) so QA can assert on the exact text. -->
           <template #help>
-            Header <span class="font-mono break-all">{{ BATCH_CSV_HEADERS[0] }}</span>, UTF-8, at most
-            {{ BATCH_CSV_MAX_ROWS }} rows. Put a password in double quotes if it contains a comma.
-            The optional last column <span class="font-mono">proxy</span>
-            (<span class="font-mono break-all">{{ BATCH_CSV_HEADERS[1] }}</span>) takes
-            <span class="font-mono break-all">type://user:pass@host:port</span> per row — leave a cell empty to
-            auto-select a free proxy, or omit the column to use your Default settings.
+            <span data-testid="ta-batch-help">
+              Header <span class="font-mono break-all">{{ BATCH_CSV_HEADERS[0] }}</span>, UTF-8, at most
+              {{ BATCH_CSV_MAX_ROWS }} rows. Put a password in double quotes if it contains a comma.
+              The optional 4th column <span class="font-mono">proxy</span>
+              (<span class="font-mono break-all">{{ BATCH_CSV_HEADERS[1] }}</span>) takes
+              <span class="font-mono break-all">type://user:pass@host:port</span> per row — leave a cell empty to
+              auto-select a free proxy, or omit the column to use your Default settings. The optional 5th column
+              <span class="font-mono">recovery_email</span>
+              (<span class="font-mono break-all">{{ BATCH_CSV_HEADERS[2] }}</span>) sets the temp-mail address
+              Microsoft sends its identity-check code to — leave a cell empty for none.
+            </span>
           </template>
         </UFormField>
 
@@ -202,10 +220,14 @@ function reasonText(row: BatchRowResult): string {
           class="text-sm text-muted"
           data-testid="ta-batch-parsed"
           :data-rows="rows.length"
+          :data-recovery="recoveryCount"
         >
           <UIcon name="i-lucide-check" class="size-4 align-text-bottom text-success" />
           {{ rows.length }} {{ rows.length === 1 ? 'row' : 'rows' }} read from
           <span class="font-medium text-highlighted">{{ fileName }}</span>
+          <template v-if="withRecovery">
+            · {{ recoveryCount }} with a recovery email
+          </template>
         </p>
 
         <UAlert
