@@ -208,7 +208,8 @@ function adGroupLine(row: AdReportRow): string {
           <!-- Advertiser -->
           <td v-if="!compact" class="border-b border-default px-2 py-2">
             <div class="flex min-w-0 flex-col">
-              <span class="max-w-32 truncate text-highlighted" :title="row.advertiser?.name ?? ''">
+              <!-- ชื่อ advertiser โชว์เต็ม ไม่ตัดด้วย ellipsis (ชื่อยาวให้ตัดบรรทัดแทน) -->
+              <span class="break-words text-highlighted" :title="row.advertiser?.name ?? ''">
                 {{ row.advertiser?.name || REPORT_DASH }}
               </span>
               <span class="text-xs text-muted" :title="row.advertiser?.tiktokAdvertiserId ?? ''">
