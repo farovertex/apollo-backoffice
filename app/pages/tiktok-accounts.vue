@@ -10,7 +10,10 @@
  * toast). BUG-028: the button is **always enabled** — every click POSTs again and the API queues a new login job
  * whatever the account state; the job decides on its own whether it is already logged in (the page guards nothing,
  * a running job only changes the tooltip). The badge maps `needsHuman` to "Needs OTP" and a
- * `lastLoginError` chip (`ta-login-error`) sits next to it while `loggedOut`. Modal close / success → one refresh.
+ * `lastLoginError` chip (`ta-login-error`) sits next to it while `loggedOut`. Modal close / success → one refresh,
+ * and (BUG-010) the discover poll below is started for every row whose refreshed snapshot carries a running
+ * `discover` job — the API auto-enqueues one after a successful login (`trigger: 'afterLogin'`), which the page
+ * never started itself and therefore used to leave at "Syncing…" until a manual Refresh.
  * FEAT-005 (discover advertisers, api-contract.md v1 §5/§7): columns "BC org" (`ta-bc-org` + copy) and "Advertisers"
  * (`ta-adv-count` opens `TiktokAccountsAdvertisersSlideover`, `ta-adv-synced` / `ta-adv-syncing` / `ta-adv-error`
  * chip) after Session status; row action Sync (`ta-sync`) → `POST /backend/tiktok-accounts/:id/discover` (202 / 409 →
@@ -321,6 +324,24 @@ function startDiscoverPoll(id: string) {
       toast.add({ title: `Advertisers synced (${next.advertiserCount})`, description: label, color: 'success' })
     }
   })
+}
+
+/**
+ * BUG-010 — `startDiscoverPoll` used to be reachable from `onSync()` only, so a discover the page did **not**
+ * start itself (the API auto-enqueues one on a login success, `trigger: 'afterLogin'`) was never followed: the
+ * login modal's single `refresh()` usually lands while that discover still runs, and the row stayed frozen at
+ * "Syncing…" with advertiser count 0, no BC org and Sync disabled until a human pressed Refresh.
+ * The login modal's `success` / `close` now refresh **and then** follow every row whose fresh snapshot carries a
+ * running discover job, so the row converges on its own. Nothing about the poll itself changes: `startPoll` is
+ * keyed `discover:<id>` and returns early when that loop already runs (no duplicate poll, e.g. when the user
+ * pressed Sync first), each tick is the existing single `GET /tiktok-accounts/:id`, the finished poll does the
+ * one `refresh()` + toast it always did, and `onUnmounted` still clears it.
+ */
+async function refreshAndFollowDiscovers() {
+  await refresh()
+  for (const account of data.value?.accounts ?? []) {
+    if (account.runningJob?.type === 'discover') startDiscoverPoll(account.id)
+  }
 }
 
 onUnmounted(() => {
@@ -1039,8 +1060,8 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         v-model:open="loginOpen"
         :account-id="loginTarget?.id ?? null"
         :account-label="loginTarget?.label ?? loginTarget?.loginEmail ?? null"
-        @success="refresh()"
-        @close="refresh()"
+        @success="refreshAndFollowDiscovers()"
+        @close="refreshAndFollowDiscovers()"
       />
       <TiktokAccountsAdvertisersSlideover
         v-model:open="advOpen"
