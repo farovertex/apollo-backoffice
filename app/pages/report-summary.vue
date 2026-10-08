@@ -1,33 +1,37 @@
 <script setup lang="ts">
 /**
- * FEAT-035 — Report summary (api-contract.md §3; spec AC-8…AC-17). A **separate page file** rather than
- * `app/pages/reports/summary.vue`: Nuxt would then treat it as a child of `app/pages/reports.vue`, which has
- * no `<NuxtPage>`, and `/reports` would stop rendering (F5). `definePageMeta({ path: '/reports/summary' })`
- * gives it the nested-looking URL anyway; vue-router prefers the longer static path, so both routes coexist
- * (verified in the browser loop below).
+ * FEAT-035 — Report summary (api-contract.md §3; spec AC-8…AC-17, amended by Amendment A1 / contract v1.2).
+ * A **separate page file** rather than `app/pages/reports/summary.vue`: Nuxt would then treat it as a child of
+ * `app/pages/reports.vue`, which has no `<NuxtPage>`, and `/reports` would stop rendering (F5).
+ * `definePageMeta({ path: '/reports/summary' })` gives it the nested-looking URL anyway; vue-router prefers the
+ * longer static path, so both routes coexist (verified in the browser loop below).
  *
- * Same URL-state pattern as `/reports` (`app/pages/reports.vue`, not edited here — G-4): every filter, the
- * range, the search, both sorts and the page live in the query, so the screen is shareable and the back
- * button works; the query is the only thing that triggers a request. Exactly one `GET /reports/grouped` +
- * one `GET /reports/ads` (through `useApi()` → `/backend`) per load / Refresh / state change, both `retry: 0`,
- * a late answer of a superseded pair dropped by a session counter. **No polling.**
+ * Same URL-state pattern as `/reports` (`app/pages/reports.vue`, not edited here — G-4): every filter, the range
+ * and the search live in the query, so the screen is shareable and the back button works; the query is the only
+ * thing that triggers a request. **One table, one request**: exactly one `GET /reports/grouped` (through
+ * `useApi()` → `/backend`) per load / Refresh / state change, `retry: 0`, a late answer of a superseded request
+ * dropped by a session counter. **No polling.**
  *
- * Table 1 (`ReportSummaryGroupTable`) sorts **client-side** (`gsort`, no request — the whole grouped set is
- * already on the client, AS-3/AS-9); table 2 (`ReportSummaryAdsTable`) sorts and paginates **server-side**
- * (`sort`/`page`, same as `/reports`). Both footers come from the responses' `totals`, never from summing the
- * rows on screen. Neither table shows balance, even if a stubbed row carries it (FEAT-034 owns balance).
+ * Contract v1.2 (human review "เอา section ที่ 2 ออก") removed table 2 (`GET /reports/ads`) entirely: no `sort`/
+ * `page` URL state (an old link carrying them is ignored and never sent to the API) and no `rs-filter-order`
+ * (its options came from the ads rows, which no longer exist). An `orderId` arriving in the URL — e.g. a link
+ * from `/reports` — is still forwarded to `/reports/grouped` as a filter and cleared by `rs-clear`; there is just
+ * no UI control to set it from this page.
+ *
+ * The one surviving table (`ReportSummaryGroupTable`) sorts **client-side** (`gsort`, no request — the whole
+ * grouped set is already on the client, AS-3/AS-9). Its footer comes from the response's `totals`, never from
+ * summing the rows on screen. It never shows balance, even if a stubbed row carried it (FEAT-034 owns balance).
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { AdReportRow, AdsReportResponse, AdState } from '#shared/types/reports'
+import type { AdState } from '#shared/types/reports'
 import type { GroupedReportResponse } from '#shared/types/report-summary'
 
 useSeoMeta({ title: 'Report summary' })
 definePageMeta({ path: '/reports/summary' })
 
-const LIMIT = 50
 const DEBOUNCE_MS = 300
-const DEFAULT_SORT = '-spend'
+const DEFAULT_GROUP_SORT = '-spend'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,12 +46,7 @@ function queryString(key: string): string | undefined {
 }
 
 const range = computed(() => parseRange(route.query.range))
-const page = computed(() => {
-  const n = Number(route.query.page)
-  return Number.isInteger(n) && n > 0 ? n : 1
-})
-const sort = computed(() => parseAdsSort(queryString('sort')))
-const gsort = computed(() => queryString('gsort') ?? DEFAULT_SORT)
+const gsort = computed(() => queryString('gsort') ?? DEFAULT_GROUP_SORT)
 const workspaceId = computed(() => queryString('workspaceId') ?? 'all')
 const accountId = computed(() => queryString('tiktokAccountId') ?? 'all')
 const advertiserId = computed(() => queryString('advertiserId') ?? 'all')
@@ -70,16 +69,11 @@ function orUndefined(value: string): string | undefined {
   return value === 'all' ? undefined : value
 }
 
-/**
- * Merge a patch into the URL query. Any change other than `page`/`gsort` resets `page` (contract §3.2):
- * `gsort` never triggers a request, so leaving the page alone there is harmless; a real filter/range/search/
- * sort change always starts table 2 back at page 1.
- */
-function setQuery(patch: Record<string, string | undefined>, keepPage = false) {
+/** Merge a patch into the URL query (contract §3.2 v1.2 — no `page` left to preserve/reset any more). */
+function setQuery(patch: Record<string, string | undefined>) {
   const merged = { ...route.query, ...patch }
   const next: Record<string, string> = {}
   for (const [key, value] of Object.entries(merged)) {
-    if (!keepPage && key === 'page') continue
     if (typeof value === 'string' && value !== '') next[key] = value
   }
   void router.replace({ query: next })
@@ -95,9 +89,6 @@ watch(searchQuery, (value) => {
 
 // ── data ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const grouped = ref<GroupedReportResponse | null>(null)
-const rows = ref<AdReportRow[]>([])
-const total = ref(0)
-const adsTotals = ref<AdsReportResponse['totals'] | null>(null)
 const pending = ref(true)
 const loaded = ref(false)
 const error = ref<string | null>(null)
@@ -107,7 +98,6 @@ let session = 0
 const knownWorkspaces = ref<{ id: string, name: string }[]>([])
 const knownAccounts = ref<{ id: string, name: string }[]>([])
 const knownAdvertisers = ref<{ id: string, name: string }[]>([])
-const knownOrders = ref<{ id: string, name: string }[]>([])
 
 function remember(list: Ref<{ id: string, name: string }[]>, id: string | null | undefined, name: string | null | undefined) {
   if (!id) return
@@ -130,18 +120,10 @@ function rememberFromGrouped(response: GroupedReportResponse) {
   }
 }
 
-/** orders come from the ads rows only — there is no order inside the grouped response. */
-function rememberOrdersFromRows(list: AdReportRow[]) {
-  for (const row of list) {
-    remember(knownOrders, row.order?.id, row.order?.name)
-  }
-}
-
 function rememberFromQuery() {
   remember(knownWorkspaces, queryString('workspaceId'), null)
   remember(knownAccounts, queryString('tiktokAccountId'), null)
   remember(knownAdvertisers, queryString('advertiserId'), null)
-  remember(knownOrders, queryString('orderId'), null)
 }
 
 function filterQuery() {
@@ -162,30 +144,14 @@ async function load() {
   error.value = null
   rememberFromQuery()
   try {
-    // retry: 0 — exactly one grouped + one ads request per change (api-contract §3.2)
-    const [groupedRes, adsRes] = await Promise.all([
-      api<GroupedReportResponse>('/reports/grouped', {
-        retry: 0,
-        query: { range: range.value, ...filterQuery() }
-      }),
-      api<AdsReportResponse>('/reports/ads', {
-        retry: 0,
-        query: {
-          range: range.value,
-          page: page.value,
-          limit: LIMIT,
-          sort: sort.value,
-          ...filterQuery()
-        }
-      })
-    ])
+    // retry: 0 — exactly one grouped request per change (contract v1.2 §3.2)
+    const groupedRes = await api<GroupedReportResponse>('/reports/grouped', {
+      retry: 0,
+      query: { range: range.value, ...filterQuery() }
+    })
     if (s !== session) return
     grouped.value = groupedRes
-    rows.value = adsRes.ads ?? []
-    total.value = adsRes.total ?? rows.value.length
-    adsTotals.value = adsRes.totals ?? null
     rememberFromGrouped(groupedRes)
-    rememberOrdersFromRows(rows.value)
     loaded.value = true
     forbidden.value = null
   } catch (e) {
@@ -193,9 +159,6 @@ async function load() {
     const err = e as FetchError<Partial<ApiErrorBody>>
     const message = err.data?.error ?? err.message ?? 'Unexpected error'
     grouped.value = null
-    rows.value = []
-    total.value = 0
-    adsTotals.value = null
     if ((err.response?.status ?? err.statusCode) === 403) {
       forbidden.value = message
       error.value = null
@@ -207,9 +170,9 @@ async function load() {
   }
 }
 
-/** every key that must re-issue the request pair — `gsort` is deliberately excluded (client-side only) */
+/** every key that must re-issue the request — `gsort` is deliberately excluded (client-side only) */
 const queryKey = computed(() => JSON.stringify([
-  range.value, page.value, sort.value, searchQuery.value, workspaceId.value,
+  range.value, searchQuery.value, workspaceId.value,
   accountId.value, advertiserId.value, orderId.value, stateFilter.value, linkedFilter.value
 ]))
 
@@ -247,7 +210,6 @@ function optionItems(list: { id: string, name: string }[], allLabel: string) {
 const workspaceItems = computed(() => optionItems(knownWorkspaces.value, 'ทุก workspace'))
 const accountItems = computed(() => optionItems(knownAccounts.value, 'ทุกบัญชี'))
 const advertiserItems = computed(() => optionItems(knownAdvertisers.value, 'ทุก advertiser'))
-const orderItems = computed(() => optionItems(knownOrders.value, 'ทุก order'))
 const showWorkspaceFilter = computed(() => knownWorkspaces.value.length > 1)
 
 const hasFilter = computed(() =>
@@ -274,12 +236,12 @@ function clearFilters() {
 }
 
 const isEmpty = computed(() =>
-  loaded.value && !error.value && !forbidden.value && (grouped.value?.adCount ?? 0) === 0 && total.value === 0 && !hasFilter.value
+  loaded.value && !error.value && !forbidden.value && (grouped.value?.adCount ?? 0) === 0 && !hasFilter.value
 )
 const isNoMatch = computed(() =>
-  loaded.value && !error.value && !forbidden.value && (grouped.value?.adCount ?? 0) === 0 && total.value === 0 && hasFilter.value
+  loaded.value && !error.value && !forbidden.value && (grouped.value?.adCount ?? 0) === 0 && hasFilter.value
 )
-const showTables = computed(() => !error.value && !forbidden.value && !isEmpty.value && !isNoMatch.value)
+const showTable = computed(() => !error.value && !forbidden.value && !isEmpty.value && !isNoMatch.value)
 const showSkeleton = computed(() => pending.value && !loaded.value && !error.value && !forbidden.value)
 
 // ── header ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -296,17 +258,9 @@ function setRange(value: 'today' | '7d' | 'all') {
   setQuery({ range: value === 'today' ? undefined : value })
 }
 
-function setSort(value: string) {
-  setQuery({ sort: value === DEFAULT_SORT ? undefined : value })
-}
-
 function setGroupSort(value: string) {
-  // client-side only — never resets table 2's page, never issues a request (gsort is outside queryKey)
-  setQuery({ gsort: value === DEFAULT_SORT ? undefined : value }, true)
-}
-
-function setPage(value: number) {
-  setQuery({ page: value > 1 ? String(value) : undefined }, true)
+  // client-side only — never issues a request (gsort is outside queryKey)
+  setQuery({ gsort: value === DEFAULT_GROUP_SORT ? undefined : value })
 }
 </script>
 
@@ -413,15 +367,6 @@ function setPage(value: number) {
               @update:model-value="(v: string) => setQuery({ advertiserId: orUndefined(v) })"
             />
             <USelect
-              :model-value="orderId"
-              :items="orderItems"
-              :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
-              class="min-w-36"
-              aria-label="Order"
-              data-testid="rs-filter-order"
-              @update:model-value="(v: string) => setQuery({ orderId: orUndefined(v) })"
-            />
-            <USelect
               :model-value="stateFilter"
               :items="STATE_ITEMS"
               :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
@@ -513,7 +458,7 @@ function setPage(value: number) {
             </template>
           </UEmpty>
 
-          <template v-else-if="showTables && grouped">
+          <template v-else-if="showTable && grouped">
             <ReportSummaryGroupTable
               :accounts="grouped.accounts"
               :totals="grouped.totals"
@@ -523,18 +468,6 @@ function setPage(value: number) {
               :sort="gsort"
               :pending="pending"
               @update:sort="setGroupSort"
-            />
-
-            <ReportSummaryAdsTable
-              :rows="rows"
-              :total="total"
-              :totals="adsTotals"
-              :sort="sort"
-              :page="page"
-              :limit="LIMIT"
-              :pending="pending"
-              @update:sort="setSort"
-              @update:page="setPage"
             />
           </template>
         </template>
