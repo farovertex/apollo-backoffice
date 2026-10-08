@@ -21,7 +21,10 @@
  *   collapses (AS-8): the shown/auto-picked advertiser of a row (`advertiserOf`/`isAutoAdvertiser`/`setSelected`)
  *   is the API's `defaultAdvertiserId` when it is still `selectable`, else the first `selectable` advertiser of
  *   the account — an explicit `selection` pick always wins. Turning the switch **on** drops every unfunded
- *   account from `selection` (A6); turning it off keeps the selection. The header checkbox (`la-acc-select-all`)
+ *   account from `selection` (A6) and re-resolves every remaining **auto** selection to that computed default
+ *   (BUG-027: only a radio pick the user actually made, tracked in `manualPicks`, counts as explicit — the
+ *   advertiser that select-all/the row checkbox wrote in is the default of the moment, not a decision);
+ *   turning it off keeps the selection. The header checkbox (`la-acc-select-all`)
  *   replaces the old "Select all" button: true/indeterminate/false over the **visible** rows only, and acts
  *   on those same visible rows (`toggleSelectAllVisible`). `la-acc-unfunded-hint`/`la-acc-nofunded` explain
  *   and undo the filter (`la-acc-show-all`); `la-acc-clear-search` also turns the switch off. The account row
@@ -89,18 +92,32 @@ const maxCopies = computed(() => limits.value?.maxAdGroupCopies ?? FALLBACK_MAX_
 /** account id → chosen advertiser id (one per account this round); the body keeps the table order */
 const selection = ref<Record<string, string>>({})
 
+/**
+ * BUG-027 — the account ids whose advertiser the **user** chose by hand, through the row radio
+ * (`pickAdvertiser`). Only those are the "explicit pick" of api-contract §3; an id that the row checkbox or
+ * select-all wrote into `selection` is just the computed default of that moment (`auto`), so it follows the
+ * funded filter instead of pinning an advertiser nobody asked for. Deselecting the account, clearing the
+ * selection or losing the advertiser forgets the pick.
+ */
+const manualPicks = ref<Record<string, true>>({})
+
 /** drop accounts that are no longer available and re-point an advertiser that stopped being selectable */
 function reconcileSelection() {
   const next: Record<string, string> = {}
+  const nextManual: Record<string, true> = {}
   for (const account of accounts.value) {
     if (!account.available) continue
     const picked = selection.value[account.id]
     if (!picked) continue
     const advertiser = account.advertisers.find(a => a.id === picked)
     const keep = advertiser?.selectable ? picked : account.defaultAdvertiserId
-    if (keep) next[account.id] = keep
+    if (!keep) continue
+    next[account.id] = keep
+    // a pick we had to re-point is not the user's choice any more
+    if (keep === picked && manualPicks.value[account.id]) nextManual[account.id] = true
   }
   selection.value = next
+  manualPicks.value = nextManual
 }
 
 async function loadTargets() {
@@ -122,6 +139,7 @@ async function loadTargets() {
     const message = err.data?.error ?? err.message ?? 'Unexpected error'
     accounts.value = []
     selection.value = {}
+    manualPicks.value = {}
     if ((err.response?.status ?? err.statusCode) === 403) forbidden.value = message
     else targetsError.value = message
   } finally {
@@ -194,11 +212,26 @@ const filteredAccounts = computed(() => {
 /** how many of the search/workspace-filtered accounts the funded switch additionally hides */
 const unfundedHiddenCount = computed(() => searchFilteredAccounts.value.filter(a => !isFunded(a)).length)
 
-/** turning the switch on drops unfunded accounts from the selection (A6); off keeps it */
+/**
+ * Turning the switch on drops unfunded accounts from the selection (A6); off keeps it.
+ *
+ * BUG-027 — on top of the drop, every **auto** selection that survives is re-resolved to the computed default
+ * under the new filter state: the whole point of the filter is not to launch on an advertiser without money, so
+ * an advertiser that select-all or the row checkbox wrote in while the switch was off must not survive as if it
+ * were an explicit pick. A `manualPicks` entry (a radio pick the user made) is never re-resolved, in either
+ * direction, and turning the switch off changes nothing (A6 / qa harness fix H10).
+ */
 watch(fundedOnly, (on) => {
   if (!on) return
-  const ids = availableAccounts.value.filter(a => !isFunded(a)).map(a => a.id)
-  selection.value = without(selection.value, ids)
+  const unfunded = availableAccounts.value.filter(a => !isFunded(a)).map(a => a.id)
+  const next = without(selection.value, unfunded)
+  for (const account of availableAccounts.value) {
+    if (next[account.id] === undefined || manualPicks.value[account.id]) continue
+    const def = computedDefaultId(account)
+    if (def) next[account.id] = def
+  }
+  selection.value = next
+  manualPicks.value = without(manualPicks.value, unfunded)
 })
 
 const selectedCount = computed(() => Object.keys(selection.value).length)
@@ -227,6 +260,7 @@ function isSelected(account: LaunchAccount): boolean {
 function setSelected(account: LaunchAccount, on: boolean) {
   if (!on) {
     selection.value = without(selection.value, [account.id])
+    manualPicks.value = without(manualPicks.value, [account.id])
     return
   }
   const id = selection.value[account.id]
@@ -236,16 +270,17 @@ function setSelected(account: LaunchAccount, on: boolean) {
   selection.value = { ...selection.value, [account.id]: id }
 }
 
-/** the selection without the given account ids (no dynamic `delete`) */
-function without(source: Record<string, string>, ids: string[]): Record<string, string> {
+/** a selection / manual-pick map without the given account ids (no dynamic `delete`) */
+function without<T>(source: Record<string, T>, ids: string[]): Record<string, T> {
   const drop = new Set(ids)
   return Object.fromEntries(Object.entries(source).filter(([id]) => !drop.has(id)))
 }
 
-/** picking an advertiser selects its account too (human decision 1) */
+/** picking an advertiser selects its account too (human decision 1) — and marks it as a manual pick (BUG-027) */
 function pickAdvertiser(account: LaunchAccount, advertiser: LaunchAdvertiser) {
   if (!advertiser.selectable) return
   selection.value = { ...selection.value, [account.id]: advertiser.id }
+  manualPicks.value = { ...manualPicks.value, [account.id]: true }
 }
 
 /** header checkbox state over the **visible** rows only (api-contract §3) */
@@ -263,6 +298,7 @@ function toggleSelectAllVisible() {
   if (rows.length === 0) return
   if (visibleSelectedCount.value === rows.length) {
     selection.value = without(selection.value, rows.map(a => a.id))
+    manualPicks.value = without(manualPicks.value, rows.map(a => a.id))
     return
   }
   const picked: Record<string, string> = { ...selection.value }
@@ -275,6 +311,7 @@ function toggleSelectAllVisible() {
 
 function clearSelection() {
   selection.value = {}
+  manualPicks.value = {}
 }
 
 function toggleExpanded(id: string) {
@@ -567,7 +604,9 @@ function onRejected(rejected: CreateOrderRejectedBody['rejected']) {
       icon: 'i-lucide-triangle-alert'
     })
   }
-  selection.value = without(selection.value, rejected.map(entry => entry.tiktokAccountId))
+  const rejectedIds = rejected.map(entry => entry.tiktokAccountId)
+  selection.value = without(selection.value, rejectedIds)
+  manualPicks.value = without(manualPicks.value, rejectedIds)
   step.value = 1
   // the readiness is stale — read it again
   void loadTargets()
