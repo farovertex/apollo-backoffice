@@ -35,6 +35,11 @@
  * `ta-autotopup-last` (`data-at` = `account.autoTopup.lastTriggeredAt` ISO or `''`): "เติมอัตโนมัติล่าสุด <time>"
  * or "ยังไม่เคยเติมอัตโนมัติ". The auto top-up decision moved to the account (was per advertiser); `ta-balance`,
  * `ta-balance-reload` and `ta-balance-error` are unchanged.
+ * FEAT-036 (api-contract.md v1 §4/§7) — column **Recovery email** (`ta-recovery-email`) right after Email
+ * password: masked by default (`maskRecoveryEmail`, `app/utils/recovery-email.ts`), its own reveal set
+ * (`revealedRecovery`, never shared with the password columns), toggle `ta-recovery-email-toggle` + copy
+ * `ta-recovery-email-copy`, `—` when null. `lastLoginError` may now be `mailboxIdentityCheck`
+ * (`login-errors.ts`), rendered by the existing `ta-login-error` chip with no code change here.
  */
 import type { VNode } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
@@ -103,6 +108,8 @@ const filtered = computed<TikTokAccount[]>(() => {
 // one set per column (FEAT-023): revealing the TikTok password must not reveal the mailbox one
 const revealed = ref(new Set<string>())
 const revealedEmail = ref(new Set<string>())
+// FEAT-036 — own reveal set for the Recovery email column, never shared with the two password columns
+const revealedRecovery = ref(new Set<string>())
 function toggle(set: Ref<Set<string>>, id: string) {
   const next = new Set(set.value)
   if (next.has(id)) next.delete(id)
@@ -114,6 +121,7 @@ function toggle(set: Ref<Set<string>>, id: string) {
 watch(data, () => {
   revealed.value = new Set()
   revealedEmail.value = new Set()
+  revealedRecovery.value = new Set()
   polledById.value = new Map()
   topupById.value = new Map()
 })
@@ -531,6 +539,43 @@ const columns: TableColumn<TikTokAccount>[] = [
         name: 'email password',
         onToggle: () => toggle(revealedEmail, row.original.id)
       })
+    }
+  },
+  {
+    id: 'recoveryEmail',
+    header: 'Recovery email',
+    cell: ({ row }) => {
+      // FEAT-036 — the temp-mail address Microsoft's identity/confirm page sends its code to; null on rows
+      // created before the feature and on every row the human has not set it on yet
+      const value = row.original.recoveryEmail
+      if (!value) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-recovery-email', 'data-shown': 'false' }, '—')
+      const shown = revealedRecovery.value.has(row.original.id)
+      return h('div', { class: 'flex items-center gap-1 whitespace-nowrap' }, [
+        h('span', {
+          'class': ['font-mono text-sm', shown ? 'text-highlighted' : 'text-muted'],
+          'data-testid': 'ta-recovery-email',
+          'data-shown': shown ? 'true' : 'false'
+        }, shown ? value : maskRecoveryEmail(value)),
+        h(UButton, {
+          'icon': shown ? 'i-lucide-eye-off' : 'i-lucide-eye',
+          'color': 'neutral',
+          'variant': 'ghost',
+          'size': 'xs',
+          'aria-label': shown ? 'Hide recovery email' : 'Show recovery email',
+          'aria-pressed': shown,
+          'data-testid': 'ta-recovery-email-toggle',
+          'onClick': () => toggle(revealedRecovery, row.original.id)
+        }),
+        h(UButton, {
+          'icon': 'i-lucide-copy',
+          'color': 'neutral',
+          'variant': 'ghost',
+          'size': 'xs',
+          'aria-label': 'Copy recovery email',
+          'data-testid': 'ta-recovery-email-copy',
+          'onClick': () => copyText(value, 'Recovery email copied')
+        })
+      ])
     }
   },
   {

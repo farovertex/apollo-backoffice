@@ -2,6 +2,9 @@
  * FEAT-004 — human texts for `tiktokAccounts.lastLoginError` (spec.md "UI behaviour" → error state mapping).
  * `LOGIN_ERROR_TEXT` = full sentence in the LoginModal error state; `LOGIN_ERROR_SHORT` = the row chip
  * (`ta-login-error`) next to the Session status badge.
+ * FEAT-036 (api-contract.md v1 §7) — `mailboxIdentityCheck`: the mailbox driver could not pass Microsoft's
+ * account.live.com/identity/confirm page through the recovery email. Both maps are `Record<LoginError, …>`, so
+ * the LoginModal error state and the `ta-login-error` chip pick the new texts up automatically.
  */
 import type { LoginError } from '#shared/types/tiktok-accounts'
 
@@ -13,7 +16,8 @@ export const LOGIN_ERROR_TEXT: Record<LoginError, string> = {
   deviceVerify: 'TikTok asks for device verification — log in manually once',
   blocked: 'The account is blocked or suspended',
   timeout: 'Timed out',
-  unknown: 'Unknown page — see screenshot'
+  unknown: 'Unknown page — see screenshot',
+  mailboxIdentityCheck: 'Microsoft asked to confirm the identity through the recovery email and the worker could not pass it — check the recovery email of the account'
 }
 
 export const LOGIN_ERROR_SHORT: Record<LoginError, string> = {
@@ -24,7 +28,8 @@ export const LOGIN_ERROR_SHORT: Record<LoginError, string> = {
   deviceVerify: 'Device verification',
   blocked: 'Blocked',
   timeout: 'Timed out',
-  unknown: 'Unknown page'
+  unknown: 'Unknown page',
+  mailboxIdentityCheck: 'Identity check'
 }
 
 /** Full text for the modal; unknown codes fall back to the code itself, null to a generic sentence. */
