@@ -27,6 +27,12 @@
  * trim → lowercase → optional; non-empty must be a valid email ≤ 254 chars (`Enter a valid recovery email
  * address`). The create body carries `recoveryEmail` only when the field is non-empty (already lowercased);
  * empty → the key is absent (the account reads `recoveryEmail: null`).
+ * BUG-045 — `validate-on` is `['input']` (Nuxt UI's default is `['input','blur','change']`). Both `blur` and
+ * `change` fire while a mouse button is **down** on another control (a text input emits `change` on blur once the
+ * user edited it), so the inserted error line moved Cancel / the "Create new profile automatically" checkbox
+ * further than half their height and no `click` was produced. Submit still validates everything —
+ * `formRef.submit()` validates regardless of `validate-on` — and Nuxt UI keeps tracking blurred fields, so
+ * `input` validation still re-checks a field the user has already left. Do not add `blur`/`change` back here.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -335,6 +341,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <UForm
         :schema="schema"
         :state="state"
+        :validate-on="['input']"
         class="space-y-4"
         @submit="onSubmit"
       >
