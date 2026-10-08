@@ -94,6 +94,14 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-035 — report summary grouped by TikTok account / advertiser / ads, directly after Reports
+      label: 'Report summary',
+      icon: 'i-lucide-sigma',
+      to: '/reports/summary',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), ...(canSeeCashier.value
   ? [{
