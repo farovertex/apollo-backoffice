@@ -101,7 +101,15 @@ const selection = ref<Record<string, string>>({})
  */
 const manualPicks = ref<Record<string, true>>({})
 
-/** drop accounts that are no longer available and re-point an advertiser that stopped being selectable */
+/**
+ * Drop accounts that are no longer available and re-point an advertiser that stopped being selectable.
+ *
+ * BUG-044 — the re-point goes through `computedDefaultId()` like every other path on this page, **not** through
+ * the raw `account.defaultAdvertiserId`: the contract does not promise the API default is `selectable`, and an
+ * id the API will refuse must never reach `selection`, the review row or the create body (409
+ * `advertiserNotSelectable` on a row the user never touched). `computedDefaultId` falls back to the first
+ * selectable advertiser; an account with none keeps no selection at all.
+ */
 function reconcileSelection() {
   const next: Record<string, string> = {}
   const nextManual: Record<string, true> = {}
@@ -110,10 +118,11 @@ function reconcileSelection() {
     const picked = selection.value[account.id]
     if (!picked) continue
     const advertiser = account.advertisers.find(a => a.id === picked)
-    const keep = advertiser?.selectable ? picked : account.defaultAdvertiserId
+    const keep = advertiser?.selectable ? picked : computedDefaultId(account)
     if (!keep) continue
     next[account.id] = keep
-    // a pick we had to re-point is not the user's choice any more
+    // BUG-027/BUG-044 — a pick we had to re-point is not the user's choice any more: the row goes back to
+    // `auto` on the computed default (visible as the `auto` badge) and follows the funded filter again
     if (keep === picked && manualPicks.value[account.id]) nextManual[account.id] = true
   }
   selection.value = next
