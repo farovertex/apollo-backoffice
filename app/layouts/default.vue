@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from '@nuxt/ui'
 
-const route = useRoute()
 const toast = useToast()
 const auth = useAuth()
 
@@ -146,20 +145,12 @@ const links = computed(() => [[{
     }]
   : [])]] satisfies NavigationMenuItem[][])
 
+// BUG-004 — the template's second group ("Code" → "View page source" on github.com/nuxt-ui-templates/dashboard)
+// is removed: the search palette only offers this app's own routes, and nothing in the BO links to a third party.
 const groups = computed(() => [{
   id: 'links',
   label: 'Go to',
   items: links.value.flat()
-}, {
-  id: 'code',
-  label: 'Code',
-  items: [{
-    id: 'source',
-    label: 'View page source',
-    icon: 'i-simple-icons-github',
-    to: `https://github.com/nuxt-ui-templates/dashboard/blob/main/app/pages${route.path === '/' ? '/index' : route.path}.vue`,
-    target: '_blank'
-  }]
 }])
 
 /**

@@ -5,22 +5,28 @@ defineProps<{
   collapsed?: boolean
 }>()
 
+/**
+ * BUG-004 — the dashboard template shipped these entries with `avatar.src` pointing at
+ * `https://github.com/<org>.png`, so every authenticated page made third-party image requests (and the sidebar
+ * broke without internet). The avatars are **initials only** now (`UAvatar` `text`, rendered locally): no `src`
+ * anywhere in this component, no request leaves the BO origin. Structure and behaviour are unchanged.
+ */
 const teams = ref([{
   label: 'Nuxt',
   avatar: {
-    src: 'https://github.com/nuxt.png',
+    text: 'NX',
     alt: 'Nuxt'
   }
 }, {
   label: 'NuxtHub',
   avatar: {
-    src: 'https://github.com/nuxt-hub.png',
+    text: 'NH',
     alt: 'NuxtHub'
   }
 }, {
   label: 'NuxtLabs',
   avatar: {
-    src: 'https://github.com/nuxtlabs.png',
+    text: 'NL',
     alt: 'NuxtLabs'
   }
 }])
