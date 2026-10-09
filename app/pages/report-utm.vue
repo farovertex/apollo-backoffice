@@ -392,7 +392,7 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                 <UInput
                   v-model="fromInput"
                   type="date"
-                  class="w-40"
+                  class="w-36"
                   aria-label="ตั้งแต่"
                   data-testid="ru-from"
                 />
@@ -402,7 +402,7 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                 <UInput
                   v-model="toInput"
                   type="date"
-                  class="w-40"
+                  class="w-36"
                   aria-label="ถึง"
                   data-testid="ru-to"
                 />
@@ -411,14 +411,14 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                 v-model="prefixInput"
                 :items="prefixItems"
                 :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
-                class="min-w-40"
+                class="min-w-36"
                 aria-label="Prefix"
                 data-testid="ru-prefix"
               />
               <UInput
                 v-model="sourceInput"
                 placeholder="source"
-                class="w-32"
+                class="w-28"
                 aria-label="source"
                 data-testid="ru-source"
                 @keydown.enter="search()"
@@ -426,7 +426,7 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
               <UInput
                 v-model="mediumInput"
                 placeholder="medium"
-                class="w-32"
+                class="w-28"
                 aria-label="medium"
                 data-testid="ru-medium"
                 @keydown.enter="search()"
@@ -434,7 +434,7 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
               <UInput
                 v-model="campaignInput"
                 placeholder="campaign"
-                class="w-40"
+                class="w-36"
                 aria-label="campaign"
                 data-testid="ru-campaign"
                 @keydown.enter="search()"
