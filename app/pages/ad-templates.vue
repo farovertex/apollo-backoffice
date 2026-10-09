@@ -172,7 +172,7 @@ function ctaCell(template: AdTemplate): string {
 function utmCell(template: AdTemplate): string {
   const utm = template.config?.utm
   if (!utm?.prefix) return '—'
-  return `${utm.prefix} · ${utm.campaign}`
+  return `${utm.prefix} · ${utm.campaign || '—'}`
 }
 
 /** Catalog cell: the part after `/` of `catalogVersion` (`v1`), `–` for a document this API never wrote */

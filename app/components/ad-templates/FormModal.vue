@@ -31,7 +31,9 @@
  * **FEAT-038** (api-contract v1 §2, §6 · spec U1, AC-22…AC-26): a 6th section "UTM" records which UTM set the
  * ad's sign-up link counts under. The toggle `adt-utm-enabled` decides the whole block: off → the body sends
  * `config.utm: null`, on → prefix (from `options.utmPrefixes`, never a hard-coded list) + `utm_source` /
- * `utm_medium` / `utm_campaign`, all four required. The paste box only runs `parseUtm()` on what was pasted and
+ * `utm_medium` / `utm_campaign`, all four required. The four fields are hidden with `v-show` (the convention of
+ * the section bodies below), while the "ยังไม่ตั้งรายการ Prefix" line of an empty `utmPrefixes` list stays
+ * readable either way — nothing can be bound until a GOD fills that list. The paste box only runs `parseUtm()` and
  * is never sent. The three ids (`sourceId` / `mediumId` / `campaignId`) are filled in by the API after it proved
  * the set exists in the 3rd-party system: they are shown read-only (`adt-utm-ids`) and never sent back.
  * A `config.utm` issue is not a field — it is rendered under the section (`adt-utm-error`), and so is the
@@ -54,7 +56,7 @@ import type { FetchError } from 'ofetch'
 import type { Form, FormErrorEvent, FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
 import { ctaValuesFrom } from '~/utils/ad-cta'
-import { parseUtm } from '~/utils/utm'
+import { UTM_NAME_MAX_LENGTH, UTM_PREFIX_MAX_LENGTH, parseUtm } from '~/utils/utm'
 import type {
   AdConfig,
   AdConfigRequest,
@@ -112,9 +114,6 @@ const DEFAULT_HAND_CURSOR = true
 const CODE_MAX_LENGTH = 500
 
 // ── FEAT-038 UTM (api-contract §2.1 `utmRefBodySchema`, §2.2 the 502 bodies) ─────────────────────────────────────────
-/** `prefix` trim 1..64, the three names trim 1..255; `/options.limits` does not serve these either */
-const UTM_PREFIX_MAX_LENGTH = 64
-const UTM_NAME_MAX_LENGTH = 255
 /** the client texts mirror the API's own zod messages so a client and a server refusal read the same */
 const UTM_MESSAGES = {
   prefixRequired: 'เลือก Prefix',
@@ -1519,7 +1518,29 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               data-testid="adt-utm-enabled"
             />
 
-            <template v-if="state.config.utm.enabled">
+            <!--
+              The list is a GOD setting: while it is empty nothing can be bound, so the line stays readable
+              whether or not the toggle is on (the select below is disabled for the same reason).
+            -->
+            <p
+              v-if="noUtmPrefixes"
+              class="flex flex-wrap items-center gap-1 text-xs text-muted"
+              data-testid="adt-utm-no-prefixes"
+            >
+              <span>ยังไม่ตั้งรายการ Prefix</span>
+              <!-- only a GOD can maintain the list (the page itself is GOD-only, spec AS-9) -->
+              <NuxtLink
+                v-if="isGod"
+                to="/settings/utm"
+                class="text-primary hover:underline"
+                data-testid="adt-utm-settings-link"
+              >
+                ตั้งค่าที่ Settings
+              </NuxtLink>
+            </p>
+
+            <!-- `v-show`, like the section bodies themselves: the four fields are hidden while the toggle is off -->
+            <div v-show="state.config.utm.enabled" class="space-y-4">
               <div class="grid gap-4 sm:grid-cols-2">
                 <UFormField
                   label="Prefix"
@@ -1535,20 +1556,6 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                     :disabled="submitting || noUtmPrefixes"
                     data-testid="adt-utm-prefix"
                   />
-                  <template v-if="noUtmPrefixes" #help>
-                    <span class="flex flex-wrap items-center gap-1" data-testid="adt-utm-no-prefixes">
-                      <span>ยังไม่ตั้งรายการ Prefix</span>
-                      <!-- only a GOD can maintain the list (the page itself is GOD-only, spec AS-9) -->
-                      <NuxtLink
-                        v-if="isGod"
-                        to="/settings/utm"
-                        class="text-primary hover:underline"
-                        data-testid="adt-utm-settings-link"
-                      >
-                        ตั้งค่าที่ Settings
-                      </NuxtLink>
-                    </span>
-                  </template>
                 </UFormField>
 
                 <!-- helper only: `parseUtm` fills the three inputs; the text itself is never sent -->
@@ -1620,7 +1627,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               <p v-if="utmIds" class="text-xs break-all text-muted" data-testid="adt-utm-ids">
                 {{ utmIds }}
               </p>
-            </template>
+            </div>
 
             <!-- the set as a whole was refused (400 `config.utm`) or could not be checked (502) -->
             <p
