@@ -23,6 +23,11 @@
  * always an object, appended after `autoTopupDisabled`): system bookkeeping of the last auto top-up round
  * opened for this account. `GET /launch/targets` also carries the account balance now
  * (`shared/types/campaign-orders.ts`).
+ * FEAT-036 (api-contract.md v1 §3/§4/§7) — optional `recoveryEmail` (the temp-mail address Microsoft's
+ * identity/confirm page sends its security code to), inserted right after `emailPassword`; carried by
+ * `POST /tiktok-accounts` and a batch row (key present only when non-empty), and by the new `PATCH
+ * /tiktok-accounts/:id` (type only — no BO caller this round, prompt §3.4). `LoginError` gains
+ * `mailboxIdentityCheck` (the mailbox driver could not pass account.live.com/identity/confirm).
  */
 
 import type { TopupView } from './topups'
@@ -32,6 +37,8 @@ export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' 
 /** Reason the last login job stopped (`tiktokAccounts.lastLoginError`); null after a success or a manual Login. */
 export type LoginError
   = 'badCredentials' | 'captchaFailed' | 'otpExpired' | 'otpRejected' | 'deviceVerify' | 'blocked' | 'timeout' | 'unknown'
+    /** FEAT-036 — the mailbox driver could not pass account.live.com/identity/confirm (no recovery email · no match · code late · code rejected) */
+    | 'mailboxIdentityCheck'
 
 /** Reason the last discover job stopped (`tiktokAccounts.lastDiscoverError`); null after a success. */
 export type DiscoverError = 'notLoggedIn' | 'noOrgId' | 'listApiFailed' | 'timeout' | 'unknown'
@@ -117,6 +124,8 @@ export interface TikTokAccount {
   password: string
   /** mailbox password of `loginEmail`, used by the automatic first login; null on rows created before FEAT-023 */
   emailPassword: string | null
+  /** FEAT-036 — temp-mail address Microsoft's identity/confirm page sends its security code to; null = none */
+  recoveryEmail: string | null
   /** the scheduler signs this account in once (mailbox then TikTok); the API turns it off on success or on a final failure */
   pendingFirstLogin: boolean
   firstLoginFail: FirstLoginFail | null
@@ -193,6 +202,8 @@ export interface CreateAccountBody {
   label?: string
   /** FEAT-023 — omitted = true on the API side; the BO always sends it so the checkbox is the only source */
   pendingFirstLogin?: boolean
+  /** FEAT-036 — present only when the Add modal field is filled (trimmed, lowercased); omitted = null on the account */
+  recoveryEmail?: string
 }
 
 /** FEAT-023 — one CSV line of `POST /tiktok-accounts/batch`; `label` is always null for imported rows. */
@@ -206,6 +217,12 @@ export interface BatchAccountRow {
    * for a 3-column file, which means "use the caller's Default settings mode" (AS-3). No client-side URL check.
    */
   proxy?: string
+  /**
+   * FEAT-036 §7 — present **only** when the CSV had the 5th `recovery_email` column and the cell was non-empty
+   * (trimmed, lowercased); an empty cell or a 3/4-column file sends no key, which means `recoveryEmail: null` on
+   * the account. The BO parser refuses a malformed value before any request.
+   */
+  recoveryEmail?: string
 }
 
 /** FEAT-023 — `POST /tiktok-accounts/batch` body (§5): 1..1000 rows, one flag for the whole file. */
@@ -251,4 +268,13 @@ export interface LoginConflictBody {
   jobId?: string
   jobType?: 'login' | 'discover'
   humanTaskId?: string
+}
+
+/**
+ * FEAT-036 (api-contract.md v1 §3 AS-2) — `PATCH /tiktok-accounts/:id` body (`.strict()`, `recoveryEmail`
+ * required in this body: a string sets it, `null` clears it). **Type only this round** (prompt §3.4): no Edit
+ * form exists yet, so nothing in the BO calls this endpoint — the human sets it with curl (final report).
+ */
+export interface PatchAccountBody {
+  recoveryEmail: string | null
 }

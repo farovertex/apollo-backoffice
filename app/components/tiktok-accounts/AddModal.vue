@@ -22,6 +22,17 @@
  * (`{ name, proxyMode }` or `{ name, proxyId }`); a 409 (`no proxy available (tried N)`, bound proxy) renders in
  * `ta-add-error` and **no** `POST /tiktok-accounts` is sent. Unchecked → the radio is hidden and no proxy key
  * exists anywhere.
+ * FEAT-036 (api-contract.md v1 §3/§7) — optional field **Recovery email** (`ta-add-recovery-email`) under
+ * *Email password*: the temp-mail address Microsoft's identity/confirm page sends its security code to. zod:
+ * trim → lowercase → optional; non-empty must be a valid email ≤ 254 chars (`Enter a valid recovery email
+ * address`). The create body carries `recoveryEmail` only when the field is non-empty (already lowercased);
+ * empty → the key is absent (the account reads `recoveryEmail: null`).
+ * BUG-045 — `validate-on` is `['input']` (Nuxt UI's default is `['input','blur','change']`). Both `blur` and
+ * `change` fire while a mouse button is **down** on another control (a text input emits `change` on blur once the
+ * user edited it), so the inserted error line moved Cancel / the "Create new profile automatically" checkbox
+ * further than half their height and no `click` was produced. Submit still validates everything —
+ * `formRef.submit()` validates regardless of `validate-on` — and Nuxt UI keeps tracking blurred fields, so
+ * `input` validation still re-checks a field the user has already left. Do not add `blur`/`change` back here.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -60,6 +71,12 @@ const schema = z.object({
   password: z.string({ error: 'TikTok password is required' })
     .min(1, 'TikTok password is required')
     .max(128, 'TikTok password must be at most 128 characters'),
+  // FEAT-036 — optional; empty allowed, non-empty must be a valid email (checked in superRefine below so an
+  // empty string never trips `z.email()`)
+  recoveryEmail: z.string()
+    .trim()
+    .toLowerCase()
+    .optional(),
   label: z.string()
     .trim()
     .max(100, 'Label must be at most 100 characters')
@@ -75,6 +92,14 @@ const schema = z.object({
       message: 'Browser profile is required'
     })
   }
+  // FEAT-036 — empty is fine (optional field); non-empty must parse as an email, same pipeline as loginEmail
+  if (data.recoveryEmail && (data.recoveryEmail.length > 254 || !z.email().safeParse(data.recoveryEmail).success)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['recoveryEmail'],
+      message: 'Enter a valid recovery email address'
+    })
+  }
 })
 
 type Schema = z.output<typeof schema>
@@ -83,6 +108,7 @@ interface FormState {
   loginEmail: string
   emailPassword: string
   password: string
+  recoveryEmail: string
   label: string
   pendingFirstLogin: boolean
   createProfile: boolean
@@ -94,6 +120,7 @@ function emptyState(): FormState {
     loginEmail: '',
     emailPassword: '',
     password: '',
+    recoveryEmail: '',
     label: '',
     pendingFirstLogin: true,
     createProfile: true,
@@ -272,6 +299,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     pendingFirstLogin: event.data.pendingFirstLogin
   }
   if (event.data.label) body.label = event.data.label
+  // FEAT-036 — key present only when the field is non-empty (already trimmed + lowercased by the schema)
+  if (event.data.recoveryEmail) body.recoveryEmail = event.data.recoveryEmail
   try {
     const account = await api<TikTokAccount>('/tiktok-accounts', { method: 'POST', body, retry: 0 })
     open.value = false
@@ -312,6 +341,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <UForm
         :schema="schema"
         :state="state"
+        :validate-on="['input']"
         class="space-y-4"
         @submit="onSubmit"
       >
@@ -351,6 +381,21 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </template>
           </UInput>
+        </UFormField>
+
+        <UFormField label="Recovery email" name="recoveryEmail" hint="Optional">
+          <UInput
+            v-model="state.recoveryEmail"
+            type="email"
+            autocomplete="off"
+            placeholder="recovery@example.com"
+            class="w-full"
+            :disabled="submitting"
+            data-testid="ta-add-recovery-email"
+          />
+          <template #help>
+            <span data-testid="ta-add-recovery-email-helper">{{ RECOVERY_EMAIL_HELP }}</span>
+          </template>
         </UFormField>
 
         <UFormField label="TikTok password" name="password" required>
