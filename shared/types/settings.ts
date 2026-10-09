@@ -32,3 +32,29 @@ export interface AutoTopupSettingsBody {
   amount: number | null
   cooldownMs: number
 }
+
+/**
+ * FEAT-038 (api-contract v1 §4) — the global list of UTM prefixes an ad template may bind to.
+ * `GET /settings/utm` 200 body (GOD + Admin readable; the page itself is GOD-only, spec AS-9).
+ * Defaults are `[]` / `null` while the settings document does not exist — the GET never creates it.
+ */
+export interface UtmSettings {
+  /** exact, case-sensitive, no inner whitespace, ≤ 50 items — a prefix becomes part of the 3rd-party host */
+  prefixes: string[]
+  /** ISO | null — the singleton's `updatedAt`, shared with the auto-top-up block */
+  updatedAt: string | null
+}
+
+/** `PATCH /settings/utm` body (GOD) — strict, always the **complete** new list. */
+export interface UtmSettingsBody {
+  prefixes: string[]
+}
+
+/**
+ * `PATCH /settings/utm` 200 body — `UtmSettings` + the prefixes **removed by this PATCH** that some ad
+ * template still binds to (sorted; `[]` when nothing removed is in use). Removing an in-use prefix is allowed:
+ * the template keeps working, but its next save with `utm` has to pick a listed prefix (AS-5).
+ */
+export interface UtmSettingsPatchResponse extends UtmSettings {
+  inUse: string[]
+}

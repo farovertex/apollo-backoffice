@@ -140,8 +140,34 @@ export interface AdTracking {
 }
 
 /**
- * The 6 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
+ * FEAT-038 — `config.utm` **as sent to the API** (api-contract §2.1 `utmRefBodySchema`): the four strings the
+ * admin picked/typed. The three ids are filled in by the API after it proved the set exists in the 3rd-party
+ * UTM system, and are **never** sent back (the body is strict).
+ */
+export interface UtmRefBody {
+  /** one of `options.utmPrefixes` (exact, case-sensitive) — becomes part of the 3rd-party host */
+  prefix: string
+  source: string
+  medium: string
+  campaign: string
+}
+
+/**
+ * FEAT-038 — `config.utm` **as served by the API** (api-contract §1 `UtmRef`): the four strings plus the ids
+ * the 3rd-party `utmList` answered with. Display-only in the BO (`adt-utm-ids`).
+ * A template saved **before** this feature has no `utm` key at all (F2/AS-2) → read as `null`.
+ */
+export interface UtmRef extends UtmRefBody {
+  sourceId: string
+  mediumId: string
+  campaignId: string
+}
+
+/**
+ * The 7 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
  * `identity.post` of an `authCode` template includes the stored Spark `code`.
+ * FEAT-038: `utm` is the 7th key — optional in this type because a document saved before that feature has no
+ * such key (F2); every reader treats a missing key as `null`.
  */
 export interface AdConfig {
   /** null = let TikTok auto-name the ad; the job appends the date to the prefix */
@@ -152,11 +178,17 @@ export interface AdConfig {
   allowOnTiktokPlatforms: TriState
   cta: AdCta
   tracking: AdTracking
+  /** FEAT-038 — the UTM set the ad's sign-up link counts under; `null` / absent = not bound */
+  utm?: UtmRef | null
 }
 
-/** The same 6 keys **as sent to the API** (`identity.post` carries the code, never `hasCode`/`codeLast4`). */
-export interface AdConfigRequest extends Omit<AdConfig, 'identity'> {
+/**
+ * The same 7 keys **as sent to the API** (`identity.post` carries the code, never `hasCode`/`codeLast4`;
+ * `utm` carries the four body strings, never the ids).
+ */
+export interface AdConfigRequest extends Omit<AdConfig, 'identity' | 'utm'> {
   identity: AdIdentityRequest
+  utm?: UtmRefBody | null
 }
 
 /** Exact key set of the API's template view (`catalogVersion` after `config`). */
@@ -196,8 +228,8 @@ export interface AdTemplateLimits {
 }
 
 /**
- * `GET /ad-templates/options` 200 body — exactly 13 keys (FEAT-017 api-contract §2.5): the 9 label lists plus
- * the BO helpers (`allowOnTiktokPlatformsLabel`, `systemDefault`, `catalogVersion`, `limits`).
+ * `GET /ad-templates/options` 200 body — exactly 14 keys (FEAT-038 api-contract §2.4): the 9 label lists plus
+ * the BO helpers (`allowOnTiktokPlatformsLabel`, `systemDefault`, `catalogVersion`, `limits`, `utmPrefixes`).
  */
 export interface AdTemplateOptions {
   /** 1 item (`spark`) — rendered as a one-item radio group, never hard-coded (spec A3) */
@@ -231,6 +263,11 @@ export interface AdTemplateOptions {
   catalogVersion: string
   /** the maxima the BO validates the texts and the two URLs with */
   limits: AdTemplateLimits
+  /**
+   * FEAT-038 — the allowed UTM prefixes (`systemSettings.utm.prefixes`, same order; `[]` while a GOD has not
+   * set any). An older API that does not serve the key yet behaves like `[]`.
+   */
+  utmPrefixes?: string[]
 }
 
 /**

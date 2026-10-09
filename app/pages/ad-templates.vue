@@ -165,6 +165,16 @@ function ctaCell(template: AdTemplate): string {
   return ctaSummary(values, options.value?.ctaValue)
 }
 
+/**
+ * FEAT-038 — UTM cell (spec U2): `<prefix> · <campaign>` for a bound template, `—` for an unbound one and for
+ * a template saved before the feature (no `utm` key at all).
+ */
+function utmCell(template: AdTemplate): string {
+  const utm = template.config?.utm
+  if (!utm?.prefix) return '—'
+  return `${utm.prefix} · ${utm.campaign}`
+}
+
 /** Catalog cell: the part after `/` of `catalogVersion` (`v1`), `–` for a document this API never wrote */
 function catalogCell(template: AdTemplate): string {
   const version = template.catalogVersion
@@ -365,6 +375,9 @@ function onDeleted() {
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   CTA
                 </th>
+                <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  UTM
+                </th>
                 <th class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Catalog
                 </th>
@@ -384,7 +397,7 @@ function onDeleted() {
             </thead>
             <tbody :class="pending ? 'opacity-60' : ''">
               <tr v-if="pending && items.length === 0" data-testid="adt-loading">
-                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="9">
+                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="10">
                   Loading templates…
                 </td>
               </tr>
@@ -415,6 +428,9 @@ function onDeleted() {
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <span class="line-clamp-2 max-w-56" :title="ctaCell(template)" data-testid="adt-cta">{{ ctaCell(template) }}</span>
+                </td>
+                <td class="border-b border-default px-3 py-2">
+                  <span class="line-clamp-2 max-w-40" :title="utmCell(template)" data-testid="adt-utm">{{ utmCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-2 py-2">
                   <!-- stacked: the badge under the version keeps the column inside the 1440 table width -->

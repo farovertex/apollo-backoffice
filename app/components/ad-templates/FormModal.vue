@@ -28,10 +28,22 @@
  * shows the hint: while the hint is shown the PATCH body sends `identity.post = { selection: 'authCode' }` and
  * the API keeps the stored code. The code is never logged and never put in a toast.
  *
- * Layout: five sections in the TikTok page order as an **accordion**. `adname` is always open and has no toggle;
- * `identity` / `destination` / `cta` / `tracking` sit behind `adt-sec-<id>-toggle`, are collapsed while every
- * control in them equals `options.systemDefault` (badge `adt-sec-<id>-default` = `Default`, live) and auto-expand
- * when one of their fields carries a client or API error.
+ * **FEAT-038** (api-contract v1 §2, §6 · spec U1, AC-22…AC-26): a 6th section "UTM" records which UTM set the
+ * ad's sign-up link counts under. The toggle `adt-utm-enabled` decides the whole block: off → the body sends
+ * `config.utm: null`, on → prefix (from `options.utmPrefixes`, never a hard-coded list) + `utm_source` /
+ * `utm_medium` / `utm_campaign`, all four required. The paste box only runs `parseUtm()` on what was pasted and
+ * is never sent. The three ids (`sourceId` / `mediumId` / `campaignId`) are filled in by the API after it proved
+ * the set exists in the 3rd-party system: they are shown read-only (`adt-utm-ids`) and never sent back.
+ * A `config.utm` issue is not a field — it is rendered under the section (`adt-utm-error`), and so is the
+ * `{ error }` text of a **502** (which also raises a toast and keeps the modal open with the values intact).
+ * A template saved before FEAT-038 has no `utm` key at all: it opens with the toggle off and a save leaves
+ * `utm` out of the PATCH entirely.
+ *
+ * Layout: six sections in the TikTok page order as an **accordion** (UTM last — it is ours, not TikTok's).
+ * `adname` is always open and has no toggle; `identity` / `destination` / `cta` / `tracking` / `utm` sit behind
+ * `adt-sec-<id>-toggle`, are collapsed while every control in them equals `options.systemDefault` (badge
+ * `adt-sec-<id>-default` = `Default`, live; the UTM section reads `ไม่ผูก` while the toggle is off, AS-8) and
+ * auto-expand when one of their fields carries a client or API error.
  * The collapsed body is hidden with `v-show` (never unmounted) so every value is still submitted and an error can
  * be rendered the moment its section opens — `UCollapsible`'s `unmountOnHide: false` only sets
  * `hidden="until-found"`, which is not reliably "hidden" for a test runner, and unmounting would drop the field an
@@ -42,6 +54,7 @@ import type { FetchError } from 'ofetch'
 import type { Form, FormErrorEvent, FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
 import { ctaValuesFrom } from '~/utils/ad-cta'
+import { parseUtm } from '~/utils/utm'
 import type {
   AdConfig,
   AdConfigRequest,
@@ -57,7 +70,9 @@ import type {
   CreateAdTemplateBody,
   OptionItem,
   PatchAdTemplateBody,
-  TriState
+  TriState,
+  UtmRef,
+  UtmRefBody
 } from '#shared/types/ad-templates'
 
 const props = defineProps<{
@@ -79,6 +94,9 @@ const modalContent = { 'data-testid': 'adt-form-modal' } as ModalProps['content'
 
 const api = useApi()
 const toast = useToast()
+// display-only, like the sidebar: the link to the GOD-only prefix settings is hidden for everybody else
+const { admin } = useAuth()
+const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
 
 const isEdit = computed(() => props.template !== null)
 
@@ -92,6 +110,21 @@ const DEFAULT_LANGUAGE = 'th'
 const DEFAULT_HAND_CURSOR = true
 /** api-contract §2.1 — `code` trim 1..500; `/options.limits` does not serve this one (see bo.md) */
 const CODE_MAX_LENGTH = 500
+
+// ── FEAT-038 UTM (api-contract §2.1 `utmRefBodySchema`, §2.2 the 502 bodies) ─────────────────────────────────────────
+/** `prefix` trim 1..64, the three names trim 1..255; `/options.limits` does not serve these either */
+const UTM_PREFIX_MAX_LENGTH = 64
+const UTM_NAME_MAX_LENGTH = 255
+/** the client texts mirror the API's own zod messages so a client and a server refusal read the same */
+const UTM_MESSAGES = {
+  prefixRequired: 'เลือก Prefix',
+  required: 'ต้องไม่ว่าง',
+  prefixTooLong: `prefix ยาวเกิน ${UTM_PREFIX_MAX_LENGTH} ตัว`,
+  nameTooLong: (field: string) => `${field} ยาวเกิน ${UTM_NAME_MAX_LENGTH} ตัว`,
+  /** 502 — the API could not reach / was refused by the 3rd-party UTM system; its `error` text is the detail */
+  gatewayTitle: 'ตรวจ UTM ไม่ได้',
+  gatewayFallback: 'ตรวจ UTM กับระบบปลายทางไม่ได้ — ลองใหม่อีกครั้ง'
+} as const
 
 // ── form state (mirrors the API body; every enum is a plain string so an unknown option value still renders) ─────────
 interface ConfigState {
@@ -115,6 +148,16 @@ interface ConfigState {
   /** selected call-to-action keys, in dropdown order */
   cta: { values: string[] }
   tracking: { impressionUrl: string, clickUrl: string }
+  /** FEAT-038 — `enabled` is the UI encoding of `utm !== null`; the ids are never part of the form state */
+  utm: UtmState
+}
+
+interface UtmState {
+  enabled: boolean
+  prefix: string
+  source: string
+  medium: string
+  campaign: string
 }
 
 interface FormState {
@@ -146,6 +189,26 @@ function radioToTri(value: string | undefined): TriState {
  * else (a legacy `first` / `named` page, or the system default) starts from the defaults of spec L-10.
  * The Spark code is seeded from the view when the template carries one.
  */
+/**
+ * FEAT-038 — the stored `config.utm` as the form holds it. A missing key (a template saved before the feature)
+ * and an explicit `null` are the same thing here: the toggle starts off and the four inputs are empty.
+ */
+function utmStateFrom(utm: UtmRef | null | undefined): UtmState {
+  return {
+    enabled: !!utm,
+    prefix: utm?.prefix ?? '',
+    source: utm?.source ?? '',
+    medium: utm?.medium ?? '',
+    campaign: utm?.campaign ?? ''
+  }
+}
+
+/** the four body strings of a stored `utm` (the ids are dropped — the API fills them in on every save) */
+function utmBodyOf(utm: UtmRef | null | undefined): UtmRefBody | null {
+  if (!utm) return null
+  return { prefix: utm.prefix, source: utm.source, medium: utm.medium, campaign: utm.campaign }
+}
+
 function storedSparkCode(config: AdConfig | null | undefined): string {
   const post = config?.identity?.post
   if (post?.selection !== POST_AUTH_CODE || !('code' in post) || typeof post.code !== 'string') return ''
@@ -184,7 +247,8 @@ function configStateFrom(config: AdConfig): ConfigState {
     tracking: {
       impressionUrl: config?.tracking?.impressionUrl ?? '',
       clickUrl: config?.tracking?.clickUrl ?? ''
-    }
+    },
+    utm: utmStateFrom(config?.utm)
   }
 }
 
@@ -209,8 +273,16 @@ const submitError = ref<{ title: string, description?: string } | null>(null)
  */
 const serverErrors = ref<Record<string, string>>({})
 
+/**
+ * FEAT-038 — what the API said about the UTM **set** rather than about one of its fields: a 400 whose issue
+ * path is exactly `config.utm` ("ไม่พบ UTM นี้ในระบบปลายทาง …") and the `{ error }` text of a 502. It is not a
+ * `UFormField` name, so it gets its own place under the section (`adt-utm-error`).
+ */
+const utmSectionError = ref<string | null>(null)
+
 function clearServerErrors() {
   serverErrors.value = {}
+  utmSectionError.value = null
 }
 
 // any edit invalidates what the server said about the form
@@ -220,7 +292,7 @@ watch(state, clearServerErrors, { deep: true })
 const formRef = useTemplateRef<Form<Schema>>('formRef')
 
 // ── accordion (five sections in the TikTok page order) ───────────────────────────────────────────────────────────────
-type SectionId = 'adname' | 'identity' | 'destination' | 'cta' | 'tracking'
+type SectionId = 'adname' | 'identity' | 'destination' | 'cta' | 'tracking' | 'utm'
 
 /**
  * The collapsible sections and the `config` keys each one owns. The heading is the section's TikTok title —
@@ -234,7 +306,8 @@ const SECTIONS = [
     keys: ['destination', 'allowOnTiktokPlatforms'] as const
   },
   { id: 'cta' as const, heading: 'Call to action', keys: ['cta'] as const },
-  { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const }
+  { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const },
+  { id: 'utm' as const, heading: 'UTM', keys: ['utm'] as const }
 ] satisfies readonly { id: SectionId, heading: string, keys: readonly (keyof AdConfig)[] }[]
 
 const COLLAPSIBLE_IDS = SECTIONS.map(section => section.id)
@@ -322,6 +395,40 @@ const isLegacyTemplate = computed(() => {
     || LEGACY_SELECTIONS.has(config.destination?.page?.selection ?? '')
 })
 
+// ── the UTM section (FEAT-038 · spec U1) ─────────────────────────────────────────────────────────────────────────────
+/**
+ * The prefixes offered by the select: the settings list from `/options`, plus the prefix this template is bound
+ * to when a GOD has meanwhile removed it from the list (settings `inUse`). Without that the value would
+ * disappear from the control and an unrelated save would wipe the binding.
+ */
+const utmPrefixItems = computed<string[]>(() => {
+  const listed = props.options.utmPrefixes ?? []
+  const bound = props.template?.config?.utm?.prefix ?? ''
+  return bound && !listed.includes(bound) ? [...listed, bound] : [...listed]
+})
+
+/** no prefix has been set up yet → the select has nothing to offer (GOD gets the link to the settings page) */
+const noUtmPrefixes = computed(() => utmPrefixItems.value.length === 0)
+
+/** the three ids the API answered with, display-only; absent for a create and for an unbound / old template */
+const utmIds = computed(() => {
+  const utm = props.template?.config?.utm
+  if (!utm?.sourceId && !utm?.mediumId && !utm?.campaignId) return null
+  return `id: source ${utm?.sourceId ?? '—'} · medium ${utm?.mediumId ?? '—'} · campaign ${utm?.campaignId ?? '—'}`
+})
+
+/** the paste box is a helper, not a value: it never enters `state` and therefore never reaches the API */
+const utmPaste = ref('')
+
+function onUtmPaste(text: string) {
+  utmPaste.value = text
+  const found = parseUtm(text)
+  // only the keys that were really found are overwritten — the others keep what the user typed
+  if (found.utm_source !== undefined) state.config.utm.source = found.utm_source
+  if (found.utm_medium !== undefined) state.config.utm.medium = found.utm_medium
+  if (found.utm_campaign !== undefined) state.config.utm.campaign = found.utm_campaign
+}
+
 // ── "Default" badges (live) ──────────────────────────────────────────────────────────────────────────────────────────
 /** the config the current state would send — the single source for the badges and for the POST/PATCH bodies */
 const currentConfig = computed(() => configFromState())
@@ -331,7 +438,13 @@ const sectionIsDefault = computed<Record<string, boolean>>(() => {
   const base = props.options.systemDefault
   return Object.fromEntries(
     SECTIONS.map(section =>
-      [section.id, section.keys.every(key => deepEqual(next[key], base?.[key]))] as [string, boolean]
+      [
+        section.id,
+        // UTM is not a TikTok setting: "unbound" is its default, whatever `systemDefault` says (badge "ไม่ผูก")
+        section.id === 'utm'
+          ? !state.config.utm.enabled
+          : section.keys.every(key => deepEqual(next[key], base?.[key]))
+      ] as [string, boolean]
     )
   )
 })
@@ -345,6 +458,7 @@ function syncExpanded() {
 function resetForm() {
   Object.assign(state, stateFrom(props.template))
   resetCodeMode()
+  utmPaste.value = ''
   submitting.value = false
   submitError.value = null
   clearServerErrors()
@@ -360,10 +474,13 @@ watch(open, (isOpen) => {
  * "Reset to TikTok defaults" — config controls only, name/description untouched, no request.
  * The stored Spark code is **not** a TikTok default: an edit puts that code back in the field. A masked
  * template (no `code` in the view) goes back to the hint. A create / legacy template keeps the empty input.
+ * FEAT-038: the UTM binding is ours, not TikTok's — it is restored the same way, so this button never silently
+ * unbinds a template.
  */
 function resetToDefaults() {
   state.config = configStateFrom(props.options.systemDefault)
   state.config.identity.post.code = storedSparkCode(props.template?.config)
+  state.config.utm = utmStateFrom(props.template?.config?.utm)
   resetCodeMode()
   submitError.value = null
   clearServerErrors()
@@ -431,6 +548,13 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
       tracking: z.object({
         impressionUrl: z.string().trim(),
         clickUrl: z.string().trim()
+      }),
+      utm: z.object({
+        enabled: z.boolean(),
+        prefix: z.string().trim().max(UTM_PREFIX_MAX_LENGTH, UTM_MESSAGES.prefixTooLong),
+        source: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('source')),
+        medium: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('medium')),
+        campaign: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('campaign'))
       })
     })
   }).superRefine((data, ctx) => {
@@ -489,6 +613,18 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
         ctx.addIssue({ code: 'custom', path, message: 'URL must start with http:// or https://' })
       }
     }
+
+    // FEAT-038 — all four values are required while the toggle is on; off means `utm: null` and no check at all
+    if (data.config.utm.enabled) {
+      if (data.config.utm.prefix === '') {
+        ctx.addIssue({ code: 'custom', path: ['config', 'utm', 'prefix'], message: UTM_MESSAGES.prefixRequired })
+      }
+      for (const key of ['source', 'medium', 'campaign'] as const) {
+        if (data.config.utm[key] === '') {
+          ctx.addIssue({ code: 'custom', path: ['config', 'utm', key], message: UTM_MESSAGES.required })
+        }
+      }
+    }
   })
 }
 
@@ -531,6 +667,16 @@ function configFromState(): AdConfigRequest {
   const impressionUrl = c.tracking.impressionUrl.trim()
   const clickUrl = c.tracking.clickUrl.trim()
 
+  // FEAT-038 — the four strings while the toggle is on, `null` while it is off; never the three ids
+  const utm: UtmRefBody | null = c.utm.enabled
+    ? {
+        prefix: c.utm.prefix.trim(),
+        source: c.utm.source.trim(),
+        medium: c.utm.medium.trim(),
+        campaign: c.utm.campaign.trim()
+      }
+    : null
+
   return {
     adNamePrefix: prefix === '' ? null : prefix,
     identity: {
@@ -547,7 +693,8 @@ function configFromState(): AdConfigRequest {
     tracking: {
       impressionUrl: impressionUrl === '' ? null : impressionUrl,
       clickUrl: clickUrl === '' ? null : clickUrl
-    }
+    },
+    utm
   }
 }
 
@@ -567,27 +714,33 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return true
 }
 
-/** the 6 top-level `config` keys, in `CONFIG_KEYS` order (api-contract.md v1) */
+/** the 7 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-038 api-contract.md v1 §2.1) */
 const CONFIG_KEYS = [
-  'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking'
+  'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking', 'utm'
 ] as const satisfies readonly (keyof AdConfig)[]
 
 /**
  * The stored config in the shape the form would send it back, so the diff below does not report a change that
  * is not one. A view that includes `code` is compared with that code. A masked view (`hasCode` / `codeLast4`)
  * becomes `{ selection: 'authCode' }`, which is what `configFromState()` builds while the hint is shown.
+ * FEAT-038: `utm` is compared **without** the ids (the form never holds them) and a **missing** key counts as
+ * `null`, so an old template that is left unbound sends no `utm` in the PATCH at all (spec U1).
  */
 function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
   const config = original.config
   if (!config) return {}
+  const base = {
+    ...config,
+    utm: utmBodyOf(config.utm)
+  } as unknown as Partial<AdConfigRequest>
   const post = config.identity?.post
-  if (post?.selection !== POST_AUTH_CODE) return config as unknown as Partial<AdConfigRequest>
+  if (post?.selection !== POST_AUTH_CODE) return base
   const code = storedSparkCode(config).trim()
   const requestPost: AdPostSelection = code
     ? { selection: POST_AUTH_CODE, code }
     : { selection: POST_AUTH_CODE }
   return {
-    ...config,
+    ...base,
     identity: { ...config.identity, post: requestPost }
   }
 }
@@ -645,8 +798,19 @@ const FIELD_NAMES: ReadonlySet<string> = new Set([
   'config.destination.page.showHandCursor',
   'config.allowOnTiktokPlatforms',
   'config.cta.values',
-  'config.tracking.impressionUrl', 'config.tracking.clickUrl'
+  'config.tracking.impressionUrl', 'config.tracking.clickUrl',
+  'config.utm.prefix', 'config.utm.source', 'config.utm.medium', 'config.utm.campaign'
 ])
+
+/**
+ * FEAT-038 — `config.utm` itself (and any deeper path that is not one of the four inputs, e.g. the strict-key
+ * refusal `config.utm.sourceId`, which the BO never provokes) belongs to the whole set: it is shown under the
+ * section as `adt-utm-error`, not on a field.
+ */
+function isUtmSectionPath(path: string): boolean {
+  if (path === 'config.utm') return true
+  return path.startsWith('config.utm.') && !FIELD_NAMES.has(path)
+}
 
 /**
  * Issue paths that are not a field themselves, folded onto the control that owns them
@@ -690,12 +854,34 @@ function showApiError(e: unknown, fallback: string) {
     return
   }
 
+  // 502 — the API reached the check but the 3rd-party UTM system refused / did not answer (api-contract §2.2).
+  // The values stay in the form, the modal stays open, and the reason is readable in both places.
+  if (status === 502) {
+    const message = data?.error ?? err.message ?? UTM_MESSAGES.gatewayFallback
+    utmSectionError.value = message
+    expanded.utm = true
+    toast.add({
+      title: UTM_MESSAGES.gatewayTitle,
+      description: message,
+      icon: 'i-lucide-triangle-alert',
+      color: 'error'
+    })
+    return
+  }
+
   const issues = data?.issues ?? []
   if (issues.length) {
     const unmatched: { path: string, message: string }[] = []
     const matched: string[] = []
     const next: Record<string, string> = {}
+    let utmSection: string | null = null
     for (const issue of issues) {
+      // the UTM set as a whole ("ไม่พบ UTM นี้ในระบบปลายทาง …") — under the section, never on a field
+      if (isUtmSectionPath(issue.path)) {
+        utmSection = issue.message
+        matched.push('config.utm')
+        continue
+      }
       const name = resolveFieldName(issue.path)
       if (name) {
         next[name] = issue.message
@@ -703,6 +889,7 @@ function showApiError(e: unknown, fallback: string) {
       } else unmatched.push(issue)
     }
     serverErrors.value = next
+    utmSectionError.value = utmSection
     // the field has to be on screen for its message to be read
     expandSectionsOf(matched)
     // the API refused the code (e.g. the stored post was not `authCode` after all) → the input has to come back
@@ -1284,6 +1471,166 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 data-testid="adt-form-click-url"
               />
             </UFormField>
+          </div>
+        </section>
+
+        <!-- 6. UTM (FEAT-038) — ours, not TikTok's: which UTM set the ad's sign-up link counts under -->
+        <section class="border-t border-default pt-4">
+          <h3 class="text-sm font-semibold text-highlighted">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
+              :aria-expanded="expanded.utm"
+              aria-controls="adt-sec-utm"
+              data-testid="adt-sec-utm-toggle"
+              @click="toggleSection('utm')"
+            >
+              <UIcon
+                :name="expanded.utm ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+                class="size-4 shrink-0 text-muted"
+              />
+              <span>UTM</span>
+              <UBadge
+                v-if="sectionIsDefault.utm"
+                color="neutral"
+                variant="subtle"
+                size="sm"
+                data-testid="adt-sec-utm-default"
+              >
+                ไม่ผูก
+              </UBadge>
+            </button>
+          </h3>
+
+          <div
+            v-show="expanded.utm"
+            id="adt-sec-utm"
+            class="mt-4 space-y-4"
+            data-testid="adt-sec-utm"
+          >
+            <p class="text-xs text-muted" data-testid="adt-sec-utm-hint">
+              ต้องสร้างในระบบปลายทางไว้ก่อน และชื่อต้องตรงทุกตัวอักษร
+            </p>
+
+            <USwitch
+              v-model="state.config.utm.enabled"
+              label="ผูก UTM"
+              :disabled="submitting"
+              data-testid="adt-utm-enabled"
+            />
+
+            <template v-if="state.config.utm.enabled">
+              <div class="grid gap-4 sm:grid-cols-2">
+                <UFormField
+                  label="Prefix"
+                  name="config.utm.prefix"
+                  required
+                  :error="serverErrors['config.utm.prefix']"
+                >
+                  <USelect
+                    v-model="state.config.utm.prefix"
+                    :items="utmPrefixItems"
+                    placeholder="— เลือก Prefix —"
+                    class="w-full"
+                    :disabled="submitting || noUtmPrefixes"
+                    data-testid="adt-utm-prefix"
+                  />
+                  <template v-if="noUtmPrefixes" #help>
+                    <span class="flex flex-wrap items-center gap-1" data-testid="adt-utm-no-prefixes">
+                      <span>ยังไม่ตั้งรายการ Prefix</span>
+                      <!-- only a GOD can maintain the list (the page itself is GOD-only, spec AS-9) -->
+                      <NuxtLink
+                        v-if="isGod"
+                        to="/settings/utm"
+                        class="text-primary hover:underline"
+                        data-testid="adt-utm-settings-link"
+                      >
+                        ตั้งค่าที่ Settings
+                      </NuxtLink>
+                    </span>
+                  </template>
+                </UFormField>
+
+                <!-- helper only: `parseUtm` fills the three inputs; the text itself is never sent -->
+                <UFormField label="วาง URL หรือ query เพื่อแยกค่าให้">
+                  <UInput
+                    :model-value="utmPaste"
+                    placeholder="utm_source=facebook&amp;utm_medium=ads&amp;utm_campaign=vip"
+                    class="w-full"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :disabled="submitting"
+                    data-testid="adt-utm-paste"
+                    @update:model-value="onUtmPaste(String($event))"
+                  />
+                </UFormField>
+              </div>
+
+              <div class="grid gap-4 sm:grid-cols-3">
+                <UFormField
+                  label="utm_source"
+                  name="config.utm.source"
+                  required
+                  :error="serverErrors['config.utm.source']"
+                >
+                  <UInput
+                    v-model="state.config.utm.source"
+                    placeholder="facebook"
+                    class="w-full"
+                    :maxlength="UTM_NAME_MAX_LENGTH"
+                    :disabled="submitting"
+                    data-testid="adt-utm-source"
+                  />
+                </UFormField>
+
+                <UFormField
+                  label="utm_medium"
+                  name="config.utm.medium"
+                  required
+                  :error="serverErrors['config.utm.medium']"
+                >
+                  <UInput
+                    v-model="state.config.utm.medium"
+                    placeholder="ads"
+                    class="w-full"
+                    :maxlength="UTM_NAME_MAX_LENGTH"
+                    :disabled="submitting"
+                    data-testid="adt-utm-medium"
+                  />
+                </UFormField>
+
+                <UFormField
+                  label="utm_campaign"
+                  name="config.utm.campaign"
+                  required
+                  :error="serverErrors['config.utm.campaign']"
+                >
+                  <UInput
+                    v-model="state.config.utm.campaign"
+                    placeholder="vip"
+                    class="w-full"
+                    :maxlength="UTM_NAME_MAX_LENGTH"
+                    :disabled="submitting"
+                    data-testid="adt-utm-campaign"
+                  />
+                </UFormField>
+              </div>
+
+              <!-- display-only: the ids the API got from the UTM system on the last successful save -->
+              <p v-if="utmIds" class="text-xs break-all text-muted" data-testid="adt-utm-ids">
+                {{ utmIds }}
+              </p>
+            </template>
+
+            <!-- the set as a whole was refused (400 `config.utm`) or could not be checked (502) -->
+            <p
+              v-if="utmSectionError"
+              class="text-sm break-words text-error"
+              role="alert"
+              data-testid="adt-utm-error"
+            >
+              {{ utmSectionError }}
+            </p>
           </div>
         </section>
 
