@@ -102,6 +102,14 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-040 — UTM report (register/deposit per UTM key vs. ad spend), directly after Report summary
+      label: 'UTM',
+      icon: 'i-lucide-link-2',
+      to: '/reports/utm',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), ...(canSeeCashier.value
   ? [{
