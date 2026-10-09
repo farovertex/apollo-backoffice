@@ -23,6 +23,12 @@
  * `data-launching` / `data-suspended-reason` and the **Launching ads · since …** badge (`ta-adv-launching`), the
  * kpi reason shown in the suspended tooltip.
  *
+ * FEAT-039 (api-contract v1 §3/§5, spec "UI behaviour" AC-12): `suspendedReason` drops `noDelivery` (a
+ * `not_delivery` kpi round no longer suspends the advertiser), so that tooltip branch is gone — `banned`
+ * unchanged. A row additionally carries `data-delivery` and, when `adv.delivery?.state === 'notDelivering'`,
+ * a **ไม่ส่ง** badge (`ta-adv-not-delivering`) next to the launching badge (both may show at once) whose
+ * tooltip lists the raw TikTok reasons and the `since` timestamp.
+ *
  * FEAT-030 (api-contract v1 §7, spec "UI behaviour"): the auto top-up configuration lives in the system
  * settings (`/settings/auto-topup`, GOD only); `PATCH /advertisers/:id/auto-topup` no longer exists.
  *
@@ -271,19 +277,26 @@ onUnmounted(() => {
 })
 
 // ── launching line (FEAT-029) ────────────────────────────────────────────────────────────────────────────────────────
-const NO_DELIVERY_TIP = 'ปิดเพราะโฆษณาทั้งหมดไม่ส่งแล้ว (ตรวจจาก kpi)'
 // FEAT-037 (api-contract.md v1 §5) — exact string asserted by QA
 const BANNED_TIP = 'TikTok ระงับบัญชีโฆษณานี้ (ตรวจจาก kpi)'
 
 /** the suspended badge explains the kpi rule when the kpi job was the one that suspended the advertiser */
 function statusTip(adv: Advertiser): string {
-  if (adv.suspendedReason === 'noDelivery') return NO_DELIVERY_TIP
   if (adv.suspendedReason === 'banned') return BANNED_TIP
   return accountStatusTip(adv.accountStatus)
 }
 
 function launchingLabel(adv: Advertiser): string {
   return adv.launchingSince ? `Launching ads · since ${formatDateTime(adv.launchingSince)}` : 'Launching ads'
+}
+
+// ── delivery line (FEAT-039, api-contract.md v1 §5) ──────────────────────────────────────────────────────────────────
+function deliveryTip(adv: Advertiser): string {
+  const delivery = adv.delivery
+  if (!delivery) return ''
+  return ['ไม่ส่ง', delivery.reasons.join(' · ') || null, delivery.since ? `ตั้งแต่ ${formatDateTime(delivery.since)}` : null]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 // ── state ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -457,10 +470,11 @@ function onSync() {
             :data-missing="adv.missingSince ? 'true' : 'false'"
             :data-launching="adv.launchingAds ? 'true' : 'false'"
             :data-suspended-reason="adv.suspendedReason ?? ''"
+            :data-delivery="adv.delivery?.state ?? 'unknown'"
           >
             <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
               <span class="min-w-0 break-words font-medium text-highlighted" data-testid="ta-adv-name">{{ adv.name }}</span>
-              <div class="flex shrink-0 flex-wrap items-center gap-1">
+              <div class="flex min-w-0 max-w-full flex-wrap items-center gap-1">
                 <UBadge
                   v-if="adv.missingSince"
                   color="neutral"
@@ -486,6 +500,20 @@ function onSync() {
                 >
                   {{ launchingLabel(adv) }}
                 </UBadge>
+                <UTooltip v-if="adv.delivery?.state === 'notDelivering'" :text="deliveryTip(adv)">
+                  <UBadge
+                    color="warning"
+                    variant="subtle"
+                    size="sm"
+                    icon="i-lucide-pause-circle"
+                    class="whitespace-nowrap"
+                    data-testid="ta-adv-not-delivering"
+                    :data-reasons="adv.delivery.reasons.join(',')"
+                    :data-since="adv.delivery.since ?? ''"
+                  >
+                    ไม่ส่ง
+                  </UBadge>
+                </UTooltip>
                 <UTooltip :text="statusTip(adv)">
                   <UBadge
                     :color="statusBadge(adv.status).color"

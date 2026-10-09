@@ -9,6 +9,10 @@
  * Business Center list API, written by every successful discover run.
  * FEAT-029 (api-contract.md v1 §4): the view gains `launchingAds`, `launchingSince` and `suspendedReason` —
  * all written by the system only (publish → on, kpi round → off).
+ * FEAT-039 (api-contract.md v1 §3/§5): the kpi OFF rule no longer fires on `not_delivery` (only on an empty
+ * today-round or a TikTok ban), so `suspendedReason` drops `'noDelivery'` and keeps `'banned'` only. A new
+ * `delivery` block records the raw TikTok reasons the ads stopped (or resumed) so an admin can see why,
+ * without touching the launching flag.
  * FEAT-030 (api-contract.md v1 §4): the auto top-up **configuration** moved to the system settings
  * (`shared/types/settings.ts`, `GET`/`PATCH /settings/auto-topup`, GOD only).
  * FEAT-034 (api-contract.md v1 §4) — TikTok keeps one shared cash balance per Business Center: `balanceAmount`,
@@ -24,13 +28,31 @@ import type { TopupView } from './topups'
 export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
 
 /**
- * FEAT-029 — why the kpi job suspended the advertiser. `noDelivery` = a complete kpi round of today saw no
- * delivering ad at all; cleared by a new publish or by a round that sees one again. `null` for every other
- * suspension (the Business Center one).
  * FEAT-037 (api-contract.md v1 §2.1) — `banned` = a kpi round read TikTok's permission endpoint
- * (`data.account.status === 8`); cleared only when a later round reads `status === 4` again.
+ * (`data.account.status === 8`); cleared only when a later round reads `status === 4` again. `null` for
+ * every other suspension (the Business Center one).
+ * FEAT-039 — `noDelivery` is removed: a `not_delivery` kpi round no longer suspends the advertiser (it is
+ * recorded on `delivery` instead, see below).
  */
-export type AdvertiserSuspendedReason = 'noDelivery' | 'banned'
+export type AdvertiserSuspendedReason = 'banned'
+
+/**
+ * FEAT-039 (api-contract.md v1 §3) — whether the kpi job currently sees this advertiser's ads delivering.
+ * `notDelivering` = every ad row `not_delivery` (or a complete today-round with zero rows); `delivering` =
+ * at least one row not `not_delivery`; `unknown` = never evaluated. Written only by `LaunchingService`.
+ */
+export type AdvertiserDeliveryState = 'delivering' | 'notDelivering' | 'unknown'
+
+/** FEAT-039 (api-contract.md v1 §3) — `AdvertiserView.delivery`. */
+export interface AdvertiserDelivery {
+  state: AdvertiserDeliveryState
+  /** raw TikTok secondary statuses of the not-delivering rows, lower-case, unique, sorted; `[]` when delivering */
+  reasons: string[]
+  /** ISO | null — set on the transition into `notDelivering`; untouched on later notDelivering rounds */
+  since: string | null
+  /** ISO | null — kpi clock time of the last complete today-round that evaluated this advertiser */
+  checkedAt: string | null
+}
 
 /** `missing` query of `GET /tiktok-accounts/:id/advertisers`: `false` (default) → only current rows, `all` → every row. */
 export type AdvertiserMissingFilter = 'false' | 'true' | 'all'
@@ -93,8 +115,13 @@ export interface Advertiser {
   launchingAds?: boolean
   /** ISO | null — start of the current launching period (cleared when the flag goes off) */
   launchingSince?: string | null
-  /** FEAT-029 — `noDelivery` when the kpi job suspended the advertiser; null for a Business Center suspension */
+  /** FEAT-037 — `banned` when a kpi round read a TikTok ban; null for a Business Center suspension */
   suspendedReason?: AdvertiserSuspendedReason | null
+  /**
+   * FEAT-039 — raw TikTok delivery state of this advertiser's ads, as last seen by the kpi job; optional for
+   * readers of an API that predates the feature (rows without it behave as `{ state: 'unknown', ... }`).
+   */
+  delivery?: AdvertiserDelivery
   /**
    * FEAT-020 (AC-21) — ads-report tracking state of this advertiser, served with the list so the slideover
    * needs no extra request. Optional for readers of an API that predates the feature.
