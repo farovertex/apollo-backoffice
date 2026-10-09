@@ -20,6 +20,14 @@ export interface UtmFields {
 export const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign'] as const
 
 /**
+ * api-contract §2.1 / §4.3 — `prefix` is trimmed 1..64 (both on the ad template and in the settings list) and
+ * each of the three names is trimmed 1..255. `/ad-templates/options.limits` does not serve these two numbers,
+ * so the BO mirrors them; the API's 400 body stays the authority.
+ */
+export const UTM_PREFIX_MAX_LENGTH = 64
+export const UTM_NAME_MAX_LENGTH = 255
+
+/**
  * The `utm_*` values found in `text`, trimmed; a key that is absent or empty is **omitted** (so the caller
  * leaves the matching form field untouched). A full URL, a bare query string and a `key=value` pair all work.
  */

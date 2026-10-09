@@ -3,10 +3,11 @@
  * Settings area (tab bar + `<NuxtPage/>` for `app/pages/settings/*`).
  *
  * BUG-037: the dashboard-template tabs (General / Members / Notifications / Security) and the Documentation
- * link were unimplemented sample content and are gone. The only implemented screen is the GOD-only
- * `Auto top-up` tab from FEAT-030 (spec AS-13) — kept as a **computed** over the session so it only renders
- * for a GOD admin. The route itself stays registered — `god-only` on `app/pages/settings/auto-topup.vue` is
- * the guard, and the API (`@Roles('GOD')`) is the authority.
+ * link were unimplemented sample content and are gone. The implemented screens are the GOD-only
+ * `Auto top-up` tab from FEAT-030 (spec AS-13) and the GOD-only `UTM` tab from FEAT-038 (spec U3/AS-9) —
+ * kept as a **computed** over the session so they only render for a GOD admin. The routes themselves stay
+ * registered — `god-only` on each `app/pages/settings/*.vue` is the guard, and the API (`@Roles('GOD')`) is
+ * the authority.
  */
 import type { NavigationMenuItem } from '@nuxt/ui'
 
@@ -19,6 +20,10 @@ const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
       label: 'Auto top-up',
       icon: 'i-lucide-zap',
       to: '/settings/auto-topup'
+    }, {
+      label: 'UTM',
+      icon: 'i-lucide-link',
+      to: '/settings/utm'
     }]
   : [])]])
 </script>
