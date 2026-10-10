@@ -40,9 +40,9 @@
  * "โพสต์ที่ผูกไว้" (`adt-post-info`) under the code field shows what TikTok says that code points at — chip,
  * cover, owner, caption, kind, validity window — and offers "ตรวจ" / "ตรวจอีกครั้ง"
  * (`POST /ad-templates/:id/post-info/verify`). Because the result arrives seconds **after** the save, a save
- * that carried a code (create, or edit after "Change code") no longer closes the modal (spec A-3): it switches
- * to edit mode on the API's answer, toasts and emits as before, and polls `GET /ad-templates/:id` every 2 s
- * for up to 2 min while the status is `verifying`. A save that kept the stored code closes the modal exactly
+ * that started a lookup (create, or an edit with a **new** code) no longer closes the modal (spec A-3): it
+ * switches to edit mode on the API's answer, toasts and emits as before, and polls `GET /ad-templates/:id`
+ * every 2 s for up to 2 min while the status is `verifying`. A save that kept the stored code closes the modal exactly
  * as it always did. The code is never part of the section, of a toast or of a log line.
  *
  * A `config.utm` issue is not a field — it is rendered under the section (`adt-utm-error`), and so is the
@@ -1070,14 +1070,18 @@ function onFormError(event: FormErrorEvent) {
 
 // ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
- * FEAT-042 — the body really carried a Spark code, so the API started a lookup (api-contract §2.1): a create,
- * or an edit saved while the input was on screen ("Change code"). Keeping the stored code sends the bare
- * `{ selection: 'authCode' }` and changes nothing about the post.
+ * FEAT-042 — the save really started a lookup, so the modal has something to wait for (api-contract §2.1):
+ * a create always verifies, a PATCH only when the body carries a code that **differs** from the stored one.
+ * Keeping the saved code — whether through the hint (`{ selection: 'authCode' }` without `code`) or by not
+ * touching the prefilled input (FEAT-017 serves the code, so the body repeats it) — changes nothing about the
+ * post, and such a save closes the modal exactly as it did before this feature.
  */
-function bodyCarriesCode(config: Partial<AdConfigRequest> | undefined): boolean {
+function startsLookup(config: Partial<AdConfigRequest> | undefined, original: AdTemplate | null): boolean {
   const post = config?.identity?.post
   if (post?.selection !== POST_AUTH_CODE) return false
-  return 'code' in post && typeof post.code === 'string' && post.code !== ''
+  if (!('code' in post) || typeof post.code !== 'string' || post.code === '') return false
+  if (!original) return true
+  return post.code !== storedSparkCode(original.config).trim()
 }
 
 /**
@@ -1124,7 +1128,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         retry: 0
       })
       // a new code started a lookup → stay open and watch it; anything else closes as it always did
-      const keepOpen = bodyCarriesCode(body.config)
+      const keepOpen = startsLookup(body.config, original)
       if (!keepOpen) open.value = false
       toast.add({ title: 'Template updated', description: updated.name, color: 'success' })
       emit('updated', updated)
@@ -1144,7 +1148,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     // retry: 0 — exactly one POST per submit
     const created = await api<AdTemplate>('/ad-templates', { method: 'POST', body, retry: 0 })
     // a create always carries the code, so the modal normally stays open on the new row (FEAT-042 A-3)
-    const keepOpen = bodyCarriesCode(body.config)
+    const keepOpen = startsLookup(body.config, null)
     if (!keepOpen) open.value = false
     toast.add({ title: 'Template created', description: created.name, color: 'success' })
     emit('created', created)
