@@ -50,11 +50,13 @@
  * A template saved before FEAT-038 has no `utm` key at all: it opens with the toggle off and a save leaves
  * `utm` out of the PATCH entirely.
  *
- * Layout: six sections in the TikTok page order as an **accordion** (UTM last — it is ours, not TikTok's).
- * `adname` is always open and has no toggle; `identity` / `destination` / `cta` / `tracking` / `utm` sit behind
- * `adt-sec-<id>-toggle`, are collapsed while every control in them equals `options.systemDefault` (badge
- * `adt-sec-<id>-default` = `Default`, live; the UTM section reads `ไม่ผูก` while the toggle is off, AS-8) and
- * auto-expand when one of their fields carries a client or API error.
+ * Layout: six sections — `adname`, then **UTM**, then TikTok's four in the TikTok page order as an **accordion**.
+ * `adname` and `utm` are always open and have no toggle (human decision 2026-10-11: UTM is ours and is set on
+ * every template, so its "ผูก UTM" switch is visible at once and the section sits before ตัวตน; its live badge
+ * `adt-sec-utm-default` still reads `ไม่ผูก` while the switch is off, AS-8). `identity` / `destination` / `cta` /
+ * `tracking` sit behind `adt-sec-<id>-toggle`, are collapsed while every control in them equals
+ * `options.systemDefault` (badge `adt-sec-<id>-default` = `Default`, live) and auto-expand when one of their
+ * fields carries a client or API error.
  * The collapsed body is hidden with `v-show` (never unmounted) so every value is still submitted and an error can
  * be rendered the moment its section opens — `UCollapsible`'s `unmountOnHide: false` only sets
  * `hidden="until-found"`, which is not reliably "hidden" for a test runner, and unmounting would drop the field an
@@ -312,12 +314,13 @@ watch(state, clearServerErrors, { deep: true })
 // the submit button sits in the modal footer, outside the <form> → submit through the exposed api
 const formRef = useTemplateRef<Form<Schema>>('formRef')
 
-// ── accordion (five sections in the TikTok page order) ───────────────────────────────────────────────────────────────
+// ── accordion (TikTok's four sections collapse; adname and UTM are always open) ──────────────────────────────────────
 type SectionId = 'adname' | 'identity' | 'destination' | 'cta' | 'tracking' | 'utm'
 
 /**
- * The collapsible sections and the `config` keys each one owns. The heading is the section's TikTok title —
- * the only Thai text this file spells out itself (`Call to action` is English on TikTok too).
+ * The sections that own `config` keys (for `SECTION_OF_KEY` and the live badges) — every one but `utm` is
+ * collapsible. The heading is the section's TikTok title — the only Thai text this file spells out itself
+ * (`Call to action` is English on TikTok too).
  */
 const SECTIONS = [
   { id: 'identity' as const, heading: 'ตัวตน', keys: ['identity'] as const },
@@ -331,7 +334,8 @@ const SECTIONS = [
   { id: 'utm' as const, heading: 'UTM', keys: ['utm'] as const }
 ] satisfies readonly { id: SectionId, heading: string, keys: readonly (keyof AdConfig)[] }[]
 
-const COLLAPSIBLE_IDS = SECTIONS.map(section => section.id)
+/** UTM is always open: not in `expanded`, never toggled, never synced */
+const COLLAPSIBLE_IDS = SECTIONS.filter(section => section.id !== 'utm').map(section => section.id)
 
 /** which section a `config` key (and therefore a `UFormField` name) belongs to */
 const SECTION_OF_KEY: Record<string, SectionId> = Object.fromEntries(
@@ -354,10 +358,11 @@ function sectionOfField(name: string | undefined): SectionId | null {
   return SECTION_OF_KEY[key] ?? null
 }
 
+/** a `config.utm.*` error needs no expanding — that section is always visible */
 function expandSectionsOf(names: (string | undefined)[]) {
   for (const name of names) {
     const id = sectionOfField(name)
-    if (id) expanded[id] = true
+    if (id && id in expanded) expanded[id] = true
   }
 }
 
@@ -1015,8 +1020,7 @@ function showApiError(e: unknown, fallback: string) {
   // The values stay in the form, the modal stays open, and the reason is readable in both places.
   if (status === 502) {
     const message = data?.error ?? err.message ?? UTM_MESSAGES.gatewayFallback
-    utmSectionError.value = message
-    expanded.utm = true
+    utmSectionError.value = message // the UTM section is always open — nothing to expand
     toast.add({
       title: UTM_MESSAGES.gatewayTitle,
       description: message,
@@ -1244,7 +1248,161 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </UFormField>
         </section>
 
-        <!-- 2. identity (Spark Ads › authorized posts) -->
+        <!-- 2. UTM (FEAT-038) — ours, not TikTok's: which UTM set the ad's sign-up link counts under. Always open. -->
+        <section class="border-t border-default pt-4">
+          <h3 class="flex items-center gap-2 py-1 text-sm font-semibold text-highlighted">
+            <span>UTM</span>
+            <UBadge
+              v-if="sectionIsDefault.utm"
+              color="neutral"
+              variant="subtle"
+              size="sm"
+              data-testid="adt-sec-utm-default"
+            >
+              ไม่ผูก
+            </UBadge>
+          </h3>
+
+          <div
+            id="adt-sec-utm"
+            class="mt-4 space-y-4"
+            data-testid="adt-sec-utm"
+          >
+            <p class="text-xs text-muted" data-testid="adt-sec-utm-hint">
+              ต้องสร้างในระบบปลายทางไว้ก่อน และชื่อต้องตรงทุกตัวอักษร
+            </p>
+
+            <USwitch
+              v-model="state.config.utm.enabled"
+              label="ผูก UTM"
+              :disabled="submitting"
+              data-testid="adt-utm-enabled"
+            />
+
+            <!--
+              The list is a GOD setting: while it is empty nothing can be bound, so the line stays readable
+              whether or not the toggle is on (the select below is disabled for the same reason).
+            -->
+            <p
+              v-if="noUtmPrefixes"
+              class="flex flex-wrap items-center gap-1 text-xs text-muted"
+              data-testid="adt-utm-no-prefixes"
+            >
+              <span>ยังไม่ตั้งรายการ Prefix</span>
+              <!-- only a GOD can maintain the list (the page itself is GOD-only, spec AS-9) -->
+              <NuxtLink
+                v-if="isGod"
+                to="/settings/utm"
+                class="text-primary hover:underline"
+                data-testid="adt-utm-settings-link"
+              >
+                ตั้งค่าที่ Settings
+              </NuxtLink>
+            </p>
+
+            <!-- `v-show`, like the collapsible section bodies: the four fields are hidden while the switch is off -->
+            <div v-show="state.config.utm.enabled" class="space-y-4">
+              <div class="grid gap-4 sm:grid-cols-2">
+                <UFormField
+                  label="Prefix"
+                  name="config.utm.prefix"
+                  required
+                  :error="serverErrors['config.utm.prefix']"
+                >
+                  <USelect
+                    v-model="state.config.utm.prefix"
+                    :items="utmPrefixItems"
+                    placeholder="— เลือก Prefix —"
+                    class="w-full"
+                    :disabled="submitting || noUtmPrefixes"
+                    data-testid="adt-utm-prefix"
+                  />
+                </UFormField>
+
+                <!-- helper only: `parseUtm` fills the three inputs; the text itself is never sent -->
+                <UFormField label="วาง URL หรือ query เพื่อแยกค่าให้">
+                  <UInput
+                    :model-value="utmPaste"
+                    placeholder="utm_source=facebook&amp;utm_medium=ads&amp;utm_campaign=vip"
+                    class="w-full"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :disabled="submitting"
+                    data-testid="adt-utm-paste"
+                    @update:model-value="onUtmPaste(String($event))"
+                  />
+                </UFormField>
+              </div>
+
+              <div class="grid gap-4 sm:grid-cols-3">
+                <UFormField
+                  label="utm_source"
+                  name="config.utm.source"
+                  required
+                  :error="serverErrors['config.utm.source']"
+                >
+                  <UInput
+                    v-model="state.config.utm.source"
+                    placeholder="facebook"
+                    class="w-full"
+                    :maxlength="UTM_NAME_MAX_LENGTH"
+                    :disabled="submitting"
+                    data-testid="adt-utm-source"
+                  />
+                </UFormField>
+
+                <UFormField
+                  label="utm_medium"
+                  name="config.utm.medium"
+                  required
+                  :error="serverErrors['config.utm.medium']"
+                >
+                  <UInput
+                    v-model="state.config.utm.medium"
+                    placeholder="ads"
+                    class="w-full"
+                    :maxlength="UTM_NAME_MAX_LENGTH"
+                    :disabled="submitting"
+                    data-testid="adt-utm-medium"
+                  />
+                </UFormField>
+
+                <UFormField
+                  label="utm_campaign"
+                  name="config.utm.campaign"
+                  required
+                  :error="serverErrors['config.utm.campaign']"
+                >
+                  <UInput
+                    v-model="state.config.utm.campaign"
+                    placeholder="vip"
+                    class="w-full"
+                    :maxlength="UTM_NAME_MAX_LENGTH"
+                    :disabled="submitting"
+                    data-testid="adt-utm-campaign"
+                  />
+                </UFormField>
+              </div>
+
+              <!-- display-only: the ids the API got from the UTM system on the last successful save -->
+              <p v-if="utmIds" class="text-xs break-all text-muted" data-testid="adt-utm-ids">
+                {{ utmIds }}
+              </p>
+            </div>
+
+            <!-- the set as a whole was refused (400 `config.utm`) or could not be checked (502) -->
+            <p
+              v-if="utmSectionError"
+              class="text-sm break-words text-error"
+              role="alert"
+              data-testid="adt-utm-error"
+            >
+              {{ utmSectionError }}
+            </p>
+          </div>
+        </section>
+
+        <!-- 3. identity (Spark Ads › authorized posts) -->
         <section class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button
@@ -1463,7 +1621,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
-        <!-- 3. destination (instant page) + platform consent -->
+        <!-- 4. destination (instant page) + platform consent -->
         <section class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button
@@ -1627,7 +1785,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
-        <!-- 4. call to action -->
+        <!-- 5. call to action -->
         <section class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button
@@ -1681,7 +1839,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
-        <!-- 5. third-party tracking -->
+        <!-- 6. third-party tracking -->
         <section class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button
@@ -1751,174 +1909,6 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
-        <!-- 6. UTM (FEAT-038) — ours, not TikTok's: which UTM set the ad's sign-up link counts under -->
-        <section class="border-t border-default pt-4">
-          <h3 class="text-sm font-semibold text-highlighted">
-            <button
-              type="button"
-              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
-              :aria-expanded="expanded.utm"
-              aria-controls="adt-sec-utm"
-              data-testid="adt-sec-utm-toggle"
-              @click="toggleSection('utm')"
-            >
-              <UIcon
-                :name="expanded.utm ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
-                class="size-4 shrink-0 text-muted"
-              />
-              <span>UTM</span>
-              <UBadge
-                v-if="sectionIsDefault.utm"
-                color="neutral"
-                variant="subtle"
-                size="sm"
-                data-testid="adt-sec-utm-default"
-              >
-                ไม่ผูก
-              </UBadge>
-            </button>
-          </h3>
-
-          <div
-            v-show="expanded.utm"
-            id="adt-sec-utm"
-            class="mt-4 space-y-4"
-            data-testid="adt-sec-utm"
-          >
-            <p class="text-xs text-muted" data-testid="adt-sec-utm-hint">
-              ต้องสร้างในระบบปลายทางไว้ก่อน และชื่อต้องตรงทุกตัวอักษร
-            </p>
-
-            <USwitch
-              v-model="state.config.utm.enabled"
-              label="ผูก UTM"
-              :disabled="submitting"
-              data-testid="adt-utm-enabled"
-            />
-
-            <!--
-              The list is a GOD setting: while it is empty nothing can be bound, so the line stays readable
-              whether or not the toggle is on (the select below is disabled for the same reason).
-            -->
-            <p
-              v-if="noUtmPrefixes"
-              class="flex flex-wrap items-center gap-1 text-xs text-muted"
-              data-testid="adt-utm-no-prefixes"
-            >
-              <span>ยังไม่ตั้งรายการ Prefix</span>
-              <!-- only a GOD can maintain the list (the page itself is GOD-only, spec AS-9) -->
-              <NuxtLink
-                v-if="isGod"
-                to="/settings/utm"
-                class="text-primary hover:underline"
-                data-testid="adt-utm-settings-link"
-              >
-                ตั้งค่าที่ Settings
-              </NuxtLink>
-            </p>
-
-            <!-- `v-show`, like the section bodies themselves: the four fields are hidden while the toggle is off -->
-            <div v-show="state.config.utm.enabled" class="space-y-4">
-              <div class="grid gap-4 sm:grid-cols-2">
-                <UFormField
-                  label="Prefix"
-                  name="config.utm.prefix"
-                  required
-                  :error="serverErrors['config.utm.prefix']"
-                >
-                  <USelect
-                    v-model="state.config.utm.prefix"
-                    :items="utmPrefixItems"
-                    placeholder="— เลือก Prefix —"
-                    class="w-full"
-                    :disabled="submitting || noUtmPrefixes"
-                    data-testid="adt-utm-prefix"
-                  />
-                </UFormField>
-
-                <!-- helper only: `parseUtm` fills the three inputs; the text itself is never sent -->
-                <UFormField label="วาง URL หรือ query เพื่อแยกค่าให้">
-                  <UInput
-                    :model-value="utmPaste"
-                    placeholder="utm_source=facebook&amp;utm_medium=ads&amp;utm_campaign=vip"
-                    class="w-full"
-                    autocomplete="off"
-                    spellcheck="false"
-                    :disabled="submitting"
-                    data-testid="adt-utm-paste"
-                    @update:model-value="onUtmPaste(String($event))"
-                  />
-                </UFormField>
-              </div>
-
-              <div class="grid gap-4 sm:grid-cols-3">
-                <UFormField
-                  label="utm_source"
-                  name="config.utm.source"
-                  required
-                  :error="serverErrors['config.utm.source']"
-                >
-                  <UInput
-                    v-model="state.config.utm.source"
-                    placeholder="facebook"
-                    class="w-full"
-                    :maxlength="UTM_NAME_MAX_LENGTH"
-                    :disabled="submitting"
-                    data-testid="adt-utm-source"
-                  />
-                </UFormField>
-
-                <UFormField
-                  label="utm_medium"
-                  name="config.utm.medium"
-                  required
-                  :error="serverErrors['config.utm.medium']"
-                >
-                  <UInput
-                    v-model="state.config.utm.medium"
-                    placeholder="ads"
-                    class="w-full"
-                    :maxlength="UTM_NAME_MAX_LENGTH"
-                    :disabled="submitting"
-                    data-testid="adt-utm-medium"
-                  />
-                </UFormField>
-
-                <UFormField
-                  label="utm_campaign"
-                  name="config.utm.campaign"
-                  required
-                  :error="serverErrors['config.utm.campaign']"
-                >
-                  <UInput
-                    v-model="state.config.utm.campaign"
-                    placeholder="vip"
-                    class="w-full"
-                    :maxlength="UTM_NAME_MAX_LENGTH"
-                    :disabled="submitting"
-                    data-testid="adt-utm-campaign"
-                  />
-                </UFormField>
-              </div>
-
-              <!-- display-only: the ids the API got from the UTM system on the last successful save -->
-              <p v-if="utmIds" class="text-xs break-all text-muted" data-testid="adt-utm-ids">
-                {{ utmIds }}
-              </p>
-            </div>
-
-            <!-- the set as a whole was refused (400 `config.utm`) or could not be checked (502) -->
-            <p
-              v-if="utmSectionError"
-              class="text-sm break-words text-error"
-              role="alert"
-              data-testid="adt-utm-error"
-            >
-              {{ utmSectionError }}
-            </p>
-          </div>
-        </section>
-
         <UAlert
           v-if="submitError"
           color="error"
@@ -1932,7 +1922,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       </UForm>
     </template>
 
-    <!-- actions in the footer so they stay reachable while the 5 sections scroll (390x844) -->
+    <!-- actions in the footer so they stay reachable while the 6 sections scroll (390x844) -->
     <template #footer>
       <div class="flex w-full flex-wrap items-center justify-end gap-2">
         <UButton

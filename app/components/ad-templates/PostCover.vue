@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * FEAT-042 — the cover of the post a Spark template is bound to (api-contract §2.3): a 32 px thumbnail in the
- * `/ad-templates` table and on the `/launch-ads` cards (`thumb`), the bigger image of the post card in the
- * form modal (`card`).
+ * FEAT-042 — the cover of the post a Spark template is bound to (api-contract §2.3): a 32 px thumbnail on the
+ * `/launch-ads` cards (`thumb`), a 9:16 `row` image in the `/ad-templates` table (the post column has no code
+ * text any more, the image is the column), the bigger image of the post card in the form modal (`card`).
  *
  * `ok` is `postInfo.cover.ok`: the request is issued only while it is true (`useCoverImage`), so this
  * component never produces a 404. Anything else renders the placeholder box — `loading` (spinner), a failed
@@ -15,7 +15,7 @@ const props = withDefaults(defineProps<{
   checkedAt?: string | null
   /** `postInfo.cover.ok === true` */
   ok?: boolean
-  size?: 'thumb' | 'card'
+  size?: 'thumb' | 'row' | 'card'
   testid?: string
 }>(), {
   checkedAt: null,
@@ -30,6 +30,9 @@ const { src, loading, error } = useCoverImage(
   () => props.ok
 )
 
+const BOX_CLASS = { thumb: 'size-8', row: 'h-14 w-10', card: 'h-28 w-20' } as const
+const ICON_CLASS = { thumb: 'size-3.5', row: 'size-4', card: 'size-6' } as const
+
 const state = computed(() => {
   if (src.value) return 'ready'
   if (loading.value) return 'loading'
@@ -41,7 +44,7 @@ const state = computed(() => {
 <template>
   <div
     class="flex shrink-0 items-center justify-center overflow-hidden rounded bg-elevated"
-    :class="size === 'card' ? 'h-28 w-20' : 'size-8'"
+    :class="BOX_CLASS[size]"
     :data-state="state"
     :data-testid="`${testid}-box`"
   >
@@ -58,7 +61,7 @@ const state = computed(() => {
       v-else
       :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-image-off'"
       class="text-dimmed"
-      :class="[size === 'card' ? 'size-6' : 'size-3.5', loading ? 'animate-spin' : '']"
+      :class="[ICON_CLASS[size], loading ? 'animate-spin' : '']"
       :title="error ?? undefined"
     />
   </div>

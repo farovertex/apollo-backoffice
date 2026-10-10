@@ -19,9 +19,11 @@
  * The table is plain markup (not `UTable`) so every `<tr>` can carry `data-id`.
  *
  * **FEAT-042** (api-contract v1 §1.2, §2.2 · spec AC-14): the column "โพสต์" shows the post the Spark code
- * points at — a 32 px cover thumbnail (only while `postInfo.cover.ok`, one request per template id +
- * `checkedAt`, cached and shared with the modal), the status chip, the reason as a tooltip on `invalid` /
- * `failed`, and "ตรวจ" on a template that was never checked. While any row is `verifying` the list is
+ * points at — the cover (`row` size; the bytes are requested only while `postInfo.cover.ok`, one request per
+ * template id + `checkedAt`, cached and shared with the modal; otherwise the component's placeholder box, so
+ * every row has an image slot), the status chip, the reason as a tooltip on `invalid` / `failed`, and "ตรวจ"
+ * on a template that was never checked. The Spark code itself is **not** a column any more (human decision
+ * 2026-10-11): it is a write-only secret, the post image says what it points at. While any row is `verifying` the list is
  * re-read every 2 s for at most 2 min (`adt-page[data-polling]`), silently — the table never blinks for it.
  */
 import { formatTimeAgo } from '@vueuse/core'
@@ -227,16 +229,6 @@ const now = useNow({ interval: 30_000 })
 function timeAgo(iso: string): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '—' : formatTimeAgo(d, {}, now.value)
-}
-
-/**
- * Post cell: the full Spark post code for an `authCode` post, the caption text for a legacy `named`
- * post, else `First authorized post`.
- */
-function postCell(template: AdTemplate): string {
-  const post = template.config?.identity?.post
-  if (post?.selection === 'authCode') return 'code' in post && post.code ? post.code : ''
-  return post?.selection === 'named' ? post.text : 'First authorized post'
 }
 
 /**
@@ -461,10 +453,7 @@ function onDeleted() {
                 <th class="rounded-l-lg border-y border-l border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Name
                 </th>
-                <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                  Post
-                </th>
-                <!-- FEAT-042 — what TikTok says that code points at -->
+                <!-- FEAT-042 — the post the Spark code points at (cover or placeholder + chip); the code is not shown -->
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   โพสต์
                 </th>
@@ -496,7 +485,7 @@ function onDeleted() {
             </thead>
             <tbody :class="pending ? 'opacity-60' : ''">
               <tr v-if="pending && items.length === 0" data-testid="adt-loading">
-                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="11">
+                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="10">
                   Loading templates…
                 </td>
               </tr>
@@ -519,17 +508,14 @@ function onDeleted() {
                     >{{ template.description }}</span>
                   </div>
                 </td>
-                <td class="border-b border-default px-3 py-2">
-                  <span class="break-all" :title="postCell(template)" data-testid="adt-post">{{ postCell(template) }}</span>
-                </td>
-                <!-- FEAT-042 — cover (only when one is stored) + chip; reason as a tooltip; "ตรวจ" when unchecked -->
+                <!-- FEAT-042 — cover (placeholder box when none is stored) + chip; reason as a tooltip; "ตรวจ" when unchecked -->
                 <td class="border-b border-default px-3 py-2">
                   <div class="flex items-center gap-2">
                     <AdTemplatesPostCover
-                      v-if="hasPostCover(template.postInfo)"
                       :template-id="template.id"
                       :checked-at="postInfoCheckedAt(template.postInfo)"
-                      ok
+                      :ok="hasPostCover(template.postInfo)"
+                      size="row"
                       testid="adt-post-thumb"
                     />
                     <UTooltip
