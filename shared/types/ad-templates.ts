@@ -12,6 +12,13 @@
  * The BO hard-codes **no** enum label: every human-readable string for a config value comes from
  * `GET /ad-templates/options` (`OptionItem { value, label }`), fetched once per page lifetime and
  * passed to the modals. `catalogVersion` is written by the API and never sent by the BO.
+ *
+ * **FEAT-042** (api-contract v1 §1, §2) adds the 10th view key `postInfo`: what TikTok says the Spark post
+ * code points at (owner, caption, video/images, validity window, cover). It is written by the API and the
+ * worker only — the BO never sends it (a strict schema would answer 400) — and it is read in three places:
+ * the post section of `FormModal.vue`, the "โพสต์" column of `pages/ad-templates.vue` and the ad-template
+ * cards of `pages/launch-ads.vue`. The cover bytes come from `GET /ad-templates/:id/cover`
+ * (`AdTemplateCover`), which the BO requests **only** while `postInfo.cover.ok === true`.
  */
 
 /** One entry of an option list served by `GET /ad-templates/options`. */
@@ -191,7 +198,103 @@ export interface AdConfigRequest extends Omit<AdConfig, 'identity' | 'utm'> {
   utm?: UtmRefBody | null
 }
 
-/** Exact key set of the API's template view (`catalogVersion` after `config`). */
+/**
+ * FEAT-042 — the state of the post-info lookup of an `authCode` template (api-contract §1.1 `status`).
+ * `verifying` = the worker has not answered yet · `verified` = TikTok described the post · `invalid` = TikTok
+ * refused the code · `failed` = we could not ask. A template that was never checked has **no** `postInfo`
+ * (`null`) — the BO renders that as "ยังไม่ได้ตรวจ".
+ */
+export type AdTemplatePostInfoStatus = 'verifying' | 'verified' | 'invalid' | 'failed'
+
+/**
+ * FEAT-042 — why a lookup did not end in `verified` (api-contract §1.1 `error`):
+ * `tiktok` = TikTok answered `code !== 0` (then `code` / `msg` carry its raw answer) · `noLiveSession` = no
+ * logged-in TikTok profile was open · `fetch` = every attempt failed on the request itself · `timeout` = the
+ * lookup did not finish inside `POST_INFO_LOOKUP_TIMEOUT_MS`.
+ */
+export type AdTemplatePostInfoErrorKind = 'tiktok' | 'noLiveSession' | 'fetch' | 'timeout'
+
+export interface AdTemplatePostInfoError {
+  kind: AdTemplatePostInfoErrorKind
+  /** `tiktok` only — TikTok's own numeric code */
+  code?: number
+  /** `tiktok` only — TikTok's own message (≤ 200 characters) */
+  msg?: string
+}
+
+/**
+ * FEAT-042 — what the worker actually stored in `adTemplateCovers` (api-contract §1.1 `cover`).
+ * `ok: true` ⇔ `GET /ad-templates/:id/cover` answers 200 — **the only case in which the BO may request it**.
+ * `ok: false` = TikTok served a cover but it was rejected (size cap / not an image); the whole key is `null`
+ * when no cover was attempted or the download failed.
+ */
+export interface AdTemplatePostCover {
+  ok: boolean
+  mimeType: string | null
+  bytes: number | null
+  width: number | null
+  height: number | null
+}
+
+/**
+ * FEAT-042 — `postInfo` of a **list row** (api-contract §1.2 `PostInfoSummaryView`): exactly these 6 keys.
+ * It is also the common denominator of the full view below, so every reader that only needs the chip, the
+ * thumbnail flag, the owner, the validity date or the reason can accept this type and be handed either shape.
+ */
+export interface AdTemplatePostInfoSummary {
+  status: AdTemplatePostInfoStatus
+  /** `0` video · `1` images · other values are passed through by the API */
+  itemType: number | null
+  ownerName: string | null
+  /** only `ok` is served in a list row; `null` = nothing stored */
+  cover: { ok: boolean } | null
+  authEndAt: string | null
+  error: AdTemplatePostInfoError | null
+}
+
+/**
+ * FEAT-042 — `postInfo` of a **single** template (api-contract §1.1 `PostInfoView`), served by
+ * `GET /ad-templates/:id`, `POST`/`PATCH /ad-templates*` and `POST /ad-templates/:id/post-info/verify`.
+ * Exact key set (20 keys, `status` first, `error` last); `raw` is never served and no value ever carries a
+ * signed TikTok URL. Every mapped field is `null` while the status is `verifying` and on both failure states.
+ */
+export interface AdTemplatePostInfo extends Omit<AdTemplatePostInfoSummary, 'cover'> {
+  requestedAt: string
+  /** set on every terminal state (`verified`, `invalid`, `failed`) */
+  checkedAt: string | null
+  /** debug only; `profileLast4 = "fake"` on the fake driver */
+  checkedBy: { node: string, profileLast4: string } | null
+  /** 19-digit TikTok ids stay strings */
+  itemId: string | null
+  authCodeStatus: number | null
+  authStartAt: string | null
+  ownerName: string | null
+  caption: string | null
+  /** video only (`itemType === 0`) */
+  durationSec: number | null
+  width: number | null
+  height: number | null
+  /** images only (`itemType === 1`) */
+  imageCount: number | null
+  /** permanent TikTok paths, never the signed URL — display/debug only */
+  coverUri: string | null
+  avatarUri: string | null
+  cover: AdTemplatePostCover | null
+}
+
+/** FEAT-042 — `GET /ad-templates/:id/cover` 200 body (api-contract §1.4), like the build screenshots. */
+export interface AdTemplateCover {
+  mimeType: string
+  base64: string
+}
+
+/** FEAT-042 — `POST /ad-templates/:id/post-info/verify` 202 body (api-contract §2.2). */
+export interface VerifyPostInfoResponse {
+  status: AdTemplatePostInfoStatus
+  postInfo: AdTemplatePostInfo
+}
+
+/** Exact key set of the API's template view (10 keys; `postInfo` after `catalogVersion`). */
 export interface AdTemplate {
   id: string
   name: string
@@ -203,6 +306,13 @@ export interface AdTemplate {
    * inserts) → the table shows the `Older catalog` badge.
    */
   catalogVersion: string | null
+  /**
+   * FEAT-042 — the last post-info lookup of the Spark code, or `null` when the template was never checked
+   * (documents saved before the feature, `POST_INFO_ENABLED=false`). **Optional** in this type because an
+   * older API does not serve the key at all. List rows carry the 6-key summary, single-template responses the
+   * full view — readers of the shared keys accept the union, the post card narrows with `isFullPostInfo()`.
+   */
+  postInfo?: AdTemplatePostInfo | AdTemplatePostInfoSummary | null
   /** `name` is null when the workspace row is gone */
   workspace: { id: string, name: string | null }
   /** `username` is null when the admin row is gone */

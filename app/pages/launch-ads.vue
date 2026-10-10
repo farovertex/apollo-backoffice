@@ -41,6 +41,12 @@
  *   one toast per rejected account and a fresh targets request; 400 → the message on its field or as a form
  *   error. Both buttons are disabled while a create is in flight, so no double submit.
  *
+ * **FEAT-042** (api-contract v1 §1.2 · spec AC-15): an ad-template card also shows the post the Spark code
+ * points at — the 32 px cover thumbnail (only while `postInfo.cover.ok`, shared cache with the table and the
+ * modal) and the status chip (`la-adt-post-status`). Picking a template whose post is `invalid`, `failed` or
+ * was never checked shows the **non-blocking** warning `la-adt-post-warning`: selection and submit are
+ * untouched (only the stale-catalog rule disables a card), the order may simply fail at the ad stage.
+ *
  * A 403 on the targets request (a Payment-only admin that typed the URL) renders `la-forbidden` with the API
  * text and nothing else; no redirect (the nav item is hidden for that admin, but the API is the authority).
  * No enum label of a template field is invented here: every one comes from the templates' `/options`.
@@ -508,6 +514,15 @@ function catalogCell(version: string | null): string {
   if (!version) return '–'
   return version.split('/')[1] ?? version
 }
+
+/**
+ * FEAT-042 — the selected ad template's post was refused, could not be checked or was never checked
+ * (`verifying` is not a warning: the result may still arrive before the build reaches the ad stage).
+ * Display only — nothing about the selection or the submit depends on it.
+ */
+const adTemplatePostWarning = computed(() =>
+  !!adTemplate.value && needsPostInfoWarning(adTemplate.value.postInfo)
+)
 
 // ── step 3 · order ───────────────────────────────────────────────────────────────────────────────────────────────────
 const orderName = ref('')
@@ -1346,7 +1361,16 @@ onUnmounted(() => {
                       @click="selectAdTemplate(template)"
                     >
                       <span class="flex items-center gap-2">
+                        <!-- FEAT-042 — the cover of the bound post, only when one is stored -->
+                        <AdTemplatesPostCover
+                          v-if="hasPostCover(template.postInfo)"
+                          :template-id="template.id"
+                          :checked-at="postInfoCheckedAt(template.postInfo)"
+                          ok
+                          testid="la-adt-post-thumb"
+                        />
                         <span class="min-w-0 truncate font-medium text-highlighted">{{ template.name }}</span>
+                        <AdTemplatesPostStatus :post-info="template.postInfo" testid="la-adt-post-status" />
                         <UBadge
                           v-if="isAdtStale(template)"
                           color="warning"
@@ -1368,6 +1392,17 @@ onUnmounted(() => {
                       </span>
                     </button>
                   </div>
+
+                  <!-- FEAT-042 — non-blocking: the order can still be created, it may fail at the ad stage -->
+                  <UAlert
+                    v-if="adTemplatePostWarning"
+                    color="warning"
+                    variant="subtle"
+                    icon="i-lucide-triangle-alert"
+                    title="โพสต์ของ template นี้ยังไม่ได้ตรวจ/ตรวจไม่ผ่าน — build อาจล้มที่ขั้นโฆษณา"
+                    :description="postInfoReason(adTemplate?.postInfo) ?? undefined"
+                    data-testid="la-adt-post-warning"
+                  />
                 </section>
               </div>
 

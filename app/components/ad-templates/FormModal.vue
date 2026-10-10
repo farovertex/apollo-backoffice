@@ -36,6 +36,15 @@
  * readable either way — nothing can be bound until a GOD fills that list. The paste box only runs `parseUtm()` and
  * is never sent. The three ids (`sourceId` / `mediumId` / `campaignId`) are filled in by the API after it proved
  * the set exists in the 3rd-party system: they are shown read-only (`adt-utm-ids`) and never sent back.
+ * **FEAT-042** (api-contract v1 §1.1, §2.2, §2.3 · spec §Behaviour — BO 1, AC-13): the section
+ * "โพสต์ที่ผูกไว้" (`adt-post-info`) under the code field shows what TikTok says that code points at — chip,
+ * cover, owner, caption, kind, validity window — and offers "ตรวจ" / "ตรวจอีกครั้ง"
+ * (`POST /ad-templates/:id/post-info/verify`). Because the result arrives seconds **after** the save, a save
+ * that carried a code (create, or edit after "Change code") no longer closes the modal (spec A-3): it switches
+ * to edit mode on the API's answer, toasts and emits as before, and polls `GET /ad-templates/:id` every 2 s
+ * for up to 2 min while the status is `verifying`. A save that kept the stored code closes the modal exactly
+ * as it always did. The code is never part of the section, of a toast or of a log line.
+ *
  * A `config.utm` issue is not a field — it is rendered under the section (`adt-utm-error`), and so is the
  * `{ error }` text of a **502** (which also raises a toast and keeps the modal open with the values intact).
  * A template saved before FEAT-038 has no `utm` key at all: it opens with the toggle off and a save leaves
@@ -69,12 +78,15 @@ import type {
   AdTemplate,
   AdTemplateLimits,
   AdTemplateOptions,
+  AdTemplatePostInfo,
+  AdTemplatePostInfoSummary,
   CreateAdTemplateBody,
   OptionItem,
   PatchAdTemplateBody,
   TriState,
   UtmRef,
-  UtmRefBody
+  UtmRefBody,
+  VerifyPostInfoResponse
 } from '#shared/types/ad-templates'
 
 const props = defineProps<{
@@ -100,7 +112,17 @@ const toast = useToast()
 const { admin } = useAuth()
 const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
 
-const isEdit = computed(() => props.template !== null)
+/**
+ * FEAT-042 — the template a save answered with, while the modal stays open on it (spec A-3). `null` in every
+ * other situation; reset on every open. It wins over the prop, so after a create the modal is an edit of the
+ * new row (title, "Save" button, PATCH body, post section) without the page having to re-open it.
+ */
+const savedTemplate = ref<AdTemplate | null>(null)
+
+/** the row the form works on: the prop, or the answer of the save that kept the modal open */
+const editing = computed<AdTemplate | null>(() => savedTemplate.value ?? props.template)
+
+const isEdit = computed(() => editing.value !== null)
 
 // ── FEAT-017 fixed selections and instant-page defaults (spec L-10; `/options` only supplies their labels) ───────────
 const POST_AUTH_CODE = 'authCode'
@@ -350,13 +372,13 @@ const pageSelectionLabel = computed(() => labelOf(props.options.pageSelection, P
 
 /** the loaded template already has a stored code (its masked view says so) → the hint can be offered */
 const hasStoredCode = computed(() => {
-  const post = props.template?.config?.identity?.post
+  const post = editing.value?.config?.identity?.post
   return post?.selection === POST_AUTH_CODE && 'hasCode' in post && post.hasCode === true
 })
 
 /** `••••<last4>`, or `••••` when the stored code is shorter than 5 characters (spec L-11) */
 const codeHint = computed(() => {
-  const post = props.template?.config?.identity?.post
+  const post = editing.value?.config?.identity?.post
   const last4 = post?.selection === POST_AUTH_CODE && 'codeLast4' in post ? post.codeLast4 : null
   return `••••${last4 ?? ''}`
 })
@@ -388,11 +410,137 @@ function keepCode() {
 
 /** a template stored before FEAT-017 (post or page still `first` / `named`) has to be completed before it builds */
 const isLegacyTemplate = computed(() => {
-  const config = props.template?.config
+  const config = editing.value?.config
   if (!config) return false
   return LEGACY_SELECTIONS.has(config.identity?.post?.selection ?? '')
     || LEGACY_SELECTIONS.has(config.destination?.page?.selection ?? '')
 })
+
+// ── the bound post (FEAT-042 · spec §Behaviour — BO 1, AC-13) ───────────────────────────────────────────────────────
+/** `GET /ad-templates/:id` every 2 s, for at most 2 min, while the lookup is still `verifying` */
+const POST_POLL_MS = 2000
+const POST_POLL_MAX_MS = 120_000
+
+/**
+ * What the section renders. On open it starts as whatever the row carried (a list row has the 6-key summary),
+ * and the first read upgrades it to the full view the card needs (caption, duration, image count).
+ */
+const postInfo = ref<AdTemplatePostInfo | AdTemplatePostInfoSummary | null>(null)
+/** the verify request is in flight (the button spins; the poll is unaffected) */
+const postVerifying = ref(false)
+/** `data-polling` of the section */
+const postPolling = ref(false)
+/** the 2 min are over and the status is still `verifying` → display-only line, the table takes over */
+const postGaveUp = ref(false)
+let postTimer: ReturnType<typeof setInterval> | null = null
+let postDeadline = 0
+// bumped on every open/close and read so a late answer never lands in a closed (or re-opened) modal
+let postSession = 0
+
+const postTemplateId = computed(() => editing.value?.id ?? null)
+const postCheckedAt = computed(() => postInfoCheckedAt(postInfo.value))
+const postCaption = computed(() => (isFullPostInfo(postInfo.value) ? postInfo.value.caption : null))
+const postKind = computed(() => postInfoKindLabel(postInfo.value))
+const postUntil = computed(() => postInfoUntilLabel(postInfo.value))
+const postReason = computed(() => postInfoReason(postInfo.value))
+const postIsVerifying = computed(() => isPostInfoVerifying(postInfo.value))
+const postIsVerified = computed(() => isPostInfoVerified(postInfo.value))
+
+function stopPostPolling() {
+  if (postTimer) {
+    clearInterval(postTimer)
+    postTimer = null
+  }
+  postPolling.value = false
+}
+
+function startPostPolling() {
+  if (postTimer || !postTemplateId.value) return
+  postDeadline = Date.now() + POST_POLL_MAX_MS
+  postGaveUp.value = false
+  postPolling.value = true
+  postTimer = setInterval(() => {
+    if (Date.now() >= postDeadline) {
+      stopPostPolling()
+      // the worker may still answer — the table shows the result, this modal stops asking
+      postGaveUp.value = true
+      return
+    }
+    void readPostInfo()
+  }, POST_POLL_MS)
+}
+
+/** one read of the single-template view; a failed tick keeps the last known state and the next tick retries */
+async function readPostInfo() {
+  const id = postTemplateId.value
+  if (!id) return
+  const s = ++postSession
+  try {
+    // retry: 0 — exactly one request per tick
+    const fresh = await api<AdTemplate>(`/ad-templates/${encodeURIComponent(id)}`, { retry: 0 })
+    if (s !== postSession || !open.value) return
+    postInfo.value = fresh.postInfo ?? null
+  } catch {
+    // display-only: nothing to tell the user about one missed poll tick
+  }
+}
+
+/** on open (and after a save that kept the modal open): render what we have, then read the full view */
+function initPostInfo() {
+  postSession++
+  postGaveUp.value = false
+  postInfo.value = editing.value?.postInfo ?? null
+  if (editing.value) void readPostInfo()
+}
+
+/** "ตรวจ" / "ตรวจอีกครั้ง" — 202 starts a new lookup, 409 means one is already running (api-contract §2.2) */
+async function verifyPost() {
+  const id = postTemplateId.value
+  if (!id || postVerifying.value) return
+  postVerifying.value = true
+  try {
+    // retry: 0 — exactly one POST per click
+    const res = await api<VerifyPostInfoResponse>(
+      `/ad-templates/${encodeURIComponent(id)}/post-info/verify`,
+      { method: 'POST', retry: 0 }
+    )
+    postInfo.value = res.postInfo ?? null
+    postGaveUp.value = false
+    if (isPostInfoVerifying(postInfo.value)) startPostPolling()
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    if (status === 409) {
+      toast.add({
+        title: 'กำลังตรวจอยู่แล้ว',
+        description: err.data?.error,
+        icon: 'i-lucide-loader-circle',
+        color: 'info'
+      })
+      // the row is `waiting|claimed` (or the feature is off) — the fresh read decides whether to poll
+      await readPostInfo()
+      postGaveUp.value = false
+      if (isPostInfoVerifying(postInfo.value)) startPostPolling()
+      return
+    }
+    toast.add({
+      title: 'สั่งตรวจโพสต์ไม่ได้',
+      description: err.data?.error ?? err.message,
+      icon: 'i-lucide-triangle-alert',
+      color: 'error'
+    })
+  } finally {
+    postVerifying.value = false
+  }
+}
+
+// the poll follows the status: it starts when a lookup is running and stops the moment a result lands
+watch(postIsVerifying, (running) => {
+  if (running && open.value) startPostPolling()
+  else if (!running) stopPostPolling()
+})
+
+onUnmounted(stopPostPolling)
 
 // ── the UTM section (FEAT-038 · spec U1) ─────────────────────────────────────────────────────────────────────────────
 /**
@@ -402,7 +550,7 @@ const isLegacyTemplate = computed(() => {
  */
 const utmPrefixItems = computed<string[]>(() => {
   const listed = props.options.utmPrefixes ?? []
-  const bound = props.template?.config?.utm?.prefix ?? ''
+  const bound = editing.value?.config?.utm?.prefix ?? ''
   return bound && !listed.includes(bound) ? [...listed, bound] : [...listed]
 })
 
@@ -411,7 +559,7 @@ const noUtmPrefixes = computed(() => utmPrefixItems.value.length === 0)
 
 /** the three ids the API answered with, display-only; absent for a create and for an unbound / old template */
 const utmIds = computed(() => {
-  const utm = props.template?.config?.utm
+  const utm = editing.value?.config?.utm
   if (!utm?.sourceId && !utm?.mediumId && !utm?.campaignId) return null
   return `id: source ${utm?.sourceId ?? '—'} · medium ${utm?.mediumId ?? '—'} · campaign ${utm?.campaignId ?? '—'}`
 })
@@ -455,7 +603,7 @@ function syncExpanded() {
 }
 
 function resetForm() {
-  Object.assign(state, stateFrom(props.template))
+  Object.assign(state, stateFrom(editing.value))
   resetCodeMode()
   utmPaste.value = ''
   submitting.value = false
@@ -466,7 +614,17 @@ function resetForm() {
 }
 
 watch(open, (isOpen) => {
-  if (isOpen) resetForm()
+  if (isOpen) {
+    // a previous save must not leak into the next open (FEAT-042 stay-open rule)
+    savedTemplate.value = null
+    resetForm()
+    initPostInfo()
+    return
+  }
+  stopPostPolling()
+  postSession++
+  postInfo.value = null
+  postGaveUp.value = false
 })
 
 /**
@@ -478,8 +636,8 @@ watch(open, (isOpen) => {
  */
 function resetToDefaults() {
   state.config = configStateFrom(props.options.systemDefault)
-  state.config.identity.post.code = storedSparkCode(props.template?.config)
-  state.config.utm = utmStateFrom(props.template?.config?.utm)
+  state.config.identity.post.code = storedSparkCode(editing.value?.config)
+  state.config.utm = utmStateFrom(editing.value?.config?.utm)
   resetCodeMode()
   submitError.value = null
   clearServerErrors()
@@ -911,6 +1069,35 @@ function onFormError(event: FormErrorEvent) {
 }
 
 // ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * FEAT-042 — the body really carried a Spark code, so the API started a lookup (api-contract §2.1): a create,
+ * or an edit saved while the input was on screen ("Change code"). Keeping the stored code sends the bare
+ * `{ selection: 'authCode' }` and changes nothing about the post.
+ */
+function bodyCarriesCode(config: Partial<AdConfigRequest> | undefined): boolean {
+  const post = config?.identity?.post
+  if (post?.selection !== POST_AUTH_CODE) return false
+  return 'code' in post && typeof post.code === 'string' && post.code !== ''
+}
+
+/**
+ * FEAT-042 spec A-3 — the save that started a lookup keeps the modal open on the API's answer: edit mode on
+ * the saved row (title, "Save", PATCH on the next submit), the post section on its fresh `postInfo`, and the
+ * poll while that is `verifying`. The form is re-seeded from the answer so a following save diffs against it.
+ */
+function stayOpenOn(saved: AdTemplate) {
+  savedTemplate.value = saved
+  Object.assign(state, stateFrom(saved))
+  resetCodeMode()
+  submitError.value = null
+  clearServerErrors()
+  formRef.value?.clear()
+  postSession++
+  postGaveUp.value = false
+  postInfo.value = saved.postInfo ?? null
+  if (isPostInfoVerifying(postInfo.value)) startPostPolling()
+}
+
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   submitError.value = null
@@ -918,7 +1105,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
   const name = event.data.name
   const description = event.data.description === '' ? null : event.data.description
-  const original = props.template
+  const original = editing.value
 
   if (original) {
     const body = patchBodyFrom(original, name, description)
@@ -936,9 +1123,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         body,
         retry: 0
       })
-      open.value = false
+      // a new code started a lookup → stay open and watch it; anything else closes as it always did
+      const keepOpen = bodyCarriesCode(body.config)
+      if (!keepOpen) open.value = false
       toast.add({ title: 'Template updated', description: updated.name, color: 'success' })
       emit('updated', updated)
+      if (keepOpen) stayOpenOn(updated)
     } catch (e) {
       showApiError(e, 'Could not update the template')
     } finally {
@@ -953,9 +1143,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   try {
     // retry: 0 — exactly one POST per submit
     const created = await api<AdTemplate>('/ad-templates', { method: 'POST', body, retry: 0 })
-    open.value = false
+    // a create always carries the code, so the modal normally stays open on the new row (FEAT-042 A-3)
+    const keepOpen = bodyCarriesCode(body.config)
+    if (!keepOpen) open.value = false
     toast.add({ title: 'Template created', description: created.name, color: 'success' })
     emit('created', created)
+    if (keepOpen) stayOpenOn(created)
   } catch (e) {
     showApiError(e, 'Could not create the template')
   } finally {
@@ -1182,6 +1375,87 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 The saved code is kept unless you change it.
               </template>
             </UFormField>
+
+            <!--
+              FEAT-042 — what TikTok says the saved code points at. Rendered for every template that exists
+              (including one that was never checked) and right after a save that started a lookup; never for a
+              create that has not been saved yet. The code itself is not part of it.
+            -->
+            <div
+              v-if="isEdit"
+              class="space-y-2 rounded-lg border border-default bg-elevated/30 p-3"
+              data-testid="adt-post-info"
+              :data-polling="postPolling ? 'true' : 'false'"
+              :data-status="postInfoStatusAttr(postInfo)"
+            >
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-sm font-medium text-highlighted">โพสต์ที่ผูกไว้</span>
+                <AdTemplatesPostStatus :post-info="postInfo" />
+                <UButton
+                  v-if="!postIsVerifying"
+                  :label="postIsVerified ? 'ตรวจอีกครั้ง' : 'ตรวจ'"
+                  :icon="postIsVerified ? 'i-lucide-refresh-cw' : 'i-lucide-search-check'"
+                  color="neutral"
+                  variant="outline"
+                  size="xs"
+                  class="ms-auto"
+                  :loading="postVerifying"
+                  :disabled="submitting"
+                  data-testid="adt-post-verify"
+                  @click="verifyPost"
+                />
+              </div>
+
+              <div v-if="postIsVerified" class="flex items-start gap-3" data-testid="adt-post-card">
+                <AdTemplatesPostCover
+                  :template-id="postTemplateId"
+                  :checked-at="postCheckedAt"
+                  :ok="hasPostCover(postInfo)"
+                  size="card"
+                />
+                <div class="min-w-0 flex-1 space-y-1">
+                  <p class="truncate text-sm font-medium text-highlighted" data-testid="adt-post-owner">
+                    {{ postInfo?.ownerName ?? '—' }}
+                  </p>
+                  <p
+                    v-if="postCaption"
+                    class="line-clamp-2 text-xs break-words text-muted"
+                    data-testid="adt-post-caption"
+                  >
+                    {{ postCaption }}
+                  </p>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <UBadge
+                      v-if="postKind"
+                      color="neutral"
+                      variant="subtle"
+                      size="sm"
+                      class="whitespace-nowrap"
+                      data-testid="adt-post-kind"
+                    >
+                      {{ postKind }}
+                    </UBadge>
+                    <span v-if="postUntil" class="text-xs text-muted" data-testid="adt-post-until">
+                      {{ postUntil }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- `invalid`: TikTok's own answer · `failed`: why we could not ask -->
+              <p
+                v-if="postReason"
+                class="text-xs break-words"
+                :class="postInfo?.status === 'invalid' ? 'text-error' : 'text-warning'"
+                data-testid="adt-post-reason"
+              >
+                {{ postReason }}
+              </p>
+
+              <p v-if="postGaveUp" class="text-xs text-muted" data-testid="adt-post-timeout">
+                ยังไม่ได้ผล — ปิดแล้วดูในตารางได้
+              </p>
+            </div>
           </div>
         </section>
 

@@ -17,6 +17,12 @@
  * text; no redirect, the sidebar item is hidden for that admin anyway (display-only, the API is the
  * authority).
  * The table is plain markup (not `UTable`) so every `<tr>` can carry `data-id`.
+ *
+ * **FEAT-042** (api-contract v1 §1.2, §2.2 · spec AC-14): the column "โพสต์" shows the post the Spark code
+ * points at — a 32 px cover thumbnail (only while `postInfo.cover.ok`, one request per template id +
+ * `checkedAt`, cached and shared with the modal), the status chip, the reason as a tooltip on `invalid` /
+ * `failed`, and "ตรวจ" on a template that was never checked. While any row is `verifying` the list is
+ * re-read every 2 s for at most 2 min (`adt-page[data-polling]`), silently — the table never blinks for it.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -24,7 +30,8 @@ import type { ApiErrorBody } from '#shared/types/auth'
 import type {
   AdTemplate,
   AdTemplateOptions,
-  AdTemplatesResponse
+  AdTemplatesResponse,
+  VerifyPostInfoResponse
 } from '#shared/types/ad-templates'
 import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
 
@@ -32,8 +39,12 @@ useSeoMeta({ title: 'Ad templates' })
 
 const LIMIT = 20
 const DEBOUNCE_MS = 300
+/** FEAT-042 — list poll while a lookup is running (spec §Behaviour — BO 2) */
+const POST_POLL_MS = 2000
+const POST_POLL_MAX_MS = 120_000
 
 const api = useApi()
+const toast = useToast()
 
 // ── options (one request per page lifetime, reused by the modals) ────────────────────────────────────────────────────
 const options = ref<AdTemplateOptions | null>(null)
@@ -65,9 +76,10 @@ const forbidden = ref<string | null>(null)
 // bumped on every request so a late response from a superseded query is dropped
 let session = 0
 
-async function load() {
+/** `silent` = a FEAT-042 poll tick: the same single request, but the table is not dimmed for it */
+async function load(silent = false) {
   const s = ++session
-  pending.value = true
+  if (!silent) pending.value = true
   error.value = null
   const q = searchDebounced.value.trim()
   try {
@@ -85,12 +97,14 @@ async function load() {
     if (s !== session) return
     const err = e as FetchError<Partial<ApiErrorBody>>
     const message = err.data?.error ?? err.message ?? 'Unexpected error'
+    // a failed poll tick must not wipe the table — the next tick, Refresh or a search tries again
+    if (silent) return
     items.value = []
     total.value = 0
     if ((err.response?.status ?? err.statusCode) === 403) forbidden.value = message
     else error.value = message
   } finally {
-    if (s === session) pending.value = false
+    if (!silent && s === session) pending.value = false
   }
 }
 
@@ -104,6 +118,81 @@ watch(queryKey, () => {
   void load()
 })
 
+// ── FEAT-042 · post info: poll while a lookup runs, verify on demand ────────────────────────────────────────────────
+/** at least one row is waiting for the worker → the list is re-read silently every 2 s */
+const anyVerifying = computed(() => items.value.some(template => isPostInfoVerifying(template.postInfo)))
+const polling = ref(false)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollDeadline = 0
+/** templates whose verify request is in flight (the row's button spins) */
+const verifying = ref<string[]>([])
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+  polling.value = false
+}
+
+function startPolling() {
+  if (pollTimer) return
+  pollDeadline = Date.now() + POST_POLL_MAX_MS
+  polling.value = true
+  pollTimer = setInterval(() => {
+    // after 2 min the row keeps its chip; the sweep ends the lookup and a Refresh shows the result
+    if (Date.now() >= pollDeadline) {
+      stopPolling()
+      return
+    }
+    void load(true)
+  }, POST_POLL_MS)
+}
+
+watch(anyVerifying, (running) => {
+  if (running) startPolling()
+  else stopPolling()
+})
+
+/** "ตรวจ" on a row that was never checked (api-contract §2.2) */
+async function verifyPost(template: AdTemplate) {
+  if (verifying.value.includes(template.id)) return
+  verifying.value = [...verifying.value, template.id]
+  try {
+    // retry: 0 — exactly one POST per click
+    const res = await api<VerifyPostInfoResponse>(
+      `/ad-templates/${encodeURIComponent(template.id)}/post-info/verify`,
+      { method: 'POST', retry: 0 }
+    )
+    // the row carries the summary; the full view the endpoint answers with is assignable to it
+    const row = items.value.find(item => item.id === template.id)
+    if (row) row.postInfo = res.postInfo ?? null
+    if (isPostInfoVerifying(res.postInfo)) startPolling()
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    if (status === 409) {
+      toast.add({
+        title: 'กำลังตรวจอยู่แล้ว',
+        description: err.data?.error,
+        icon: 'i-lucide-loader-circle',
+        color: 'info'
+      })
+      // a lookup is already running (or the feature is off) — one read shows which of the two it is
+      await load(true)
+      return
+    }
+    toast.add({
+      title: 'สั่งตรวจโพสต์ไม่ได้',
+      description: err.data?.error ?? err.message,
+      icon: 'i-lucide-triangle-alert',
+      color: 'error'
+    })
+  } finally {
+    verifying.value = verifying.value.filter(id => id !== template.id)
+  }
+}
+
 onMounted(() => {
   void load()
   void loadOptions()
@@ -111,6 +200,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   session++
+  stopPolling()
 })
 
 /** one request after a mutation: either through the page watcher (page really changes) or directly */
@@ -268,7 +358,12 @@ function onDeleted() {
     </template>
 
     <template #body>
-      <div data-testid="adt-page" :data-pending="pending ? 'true' : 'false'" class="flex flex-1 flex-col gap-4">
+      <div
+        data-testid="adt-page"
+        :data-pending="pending ? 'true' : 'false'"
+        :data-polling="polling ? 'true' : 'false'"
+        class="flex flex-1 flex-col gap-4"
+      >
         <div v-if="!forbidden" class="flex flex-wrap items-center gap-1.5">
           <UInput
             v-model="search"
@@ -369,6 +464,10 @@ function onDeleted() {
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Post
                 </th>
+                <!-- FEAT-042 — what TikTok says that code points at -->
+                <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  โพสต์
+                </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Instant page
                 </th>
@@ -397,7 +496,7 @@ function onDeleted() {
             </thead>
             <tbody :class="pending ? 'opacity-60' : ''">
               <tr v-if="pending && items.length === 0" data-testid="adt-loading">
-                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="10">
+                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="11">
                   Loading templates…
                 </td>
               </tr>
@@ -422,6 +521,37 @@ function onDeleted() {
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <span class="break-all" :title="postCell(template)" data-testid="adt-post">{{ postCell(template) }}</span>
+                </td>
+                <!-- FEAT-042 — cover (only when one is stored) + chip; reason as a tooltip; "ตรวจ" when unchecked -->
+                <td class="border-b border-default px-3 py-2">
+                  <div class="flex items-center gap-2">
+                    <AdTemplatesPostCover
+                      v-if="hasPostCover(template.postInfo)"
+                      :template-id="template.id"
+                      :checked-at="postInfoCheckedAt(template.postInfo)"
+                      ok
+                      testid="adt-post-thumb"
+                    />
+                    <UTooltip
+                      v-if="postInfoReason(template.postInfo)"
+                      :text="postInfoReason(template.postInfo) ?? ''"
+                    >
+                      <AdTemplatesPostStatus :post-info="template.postInfo" />
+                    </UTooltip>
+                    <AdTemplatesPostStatus v-else :post-info="template.postInfo" />
+                    <UButton
+                      v-if="!template.postInfo"
+                      label="ตรวจ"
+                      icon="i-lucide-search-check"
+                      color="neutral"
+                      variant="outline"
+                      size="xs"
+                      class="whitespace-nowrap"
+                      :loading="verifying.includes(template.id)"
+                      data-testid="adt-post-verify"
+                      @click="verifyPost(template)"
+                    />
+                  </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <span class="line-clamp-2 max-w-48" :title="destinationCell(template)" data-testid="adt-destination">{{ destinationCell(template) }}</span>
