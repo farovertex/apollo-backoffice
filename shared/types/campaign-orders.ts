@@ -63,6 +63,15 @@ export interface LaunchAccount {
   balanceAt: string | null
   /** `hasBalance(account.balanceAmount)` — computed by the API */
   hasBalance: boolean
+  /**
+   * FEAT-029 flag of the **account** (true while ≥ 1 advertiser of it is launching ads; written only by the
+   * API's LaunchingService). Read-only here: the Launch ads page shows it as a status badge and the
+   * "Only not launching" switch hides launching accounts. Not a readiness reason — a launching account is
+   * still `available`.
+   */
+  launchingAds: boolean
+  /** ISO | null — when the account's flag went false → true */
+  launchingSince: string | null
   /** true ⇔ `unavailableReasons` is empty */
   available: boolean
   unavailableReasons: UnavailableReason[]

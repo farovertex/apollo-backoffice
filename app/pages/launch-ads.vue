@@ -30,6 +30,15 @@
  *   and undo the filter (`la-acc-show-all`); `la-acc-clear-search` also turns the switch off. The account row
  *   shows the account's own balance (`la-acc-balance`, `<account.balanceAmount> <account.balanceCurrency>` or
  *   `—`, title = last read time); advertiser options carry no balance of their own any more.
+ *
+ *   Launch status (FEAT-029 flag served by `GET /launch/targets`): every row carries the account's status badge
+ *   (`la-acc-launching`: **Launching ads** with `title="since …"` while `account.launchingAds`, else
+ *   **Not launching**) and the row has `data-launching`. The second switch **"Only not launching"**
+ *   (`la-acc-idle`, **off** at page open, not persisted) hides launching accounts, composed with the other
+ *   filters by AND, client-side. Turning it on drops launching accounts from `selection`/`manualPicks`; off
+ *   keeps the selection. When it alone hides every remaining row, `la-acc-nolaunching` explains and
+ *   `la-acc-show-all` turns both switches off (so does `la-acc-clear-search`). Launching is **not** a
+ *   readiness reason: a launching account stays `available` and can be launched again when the switch is off.
  * Step 2 · Templates — the existing list endpoints (`?limit=100`) + their `/options`, requested **once per
  *   page lifetime** when the step is first opened. A card whose `catalogVersion` differs from the one
  *   `/options` serves is disabled with the re-save message (spec A8) — the API refuses it anyway (400).
@@ -170,6 +179,8 @@ const accountSearch = ref('')
 const workspaceFilter = ref<string>('all')
 /** FEAT-026 — "Only with balance", on at every page open, never persisted (spec A4) */
 const fundedOnly = ref(true)
+/** "Only not launching" — hides accounts whose FEAT-029 flag is on; off at every page open, never persisted */
+const idleOnly = ref(false)
 const unavailableOpen = ref(false)
 const expanded = ref<string[]>([])
 
@@ -218,14 +229,23 @@ const searchFilteredAccounts = computed(() => {
   })
 })
 
-/** available ∩ workspace ∩ search ∩ (funded when the switch is on), all client-side (spec A3) */
-const filteredAccounts = computed(() => {
+/** available ∩ workspace ∩ search ∩ (funded when that switch is on) — the idle switch composes on top */
+const fundedFilteredAccounts = computed(() => {
   if (!fundedOnly.value) return searchFilteredAccounts.value
   return searchFilteredAccounts.value.filter(isFunded)
 })
 
+/** … ∩ (not launching when the idle switch is on), all client-side (spec A3) */
+const filteredAccounts = computed(() => {
+  if (!idleOnly.value) return fundedFilteredAccounts.value
+  return fundedFilteredAccounts.value.filter(a => !a.launchingAds)
+})
+
 /** how many of the search/workspace-filtered accounts the funded switch additionally hides */
 const unfundedHiddenCount = computed(() => searchFilteredAccounts.value.filter(a => !isFunded(a)).length)
+
+/** how many of the rows that survive search/workspace/funded the idle switch additionally hides */
+const launchingHiddenCount = computed(() => fundedFilteredAccounts.value.filter(a => a.launchingAds).length)
 
 /**
  * Turning the switch on drops unfunded accounts from the selection (A6); off keeps it.
@@ -247,6 +267,14 @@ watch(fundedOnly, (on) => {
   }
   selection.value = next
   manualPicks.value = without(manualPicks.value, unfunded)
+})
+
+/** Turning the idle switch on drops launching accounts from the selection; off keeps it (mirrors the funded rule). */
+watch(idleOnly, (on) => {
+  if (!on) return
+  const launching = availableAccounts.value.filter(a => a.launchingAds).map(a => a.id)
+  selection.value = without(selection.value, launching)
+  manualPicks.value = without(manualPicks.value, launching)
 })
 
 const selectedCount = computed(() => Object.keys(selection.value).length)
@@ -339,10 +367,18 @@ function toggleExpanded(id: string) {
 function clearAccountSearch() {
   accountSearch.value = ''
   fundedOnly.value = false
+  idleOnly.value = false
 }
 
+/** both switches off — every available account is listed */
 function showAllAccounts() {
   fundedOnly.value = false
+  idleOnly.value = false
+}
+
+/** `title` of `la-acc-launching` while the account is launching — when its FEAT-029 flag went on */
+function launchingTitle(account: LaunchAccount): string {
+  return account.launchingSince ? `since ${formatDateTime(account.launchingSince)}` : 'since —'
 }
 
 /** FEAT-034 — `<balanceAmount> <balanceCurrency>` of the account, printed as stored, or `—` (api-contract §4) */
@@ -753,12 +789,19 @@ const hasAccountSearch = computed(() => accountSearch.value.trim() !== '' || wor
 const showAccountsEmpty = computed(() =>
   targetsLoaded.value && !targetsError.value && !forbidden.value && availableAccounts.value.length === 0
 )
+/** idle switch on, no search/workspace filter, and it alone hides every remaining row */
+const showAccountsNoLaunching = computed(() =>
+  !showAccountsEmpty.value && idleOnly.value && !hasAccountSearch.value
+  && filteredAccounts.value.length === 0 && launchingHiddenCount.value > 0
+)
 /** switch on, no search/workspace filter, every available account unfunded (spec AC-9) */
 const showAccountsNoFunded = computed(() =>
-  !showAccountsEmpty.value && fundedOnly.value && !hasAccountSearch.value && filteredAccounts.value.length === 0
+  !showAccountsEmpty.value && !showAccountsNoLaunching.value && fundedOnly.value && !hasAccountSearch.value
+  && filteredAccounts.value.length === 0
 )
 const showAccountsNoMatch = computed(() =>
-  !showAccountsEmpty.value && !showAccountsNoFunded.value && filteredAccounts.value.length === 0 && hasAccountSearch.value
+  !showAccountsEmpty.value && !showAccountsNoLaunching.value && !showAccountsNoFunded.value
+  && filteredAccounts.value.length === 0 && hasAccountSearch.value
 )
 
 onMounted(() => {
@@ -810,6 +853,7 @@ onUnmounted(() => {
         :data-step="step"
         :data-pending="targetsPending ? 'true' : 'false'"
         :data-funded="fundedOnly ? 'true' : 'false'"
+        :data-idle-only="idleOnly ? 'true' : 'false'"
         class="flex flex-1 flex-col gap-4"
       >
         <UAlert
@@ -903,6 +947,11 @@ onUnmounted(() => {
                     label="Only with balance"
                     data-testid="la-acc-funded"
                   />
+                  <USwitch
+                    v-model="idleOnly"
+                    label="Only not launching"
+                    data-testid="la-acc-idle"
+                  />
                   <UButton
                     v-if="selectedCount > 0"
                     label="Clear"
@@ -937,6 +986,25 @@ onUnmounted(() => {
                       variant="outline"
                       to="/tiktok-accounts"
                       data-testid="la-acc-empty-link"
+                    />
+                  </template>
+                </UEmpty>
+
+                <UEmpty
+                  v-else-if="showAccountsNoLaunching"
+                  icon="i-lucide-rocket"
+                  title="Every account is launching ads"
+                  :description="`Turn the filter off to see ${launchingHiddenCount} account(s)`"
+                  data-testid="la-acc-nolaunching"
+                >
+                  <template #actions>
+                    <UButton
+                      label="Show all"
+                      icon="i-lucide-eye"
+                      color="neutral"
+                      variant="outline"
+                      data-testid="la-acc-show-all"
+                      @click="showAllAccounts"
                     />
                   </template>
                 </UEmpty>
@@ -1019,6 +1087,7 @@ onUnmounted(() => {
                           :data-id="account.id"
                           :data-selected="isSelected(account) ? 'true' : 'false'"
                           :data-funded="isFunded(account) ? 'true' : 'false'"
+                          :data-launching="account.launchingAds ? 'true' : 'false'"
                           data-slot="tr"
                           data-testid="la-acc-row"
                         >
@@ -1034,6 +1103,32 @@ onUnmounted(() => {
                             <div class="flex flex-col">
                               <span class="font-medium text-highlighted" data-testid="la-acc-name">{{ accountName(account) }}</span>
                               <span v-if="accountEmail(account)" class="text-xs text-muted">{{ accountEmail(account) }}</span>
+                              <!-- FEAT-029 flag of the account — launch status -->
+                              <UBadge
+                                v-if="account.launchingAds"
+                                color="success"
+                                variant="subtle"
+                                size="sm"
+                                icon="i-lucide-rocket"
+                                class="mt-0.5 self-start whitespace-nowrap"
+                                :title="launchingTitle(account)"
+                                data-testid="la-acc-launching"
+                                data-launching="true"
+                                :data-since="account.launchingSince ?? ''"
+                              >
+                                Launching ads
+                              </UBadge>
+                              <UBadge
+                                v-else
+                                color="neutral"
+                                variant="subtle"
+                                size="sm"
+                                class="mt-0.5 self-start whitespace-nowrap"
+                                data-testid="la-acc-launching"
+                                data-launching="false"
+                              >
+                                Not launching
+                              </UBadge>
                             </div>
                           </td>
                           <td class="border-b border-default px-3 py-2">
