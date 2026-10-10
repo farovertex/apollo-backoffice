@@ -34,7 +34,7 @@
  *   Launch status (FEAT-029 flag served by `GET /launch/targets`): every row carries the account's status badge
  *   (`la-acc-launching`: **Launching ads** with `title="since …"` while `account.launchingAds`, else
  *   **Not launching**) and the row has `data-launching`. The second switch **"Only not launching"**
- *   (`la-acc-idle`, **off** at page open, not persisted) hides launching accounts, composed with the other
+ *   (`la-acc-idle`, **on** at page open like the balance switch, not persisted) hides launching accounts, composed with the other
  *   filters by AND, client-side. Turning it on drops launching accounts from `selection`/`manualPicks`; off
  *   keeps the selection. When it alone hides every remaining row, `la-acc-nolaunching` explains and
  *   `la-acc-show-all` turns both switches off (so does `la-acc-clear-search`). Launching is **not** a
@@ -179,8 +179,8 @@ const accountSearch = ref('')
 const workspaceFilter = ref<string>('all')
 /** FEAT-026 — "Only with balance", on at every page open, never persisted (spec A4) */
 const fundedOnly = ref(true)
-/** "Only not launching" — hides accounts whose FEAT-029 flag is on; off at every page open, never persisted */
-const idleOnly = ref(false)
+/** "Only not launching" — hides accounts whose FEAT-029 flag is on; **on** at every page open, never persisted */
+const idleOnly = ref(true)
 const unavailableOpen = ref(false)
 const expanded = ref<string[]>([])
 
