@@ -43,6 +43,10 @@
  * (`revealedRecovery`, never shared with the password columns), toggle `ta-recovery-email-toggle` + copy
  * `ta-recovery-email-copy`, `—` when null. `lastLoginError` may now be `mailboxIdentityCheck`
  * (`login-errors.ts`), rendered by the existing `ta-login-error` chip with no code change here.
+ * 2026-10-11 (human request) — the **Email password**, **Recovery email** and **TikTok password** columns are
+ * removed from the table (no `ta-email-password` / `ta-recovery-email*` / `ta-password` cells any more); the
+ * values are still part of the row data and editable through the add/edit modals. The FEAT-023/036 notes above
+ * describe history.
  */
 import type { VNode } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
@@ -54,7 +58,6 @@ import type { DiscoverJobResponse } from '#shared/types/advertisers'
 import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
-import PasswordCell from '~/components/PasswordCell.vue'
 
 useSeoMeta({ title: 'TikTok accounts' })
 
@@ -107,24 +110,10 @@ const filtered = computed<TikTokAccount[]>(() => {
   )
 })
 
-// ── password reveal (per account id, owned here so table re-renders never leak a revealed cell to another row) ───────
-// one set per column (FEAT-023): revealing the TikTok password must not reveal the mailbox one
-const revealed = ref(new Set<string>())
-const revealedEmail = ref(new Set<string>())
-// FEAT-036 — own reveal set for the Recovery email column, never shared with the two password columns
-const revealedRecovery = ref(new Set<string>())
-function toggle(set: Ref<Set<string>>, id: string) {
-  const next = new Set(set.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  set.value = next
-}
-// a fresh dataset (refresh / after create / after delete / after an import) starts fully masked and drops the
-// per-row poll snapshots
+// (2026-10-11) the per-row password / recovery-email reveal sets went away with their columns — the secrets are
+// no longer rendered in the table at all.
+// a fresh dataset (refresh / after create / after delete / after an import) drops the per-row poll snapshots
 watch(data, () => {
-  revealed.value = new Set()
-  revealedEmail.value = new Set()
-  revealedRecovery.value = new Set()
   polledById.value = new Map()
   topupById.value = new Map()
 })
@@ -545,71 +534,8 @@ const columns: TableColumn<TikTokAccount>[] = [
     header: 'Login email',
     cell: ({ row }) => h('span', { class: 'whitespace-nowrap' }, row.original.loginEmail)
   },
-  {
-    id: 'emailPassword',
-    header: 'Email password',
-    cell: ({ row }) => {
-      // rows created before FEAT-023 have no mailbox password; nothing to mask or copy there
-      const value = row.original.emailPassword
-      if (!value) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-email-password', 'data-shown': 'false' }, '—')
-      return h(PasswordCell, {
-        key: row.original.id,
-        value,
-        shown: revealedEmail.value.has(row.original.id),
-        testIdPrefix: 'ta-email',
-        name: 'email password',
-        onToggle: () => toggle(revealedEmail, row.original.id)
-      })
-    }
-  },
-  {
-    id: 'recoveryEmail',
-    header: 'Recovery email',
-    cell: ({ row }) => {
-      // FEAT-036 — the temp-mail address Microsoft's identity/confirm page sends its code to; null on rows
-      // created before the feature and on every row the human has not set it on yet
-      const value = row.original.recoveryEmail
-      if (!value) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-recovery-email', 'data-shown': 'false' }, '—')
-      const shown = revealedRecovery.value.has(row.original.id)
-      return h('div', { class: 'flex items-center gap-1 whitespace-nowrap' }, [
-        h('span', {
-          'class': ['font-mono text-sm', shown ? 'text-highlighted' : 'text-muted'],
-          'data-testid': 'ta-recovery-email',
-          'data-shown': shown ? 'true' : 'false'
-        }, shown ? value : maskRecoveryEmail(value)),
-        h(UButton, {
-          'icon': shown ? 'i-lucide-eye-off' : 'i-lucide-eye',
-          'color': 'neutral',
-          'variant': 'ghost',
-          'size': 'xs',
-          'aria-label': shown ? 'Hide recovery email' : 'Show recovery email',
-          'aria-pressed': shown,
-          'data-testid': 'ta-recovery-email-toggle',
-          'onClick': () => toggle(revealedRecovery, row.original.id)
-        }),
-        h(UButton, {
-          'icon': 'i-lucide-copy',
-          'color': 'neutral',
-          'variant': 'ghost',
-          'size': 'xs',
-          'aria-label': 'Copy recovery email',
-          'data-testid': 'ta-recovery-email-copy',
-          'onClick': () => copyText(value, 'Recovery email copied')
-        })
-      ])
-    }
-  },
-  {
-    id: 'password',
-    header: 'TikTok password',
-    cell: ({ row }) => h(PasswordCell, {
-      key: row.original.id,
-      value: row.original.password,
-      shown: revealed.value.has(row.original.id),
-      name: 'TikTok password',
-      onToggle: () => toggle(revealed, row.original.id)
-    })
-  },
+  // 2026-10-11 (human request): the "Email password", "Recovery email" and "TikTok password" columns are no
+  // longer rendered in the table — the values stay in the row data and in the edit/add modals.
   {
     id: 'browserProfile',
     header: 'Browser profile',
