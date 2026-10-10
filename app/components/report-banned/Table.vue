@@ -1,0 +1,151 @@
+<script setup lang="ts">
+/**
+ * FEAT-043 — `/reports/banned` table (api-contract.md §3 `rb-table`). One flat row per banned advertiser (no
+ * nesting, unlike `ReportSummaryGroupTable`'s account→advertiser groups) and **no sortable headers** — the
+ * API fixes the order (`bannedAt` desc, null last, tie by advertiser id). The footer always comes from the
+ * response's top-level counts and `totals`, never from summing the visible rows (pagination makes that wrong).
+ */
+import type { BannedRow } from '#shared/types/report-banned'
+import type { KpiMetrics } from '#shared/types/reports'
+
+const props = withDefaults(defineProps<{
+  rows: BannedRow[]
+  totals: KpiMetrics
+  adCount: number
+  advertiserCount: number
+  accountCount: number
+  pending?: boolean
+}>(), {
+  pending: false
+})
+
+const METRIC_COLUMNS: { field: keyof KpiMetrics | 'adCount', label: string, format: 'int' | 'dec' | 'pct' }[] = [
+  { field: 'adCount', label: 'โฆษณา', format: 'int' },
+  { field: 'spend', label: 'Spend', format: 'dec' },
+  { field: 'impressions', label: 'Impr.', format: 'int' },
+  { field: 'clicks', label: 'Clicks', format: 'int' },
+  { field: 'ctr', label: 'CTR', format: 'pct' },
+  { field: 'cpc', label: 'CPC', format: 'dec' },
+  { field: 'conversions', label: 'Conv.', format: 'int' },
+  { field: 'conversionCost', label: 'CPA', format: 'dec' }
+]
+
+/** `adCount` lives on the row itself, every other column reads the row's `metrics`. */
+function cellValue(row: BannedRow, field: string): number | null {
+  return field === 'adCount' ? row.adCount : row.metrics[field as keyof KpiMetrics]
+}
+
+function footValue(field: string): number | null {
+  return field === 'adCount' ? props.adCount : props.totals[field as keyof KpiMetrics]
+}
+
+function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): string {
+  if (format === 'int') return formatInt(value)
+  if (format === 'pct') return formatPercent(value)
+  return formatDecimal(value)
+}
+</script>
+
+<template>
+  <div class="min-w-0 overflow-x-auto" data-testid="rb-table">
+    <table class="w-full border-separate border-spacing-0 text-sm">
+      <thead>
+        <tr class="bg-elevated/50">
+          <th
+            scope="col"
+            class="rounded-l-lg border-y border-l border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+          >
+            TikTok account
+          </th>
+          <th
+            scope="col"
+            class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+          >
+            Advertiser
+          </th>
+          <th
+            scope="col"
+            class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+          >
+            วันที่โดนแบน
+          </th>
+          <th
+            v-for="(column, index) in METRIC_COLUMNS"
+            :key="column.field"
+            scope="col"
+            class="border-y border-default px-2 py-2 text-right font-semibold whitespace-nowrap text-highlighted"
+            :class="index === METRIC_COLUMNS.length - 1 ? 'rounded-r-lg border-r' : ''"
+          >
+            {{ column.label }}
+          </th>
+        </tr>
+      </thead>
+      <tbody :class="pending ? 'opacity-60' : ''">
+        <tr
+          v-for="row in rows"
+          :key="row.advertiser.id"
+          data-testid="rb-row"
+          :data-id="row.advertiser.id"
+          :data-account="row.account.id"
+          :data-ads="row.adCount"
+        >
+          <td class="border-b border-default px-2 py-2" data-testid="rb-row-account">
+            <div class="flex min-w-0 flex-col">
+              <span class="max-w-48 truncate" :title="row.account.label ?? row.account.loginEmail ?? ''">
+                {{ row.account.label || row.account.loginEmail || REPORT_DASH }}
+              </span>
+              <span class="text-xs text-muted">{{ row.workspace.name || REPORT_DASH }}</span>
+            </div>
+          </td>
+          <td class="border-b border-default px-2 py-2" data-testid="rb-row-advertiser">
+            <div class="flex min-w-0 flex-col">
+              <span class="max-w-44 truncate" :title="row.advertiser.name">
+                {{ row.advertiser.name || REPORT_DASH }}
+              </span>
+              <span class="text-xs text-muted" :title="row.advertiser.tiktokAdvertiserId">
+                aadvid {{ last4(row.advertiser.tiktokAdvertiserId) }}
+              </span>
+            </div>
+          </td>
+          <td
+            class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
+            data-testid="rb-row-banned"
+            :data-iso="row.bannedAt ?? ''"
+          >
+            {{ formatDateTime(row.bannedAt) }}
+          </td>
+          <td
+            v-for="column in METRIC_COLUMNS"
+            :key="column.field"
+            class="border-b border-default px-2 py-2 text-right tabular-nums"
+            :data-field="column.field"
+          >
+            {{ formatField(cellValue(row, column.field), column.format) }}
+          </td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr
+          data-testid="rb-foot"
+          :data-ads="adCount"
+          :data-advertisers="advertiserCount"
+          :data-accounts="accountCount"
+          class="bg-elevated font-semibold"
+        >
+          <td colspan="3" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
+            รวมทั้งหมด · {{ formatInt(adCount) }} โฆษณา · {{ formatInt(advertiserCount) }} advertisers · {{ formatInt(accountCount) }} บัญชี
+          </td>
+          <td
+            v-for="(column, index) in METRIC_COLUMNS"
+            :key="column.field"
+            class="border-t border-default px-2 py-2 text-right tabular-nums"
+            :class="index === METRIC_COLUMNS.length - 1 ? 'rounded-br-lg border-r' : ''"
+            :data-field="column.field"
+          >
+            {{ formatField(footValue(column.field), column.format) }}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</template>

@@ -102,7 +102,15 @@ const links = computed(() => [[{
         open.value = false
       }
     }, {
-      // FEAT-040 — UTM report (register/deposit per UTM key vs. ad spend), directly after Report summary
+      // FEAT-043 — advertisers TikTok has currently banned that still own ads, directly after Report summary
+      label: 'Report Banned accounts',
+      icon: 'i-lucide-ban',
+      to: '/reports/banned',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
+      // FEAT-040 — UTM report (register/deposit per UTM key vs. ad spend), directly after Report Banned accounts
       label: 'UTM',
       icon: 'i-lucide-link-2',
       to: '/reports/utm',
