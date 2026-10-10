@@ -58,17 +58,31 @@ function queryString(key: string): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-const from = computed(() => queryString('from'))
-const to = computed(() => queryString('to'))
+/**
+ * `YYYY-MM-DD` of today in Asia/Bangkok — the report cuts its days on Thai time (NOTE_TEXT), so the default
+ * window is "today, Thai" whatever the viewer's browser zone (`en-CA` formats as ISO without a library).
+ */
+function todayThai(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(new Date())
+}
+
+/**
+ * Dates default to **today** when the URL carries none (human request 2026-10-11): the inputs show today, the
+ * request sends `from=to=today`, and clearing a date input + ค้นหา drops the key, which falls back to today
+ * again. The API's own "last 7 days" default is therefore never used by this page.
+ */
+const from = computed(() => queryString('from') || todayThai())
+const to = computed(() => queryString('to') || todayThai())
 const prefix = computed(() => queryString('prefix'))
 const source = computed(() => queryString('source'))
 const medium = computed(() => queryString('medium'))
 const campaign = computed(() => queryString('campaign'))
 
-/** only the keys actually present in the URL travel to the API — never `limit` (AS-7) */
+/** only the keys actually present in the URL travel to the API (`from`/`to` always, defaulted to today) — never `limit` (AS-7) */
 const requestQuery = computed(() => ({
-  from: from.value || undefined,
-  to: to.value || undefined,
+  from: from.value,
+  to: to.value,
   prefix: prefix.value || undefined,
   source: source.value || undefined,
   medium: medium.value || undefined,
