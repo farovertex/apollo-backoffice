@@ -47,6 +47,9 @@
  * removed from the table (no `ta-email-password` / `ta-recovery-email*` / `ta-password` cells any more); the
  * values are still part of the row data and editable through the add/edit modals. The FEAT-023/036 notes above
  * describe history.
+ * 2026-10-12 (human request) — row action **Edit** (`ta-edit`, first in the Actions cell) opens
+ * `TiktokAccountsEditModal` with the row; only login email, email password, recovery email and TikTok password
+ * are editable (`PATCH /backend/tiktok-accounts/:id`, changed keys only). `updated` → one refresh.
  */
 import type { VNode } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
@@ -196,6 +199,14 @@ const addOpen = ref(false)
 const batchOpen = ref(false)
 const deleteOpen = ref(false)
 const deleteTarget = ref<TikTokAccount | null>(null)
+// 2026-10-12 — Edit modal (login email / email password / recovery email / TikTok password only)
+const editOpen = ref(false)
+const editTarget = ref<TikTokAccount | null>(null)
+
+function askEdit(account: TikTokAccount) {
+  editTarget.value = account
+  editOpen.value = true
+}
 
 // ── login (FEAT-004) ─────────────────────────────────────────────────────────────────────────────────────────────────
 const loginOpen = ref(false)
@@ -793,6 +804,20 @@ const columns: TableColumn<TikTokAccount>[] = [
       const loginHint = running ? (job.type === 'discover' ? 'Sync in progress — login again anyway' : 'Login in progress — login again anyway') : null
       const wide = wideActions.value
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
+        // 2026-10-12 — Edit credentials (never disabled: the modal only writes the four credential fields)
+        h(UTooltip, { text: 'Edit', disabled: wide }, () => h('span', { class: 'inline-flex' }, [
+          h(UButton, {
+            'label': 'Edit',
+            'icon': 'i-lucide-pencil',
+            'color': 'neutral',
+            'variant': 'outline',
+            'size': 'xs',
+            'ui': ACTION_LABEL_UI,
+            'aria-label': 'Edit',
+            'data-testid': 'ta-edit',
+            'onClick': () => askEdit(row.original)
+          })
+        ])),
         // the tooltip trigger is a span so it still opens on hover while the button is disabled; below 2xl the
         // buttons are icon-only and the tooltip names the action
         h(UTooltip, { text: syncBlocked ?? 'Sync advertisers', disabled: wide && !syncBlocked }, () => h('span', { class: 'inline-flex' }, [
@@ -1022,6 +1047,11 @@ const showTable = computed(() => !error.value && !isEmpty.value)
 
       <TiktokAccountsAddModal v-model:open="addOpen" @created="refresh()" />
       <TiktokAccountsBatchModal v-model:open="batchOpen" @imported="refresh()" />
+      <TiktokAccountsEditModal
+        v-model:open="editOpen"
+        :account="editTarget"
+        @updated="refresh()"
+      />
       <TiktokAccountsDeleteModal
         v-model:open="deleteOpen"
         :account="deleteTarget"
