@@ -265,8 +265,11 @@ export type CreateProfileAutoBody = { name: string } & ProfileProxyChoice
  * `jobId` is the `provider{create}` job that will fill it in.
  * FEAT-028: the FEAT-027 AS-1 `proxyWarning` key is removed (there is no default proxy left to skip); an
  * exhausted auto-select is a 409 `no proxy available (tried N)` instead.
+ * FEAT-044 (api.md "Needs BO"): the 201 keeps its **20**-key shape — `createdAt` was already there, but `deleting`
+ * is computed per list call and exists on `/available` items only, so it is omitted here. A fresh row is never
+ * being deleted; a consumer that drops it into an `AvailableProfile` list adds `deleting: false`.
  */
-export interface CreatedProfile extends AvailableProfile {
+export interface CreatedProfile extends Omit<AvailableProfile, 'deleting'> {
   createdBy: string
   createdAt: string
   jobId: string

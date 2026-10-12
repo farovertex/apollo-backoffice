@@ -309,7 +309,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   } catch (e) {
     const accountError = accountErrorState(e)
     if (createdProfile) {
-      const profile = createdProfile
+      // FEAT-044: the 201 has no `deleting` key (it is a `/available`-only, per-list-call value) — a row that was
+      // just created is never being deleted
+      const profile = { ...createdProfile, deleting: false }
       profiles.value = [profile, ...profiles.value.filter(p => p.id !== profile.id)]
       profilesLoaded.value = true
       state.createProfile = false
