@@ -25,6 +25,16 @@
  * on a template that was never checked. The Spark code itself is **not** a column any more (human decision
  * 2026-10-11): it is a write-only secret, the post image says what it points at. While any row is `verifying` the list is
  * re-read every 2 s for at most 2 min (`adt-page[data-polling]`), silently — the table never blinks for it.
+ *
+ * **FEAT-045** (api-contract v1 §3 · spec AC-9…AC-15): the UTM of a template is a snapshot that
+ * `campaignOrders.adConfig.utm` / `builds.utm` / `ads.utm` keep forever, so changing it here leaves every older
+ * campaign reporting under the old key. The third row action `adt-utm-sync` (between Edit and Delete, disabled
+ * with a `title` while the row is unbound) opens `AdTemplatesUtmSyncModal`, which previews the affected rows with
+ * `POST /ad-templates/:id/utm/sync { dryRun: true }` and writes them on confirm. After a save that changed the
+ * UTM **key** (the 4 ids — `utmChanged` alone is not enough, spec AS-10) the page opens that modal by itself with
+ * `prompted = true`, as soon as the form modal is closed: a FEAT-042 save that starts a post lookup keeps the form
+ * open, so the prompt waits in `pendingPrompt` for `formOpen` to turn false. A sync never changes the row itself —
+ * the single `reload()` afterwards only keeps the page honest.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -276,25 +286,84 @@ function isStaleCatalog(template: AdTemplate): boolean {
 const wideActions = useMediaQuery('(min-width: 1536px)')
 const ACTION_LABEL_UI = { label: 'hidden 2xl:inline' }
 
+// ── FEAT-045 · sync the template UTM into the orders it already produced ────────────────────────────────────────────
+/** a row without a `prefix` (unbound, or saved before FEAT-038) has nothing to sync → the button is disabled */
+function isUtmBound(template: AdTemplate): boolean {
+  return Boolean(template.config?.utm?.prefix)
+}
+
+function syncHint(template: AdTemplate): string {
+  return isUtmBound(template) ? 'Sync UTM' : 'Bind a UTM to this template first'
+}
+
+/** the 4 UTM ids that the reports join on, or `null` for an unbound template (api-contract §3.4) */
+function utmKeyOf(template: AdTemplate | null): string[] | null {
+  const utm = template?.config?.utm
+  if (!utm?.prefix) return null
+  return [utm.prefix, utm.sourceId, utm.mediumId, utm.campaignId]
+}
+
+/** two keys are the same set; a `null` on either side counts as different (so `unbound → bound` prompts) */
+function sameUtmKey(a: string[] | null, b: string[] | null): boolean {
+  if (!a || !b) return false
+  return a.length === b.length && a.every((value, i) => value === b[i])
+}
+
 // ── modals ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const formOpen = ref(false)
 const formTarget = ref<AdTemplate | null>(null)
 const deleteOpen = ref(false)
 const deleteTarget = ref<AdTemplate | null>(null)
+const syncOpen = ref(false)
+const syncTarget = ref<AdTemplate | null>(null)
+const syncPrompted = ref(false)
+/** the modal's write request is in flight → that row's button is disabled (api-contract §3.1) */
+const syncPosting = ref(false)
+/** a save changed the UTM but the form modal is still open (FEAT-042 post lookup) — prompt once it closes */
+const pendingPrompt = ref<AdTemplate | null>(null)
 
 function openCreate() {
+  pendingPrompt.value = null
   formTarget.value = null
   formOpen.value = true
 }
 
 function openEdit(template: AdTemplate) {
+  pendingPrompt.value = null
   formTarget.value = template
   formOpen.value = true
 }
 
 function askDelete(template: AdTemplate) {
+  pendingPrompt.value = null
   deleteTarget.value = template
   deleteOpen.value = true
+}
+
+function openUtmSync(template: AdTemplate) {
+  if (!isUtmBound(template)) return
+  pendingPrompt.value = null
+  syncTarget.value = template
+  syncPrompted.value = false
+  syncOpen.value = true
+}
+
+/** the after-save prompt (api-contract §3.4): same modal, `data-prompted="true"` + the extra first line */
+function promptUtmSync(template: AdTemplate) {
+  pendingPrompt.value = null
+  syncTarget.value = template
+  syncPrompted.value = true
+  syncOpen.value = true
+}
+
+watch(formOpen, (open) => {
+  const pending = pendingPrompt.value
+  if (!open && pending) promptUtmSync(pending)
+})
+
+function onSynced() {
+  // nothing visible in the row changes; the single read keeps the page in sync with the API
+  reload()
 }
 
 function onCreated() {
@@ -302,8 +371,15 @@ function onCreated() {
   reload(1)
 }
 
-function onUpdated() {
+function onUpdated(updated: AdTemplate) {
+  // `formTarget` is the row as it was when Edit was clicked
+  const after = utmKeyOf(updated)
+  const utmChanged = after !== null && !sameUtmKey(utmKeyOf(formTarget.value), after)
   reload()
+  if (!utmChanged) return
+  // a FEAT-042 save that starts a post lookup keeps the form open — the prompt waits for it
+  if (formOpen.value) pendingPrompt.value = updated
+  else promptUtmSync(updated)
 }
 
 function onDeleted() {
@@ -597,6 +673,23 @@ function onDeleted() {
                         @click="openEdit(template)"
                       />
                     </UTooltip>
+                    <!-- FEAT-045 — push this template's UTM into the orders / builds / ads it already produced -->
+                    <UTooltip :text="syncHint(template)" :disabled="wideActions && isUtmBound(template)">
+                      <UButton
+                        label="Sync UTM"
+                        icon="i-lucide-refresh-cw"
+                        color="neutral"
+                        variant="outline"
+                        size="xs"
+                        :ui="ACTION_LABEL_UI"
+                        :disabled="!isUtmBound(template) || (syncPosting && syncTarget?.id === template.id)"
+                        :data-bound="isUtmBound(template) ? 'true' : 'false'"
+                        :title="syncHint(template)"
+                        aria-label="Sync UTM"
+                        data-testid="adt-utm-sync"
+                        @click="openUtmSync(template)"
+                      />
+                    </UTooltip>
                     <UTooltip text="Delete" :disabled="wideActions">
                       <UButton
                         label="Delete"
@@ -646,6 +739,13 @@ function onDeleted() {
         v-model:open="deleteOpen"
         :template="deleteTarget"
         @deleted="onDeleted"
+      />
+      <AdTemplatesUtmSyncModal
+        v-model:open="syncOpen"
+        v-model:posting="syncPosting"
+        :template="syncTarget"
+        :prompted="syncPrompted"
+        @synced="onSynced"
       />
     </template>
   </UDashboardPanel>
