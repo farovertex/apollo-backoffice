@@ -271,10 +271,16 @@ export interface LoginConflictBody {
 }
 
 /**
- * FEAT-036 (api-contract.md v1 §3 AS-2) — `PATCH /tiktok-accounts/:id` body (`.strict()`, `recoveryEmail`
- * required in this body: a string sets it, `null` clears it). **Type only this round** (prompt §3.4): no Edit
- * form exists yet, so nothing in the BO calls this endpoint — the human sets it with curl (final report).
+ * `PATCH /tiktok-accounts/:id` body (`.strict()`, every key optional, at least one required). Sent by the Edit
+ * modal (`TiktokAccountsEditModal`, 2026-10-12 human request) with **only the keys the user changed**. Exactly
+ * these four fields are editable; anything else (label, profile, flags) is 400 on the API.
+ * FEAT-036 history: the body used to carry `recoveryEmail` alone (a string sets it, `null` clears it — unchanged).
  */
 export interface PatchAccountBody {
-  recoveryEmail: string | null
+  loginEmail?: string
+  /** mailbox password */
+  emailPassword?: string
+  recoveryEmail?: string | null
+  /** TikTok Ads password */
+  password?: string
 }

@@ -1,0 +1,295 @@
+<script setup lang="ts">
+/**
+ * Edit account modal (2026-10-12, human request — functions 3.2 "edit credential"). Opened by the row action
+ * **Edit** (`ta-edit`) on /tiktok-accounts. Exactly four fields are editable — **Login email**, **Email password**,
+ * **Recovery email** and **TikTok password**; label, browser profile and every flag stay read-only (the API's
+ * `PATCH /tiktok-accounts/:id` body is `.strict()` on those four keys).
+ * On every open the form is prefilled from the row; both passwords start masked (eye toggles, same as the Add
+ * modal) and the modal never puts a secret anywhere but the inputs. Submit sends **only the keys that differ** from
+ * the row (`PatchAccountBody`) — nothing changed → the Save button is disabled, no request. `recoveryEmail` is
+ * sent as `null` when the user cleared it. 200 → close + toast + `updated` (the page refreshes the list);
+ * 409 (login email already in the workspace) / 400 → `UAlert` under the form (`ta-edit-error`), modal stays open.
+ * zod mirrors the API: email trim → lowercase → valid ≤ 254; passwords 1..128 verbatim (no trim); recovery email
+ * optional, non-empty must be a valid email. An old row whose `emailPassword` is null may leave that field empty
+ * (the key is simply not sent); a row that has one cannot clear it (the API refuses `''`).
+ * BUG-045: `validate-on` is `['input']` only — see AddModal.vue for why `blur`/`change` must not come back.
+ */
+import * as z from 'zod'
+import type { FetchError } from 'ofetch'
+import type { FormSubmitEvent, ModalProps } from '@nuxt/ui'
+import type { ApiErrorBody } from '#shared/types/auth'
+import type { PatchAccountBody, TikTokAccount } from '#shared/types/tiktok-accounts'
+
+const props = defineProps<{
+  account: TikTokAccount | null
+}>()
+
+const emit = defineEmits<{
+  updated: [account: TikTokAccount]
+}>()
+
+const open = defineModel<boolean>('open', { default: false })
+// UModal's root is renderless, so a `data-testid` on the component lands nowhere; `content` is v-bound onto the
+// rendered DialogContent element (the dialog QA locates as `ta-edit-modal`).
+const modalContent = { 'data-testid': 'ta-edit-modal' } as ModalProps['content']
+
+const api = useApi()
+const toast = useToast()
+
+// ── form ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+interface FormState {
+  loginEmail: string
+  emailPassword: string
+  recoveryEmail: string
+  password: string
+}
+
+/** what the row holds, normalised the way the API stores it — the submit diffs the form against this */
+function stateOf(account: TikTokAccount | null): FormState {
+  return {
+    loginEmail: account?.loginEmail ?? '',
+    emailPassword: account?.emailPassword ?? '',
+    recoveryEmail: account?.recoveryEmail ?? '',
+    password: account?.password ?? ''
+  }
+}
+
+const original = ref<FormState>(stateOf(null))
+const state = reactive<FormState>(stateOf(null))
+
+const schema = z.object({
+  loginEmail: z.string({ error: 'Login email is required' })
+    .trim()
+    .toLowerCase()
+    .min(1, 'Login email is required')
+    .max(254, 'Login email must be at most 254 characters')
+    .pipe(z.email('Enter a valid email address')),
+  // may stay empty only while the row has no mailbox password yet (old rows) — checked in superRefine
+  emailPassword: z.string()
+    .max(128, 'Email password must be at most 128 characters'),
+  recoveryEmail: z.string()
+    .trim()
+    .toLowerCase()
+    .optional(),
+  password: z.string({ error: 'TikTok password is required' })
+    .min(1, 'TikTok password is required')
+    .max(128, 'TikTok password must be at most 128 characters')
+}).superRefine((data, ctx) => {
+  if (!data.emailPassword && original.value.emailPassword) {
+    ctx.addIssue({ code: 'custom', path: ['emailPassword'], message: 'Email password is required' })
+  }
+  if (data.recoveryEmail && (data.recoveryEmail.length > 254 || !z.email().safeParse(data.recoveryEmail).success)) {
+    ctx.addIssue({ code: 'custom', path: ['recoveryEmail'], message: 'Enter a valid recovery email address' })
+  }
+})
+
+type Schema = z.output<typeof schema>
+
+// one toggle per password field; both start masked on every open
+const showEmailPassword = ref(false)
+const showPassword = ref(false)
+const submitting = ref(false)
+const submitError = ref<{ title: string, description?: string } | null>(null)
+
+/** true while at least one of the four fields differs from the row (the raw input, before zod normalises it) */
+const dirty = computed(() =>
+  state.loginEmail !== original.value.loginEmail
+  || state.emailPassword !== original.value.emailPassword
+  || state.recoveryEmail !== original.value.recoveryEmail
+  || state.password !== original.value.password
+)
+
+function resetForm() {
+  original.value = stateOf(props.account)
+  Object.assign(state, stateOf(props.account))
+  showEmailPassword.value = false
+  showPassword.value = false
+  submitting.value = false
+  submitError.value = null
+}
+
+watch(open, (isOpen) => {
+  if (isOpen) resetForm()
+})
+
+// ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+function errorState(e: unknown): { title: string, description?: string } {
+  const err = e as FetchError<Partial<ApiErrorBody>>
+  const issues = err.data?.issues?.map(i => i.message).filter(Boolean)
+  return {
+    title: err.data?.error ?? err.message ?? 'Could not save the account',
+    description: issues && issues.length ? issues.join(' · ') : undefined
+  }
+}
+
+/** only the keys whose normalised value differs from the row; `recoveryEmail: null` when cleared */
+function changedBody(data: Schema): PatchAccountBody {
+  const body: PatchAccountBody = {}
+  if (data.loginEmail !== original.value.loginEmail) body.loginEmail = data.loginEmail
+  if (data.emailPassword && data.emailPassword !== original.value.emailPassword) body.emailPassword = data.emailPassword
+  const recovery = data.recoveryEmail ?? ''
+  if (recovery !== original.value.recoveryEmail) body.recoveryEmail = recovery || null
+  if (data.password !== original.value.password) body.password = data.password
+  return body
+}
+
+async function onSubmit(event: FormSubmitEvent<Schema>) {
+  const account = props.account
+  if (!account || submitting.value) return
+  const body = changedBody(event.data)
+  if (Object.keys(body).length === 0) {
+    open.value = false
+    return
+  }
+  submitting.value = true
+  submitError.value = null
+  try {
+    // retry: 0 — exactly one PATCH per click (ofetch would otherwise re-issue it on 5xx)
+    const updated = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(account.id)}`, { method: 'PATCH', body, retry: 0 })
+    open.value = false
+    toast.add({ title: 'Account updated', description: updated.loginEmail, color: 'success' })
+    emit('updated', updated)
+  } catch (e) {
+    submitError.value = errorState(e)
+  } finally {
+    submitting.value = false
+  }
+}
+</script>
+
+<template>
+  <UModal
+    v-model:open="open"
+    :title="`Edit account ${account?.label ?? account?.loginEmail ?? ''}`"
+    description="Only the login email, both passwords and the recovery email can be changed here."
+    :dismissible="!submitting"
+    :ui="{ content: 'max-w-lg' }"
+    :content="modalContent"
+  >
+    <template #body>
+      <UForm
+        :schema="schema"
+        :state="state"
+        :validate-on="['input']"
+        class="space-y-4"
+        @submit="onSubmit"
+      >
+        <UFormField label="Login email" name="loginEmail" required>
+          <UInput
+            v-model="state.loginEmail"
+            type="email"
+            autocomplete="off"
+            placeholder="ads@example.com"
+            class="w-full"
+            :disabled="submitting"
+            data-testid="ta-edit-email"
+          />
+        </UFormField>
+
+        <UFormField
+          label="Email password"
+          name="emailPassword"
+          :required="!!original.emailPassword"
+          :hint="original.emailPassword ? undefined : 'Not set'"
+        >
+          <UInput
+            v-model="state.emailPassword"
+            :type="showEmailPassword ? 'text' : 'password'"
+            autocomplete="new-password"
+            placeholder="Mailbox password of the login email"
+            class="w-full"
+            :ui="{ trailing: 'pe-1' }"
+            :disabled="submitting"
+            data-testid="ta-edit-email-password"
+          >
+            <template #trailing>
+              <UButton
+                color="neutral"
+                variant="link"
+                size="sm"
+                :icon="showEmailPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+                :aria-label="showEmailPassword ? 'Hide email password' : 'Show email password'"
+                :aria-pressed="showEmailPassword"
+                data-testid="ta-edit-email-password-toggle"
+                @click="showEmailPassword = !showEmailPassword"
+              />
+            </template>
+          </UInput>
+        </UFormField>
+
+        <UFormField label="Recovery email" name="recoveryEmail" hint="Optional">
+          <UInput
+            v-model="state.recoveryEmail"
+            type="email"
+            autocomplete="off"
+            placeholder="recovery@example.com"
+            class="w-full"
+            :disabled="submitting"
+            data-testid="ta-edit-recovery-email"
+          />
+          <template #help>
+            <span data-testid="ta-edit-recovery-email-helper">{{ RECOVERY_EMAIL_HELP }} Leave empty to clear it.</span>
+          </template>
+        </UFormField>
+
+        <UFormField label="TikTok password" name="password" required>
+          <UInput
+            v-model="state.password"
+            :type="showPassword ? 'text' : 'password'"
+            autocomplete="new-password"
+            placeholder="TikTok Ads password"
+            class="w-full"
+            :ui="{ trailing: 'pe-1' }"
+            :disabled="submitting"
+            data-testid="ta-edit-password"
+          >
+            <template #trailing>
+              <UButton
+                color="neutral"
+                variant="link"
+                size="sm"
+                :icon="showPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+                :aria-label="showPassword ? 'Hide TikTok password' : 'Show TikTok password'"
+                :aria-pressed="showPassword"
+                data-testid="ta-edit-password-toggle"
+                @click="showPassword = !showPassword"
+              />
+            </template>
+          </UInput>
+        </UFormField>
+
+        <UAlert
+          v-if="submitError"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          :title="submitError.title"
+          :description="submitError.description"
+          role="alert"
+          data-testid="ta-edit-error"
+        />
+
+        <div class="flex flex-wrap justify-end gap-2">
+          <UButton
+            label="Cancel"
+            color="neutral"
+            variant="subtle"
+            :disabled="submitting"
+            data-testid="ta-edit-cancel"
+            @click="open = false"
+          />
+          <UButton
+            label="Save"
+            icon="i-lucide-save"
+            color="primary"
+            variant="solid"
+            type="submit"
+            :disabled="!dirty"
+            :loading="submitting"
+            data-testid="ta-edit-submit"
+          />
+        </div>
+      </UForm>
+    </template>
+  </UModal>
+</template>
