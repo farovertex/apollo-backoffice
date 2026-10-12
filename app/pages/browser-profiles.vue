@@ -24,13 +24,22 @@
  * page) also watches reserved rows: a profile created from the BO starts as `runState: 'provisioning'` with
  * `providerProfileId: null` → `Creating…` badge + `—` Profile ID until its `provider{create}` job is done, or an
  * `Error` badge carrying `provisionError`.
+ * FEAT-044 (functions 2.12, api-contract §1/§3): every item gains `createdAt` + `deleting`, the table opens **newest
+ * first** (`createdAt` desc, tie → name; the Name header still sorts by name) and a new "Created" column (`bp-created`)
+ * shows the relative age. Second row action "Delete" (`bp-delete`, icon-only) → confirm modal (`bp-delete-confirm`)
+ * → `POST /backend/browser-profiles/:id/delete` (202) which queues a `provider{delete}` job that removes the profile
+ * from AdsPower **and** the row — so only an **empty** profile qualifies (`free` + `closed|error` + not already
+ * deleting; the API refuses anything else with 409 and the button carries the reason in its tooltip). The row then
+ * shows a `Deleting…` badge (also when another admin asked for it: the item itself says `deleting: true`) and the
+ * same single timer polls with reason `delete` until the row disappears (success toast), comes back as `error`
+ * (failure toast) or comes back untouched (warning toast). `DELETE /browser-profiles/:id` (2.8) is not used here.
  */
 import type { TableColumn } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
 import { getPaginationRowModel } from '@tanstack/table-core'
 import { formatTimeAgo } from '@vueuse/core'
 import type { UseTimeAgoMessages } from '@vueuse/core'
-import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, ForceCloseResponse, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
+import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, DeleteProfileResponse, ForceCloseResponse, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
 import type { ProviderNodeView, ProviderNodesResponse } from '#shared/types/provider-nodes'
 import type { ProfilesPollReason } from '~/composables/useProfilesPoll'
 
@@ -115,7 +124,9 @@ const filtered = computed<AvailableProfile[]>(() => {
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const PAGE_SIZE = 20
 const pagination = ref({ pageIndex: 0, pageSize: PAGE_SIZE })
-const sorting = ref([{ id: 'name', desc: false }])
+// FEAT-044 (api-contract §3.1): newest profile first. The API still answers name asc (AS-5) — the order the admin
+// sees is this client-side sort. Clicking the Name header replaces it (TanStack single-column sort).
+const sorting = ref([{ id: 'createdAt', desc: true }])
 
 // TanStack memoises on the state object's identity → always assign a new object, never mutate `pageIndex` in place
 function setPage(p: number) {
@@ -144,12 +155,37 @@ function boundLabel(p: AvailableProfile): string {
 }
 
 /**
+ * FEAT-044 — ids we asked to delete and have not yet seen resolve (row gone / back without `deleting`). The rest of
+ * the delete flow (request, confirm modal, outcome toasts) lives in the "delete" section below; these two are up here
+ * because `runStateBadge()` needs them.
+ */
+const deletingIds = ref<string[]>([])
+/** the row is being deleted — either we asked for it, or the API says a delete job of another session is running */
+function isDeleting(p: AvailableProfile): boolean {
+  return p.deleting || deletingIds.value.includes(p.id)
+}
+
+/**
  * FEAT-024 — second badge of the Status column (`bp-run-state`, `data-state` = the raw `runState`):
  * `provisioning` → neutral `Creating…` while the `provider{create}` job runs · `error` + `provisionError` → error
  * badge whose tooltip/`title` is the API's own text. Every other `runState` (closed / opening / open / closing) is
  * normal operation and adds nothing.
+ * FEAT-044 (api-contract §3.3): a row whose delete job is pending wins over both — `data-state="deleting"`, so the
+ * admin sees why the row is about to disappear even while its `runState` is still `closed`.
  */
 function runStateBadge(p: AvailableProfile) {
+  if (isDeleting(p)) {
+    return h(UBadge, {
+      'color': 'neutral',
+      'variant': 'subtle',
+      'icon': 'i-lucide-loader-circle',
+      'class': 'whitespace-nowrap',
+      'ui': { leadingIcon: 'animate-spin' },
+      'title': 'The profile is being deleted from AdsPower',
+      'data-testid': 'bp-run-state',
+      'data-state': 'deleting'
+    }, () => 'Deleting…')
+  }
   if (p.runState === 'provisioning') {
     return h(UBadge, {
       'color': 'neutral',
@@ -209,6 +245,8 @@ const provisioningCount = computed(() => filtered.value.filter(p => p.runState =
 /** functions 2.11 — ids we asked to force-close and have not yet seen leave `closing` (the same single timer watches them) */
 const forceClosing = ref<string[]>([])
 const forceClosingCount = computed(() => forceClosing.value.filter(id => profiles.value.find(p => p.id === id)?.runState === 'closing').length)
+/** FEAT-044 — visible rows whose delete job is still pending (ours or another admin's `deleting: true`) */
+const deletingCount = computed(() => filtered.value.filter(p => isDeleting(p)).length)
 
 // one interval for the whole page (spec A12): 2 s, 90 s per reason, cleared on unmount
 const poll = useProfilesPoll(() => refresh())
@@ -246,11 +284,12 @@ watch(syncError, (message) => {
 }, { immediate: true })
 
 // the single source of truth for the timer: which reasons the data in hand still waits for
-watch([syncRunning, provisioningCount, forceClosingCount], () => {
+watch([syncRunning, provisioningCount, forceClosingCount, deletingCount], () => {
   const reasons: ProfilesPollReason[] = []
   if (syncRunning.value) reasons.push('sync')
   if (provisioningCount.value > 0) reasons.push('provisioning')
   if (forceClosingCount.value > 0) reasons.push('forceClose')
+  if (deletingCount.value > 0) reasons.push('delete')
   poll.track(reasons)
 }, { immediate: true })
 
@@ -402,6 +441,102 @@ poll.onTimeout('forceClose', () => {
   })
 })
 
+// ── delete (functions 2.12, FEAT-044) ────────────────────────────────────────────────────────────────────────────────
+/**
+ * "profile ว่าง" as far as the BO can tell (spec AS-1): free + nothing running on it. The API checks the rest it can
+ * see (lock, pending jobs, force-close) and answers 409 — the button only prevents the obvious cases.
+ */
+function canDelete(p: AvailableProfile): boolean {
+  return p.status === 'free' && !isDeleting(p) && (p.runState === 'closed' || p.runState === 'error')
+}
+
+/** why the button is disabled / what it does — the tooltip and `title` texts of api-contract §3.2 */
+function deleteReason(p: AvailableProfile): string {
+  if (isDeleting(p)) return 'Deleting…'
+  if (p.status === 'bound') return 'Unbind the TikTok account first'
+  if (p.runState === 'opening' || p.runState === 'open' || p.runState === 'closing') return 'Close the browser first (Force close)'
+  if (p.runState === 'provisioning') return 'Wait until the profile is created'
+  return 'Delete this profile from the system and from AdsPower'
+}
+
+/** id → name of the rows we are waiting on, so the "Profile deleted" toast can still name a row that is gone */
+const deletingNames = new Map<string, string>()
+const deleteTarget = ref<AvailableProfile | null>(null)
+const deleteConfirmOpen = ref(false)
+const deletePosting = ref(false)
+const deleteModalContent = { 'data-testid': 'bp-delete-confirm' } as Record<string, string>
+
+function askDelete(p: AvailableProfile) {
+  deleteTarget.value = p
+  deleteConfirmOpen.value = true
+}
+
+/** `POST /backend/browser-profiles/:id/delete` — one request per confirm, then the poll watches the row */
+async function runDelete() {
+  const target = deleteTarget.value
+  if (!target || deletePosting.value) return
+  deletePosting.value = true
+  try {
+    const res = await api<DeleteProfileResponse>(`/browser-profiles/${encodeURIComponent(target.id)}/delete`, { method: 'POST', retry: 0 })
+    deletingNames.set(target.id, target.name)
+    if (!deletingIds.value.includes(target.id)) deletingIds.value = [...deletingIds.value, target.id]
+    deleteConfirmOpen.value = false
+    // the data in hand still says `deleting: false` — re-read now so the badge and the poll reason come from the API
+    await refresh()
+    poll.retry('delete')
+    toast.add({
+      title: res.reused ? 'Delete already requested' : 'Delete requested',
+      description: `${target.name} · the node deletes the profile in a moment`,
+      color: res.reused ? 'info' : 'success'
+    })
+  } catch (e) {
+    const err = e as FetchError<Partial<ProviderErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    deleteConfirmOpen.value = false
+    toast.add({ title: 'Could not delete', description: err.data?.error ?? err.message, color: status === 409 ? 'warning' : 'error' })
+    // 409 = a precondition we could not see (lock / pending job / a bind that just happened) → show the real state
+    if (status === 409) void refresh()
+  } finally {
+    deletePosting.value = false
+  }
+}
+
+// a watched row resolved → one toast with the outcome, and the id is dropped (api-contract §3.3)
+watch(profiles, (rows) => {
+  if (!deletingIds.value.length) return
+  const keep: string[] = []
+  for (const id of deletingIds.value) {
+    const p = rows.find(r => r.id === id)
+    if (!p) {
+      toast.add({ title: 'Profile deleted', description: deletingNames.get(id) ?? id, color: 'success' })
+      deletingNames.delete(id)
+      continue
+    }
+    // the job is still queued / running
+    if (p.deleting) {
+      deletingNames.set(id, p.name)
+      keep.push(id)
+      continue
+    }
+    deletingNames.delete(id)
+    if (p.runState === 'error') {
+      toast.add({ title: 'Delete failed', description: `${p.name} · ${p.provisionError ?? 'the node reported an error'}`, color: 'error' })
+      continue
+    }
+    // row untouched: the node could not take the lock (`profileLocked`) — the admin may try again
+    toast.add({ title: 'Delete did not happen', description: `${p.name} · the profile was in use, try again`, color: 'warning' })
+  }
+  if (keep.length !== deletingIds.value.length) deletingIds.value = keep
+})
+
+poll.onTimeout('delete', () => {
+  toast.add({
+    title: 'Delete is taking longer than expected',
+    description: 'Is the worker of that node running? Press Refresh in a moment.',
+    color: 'warning'
+  })
+})
+
 const columns: TableColumn<AvailableProfile>[] = [
   {
     accessorKey: 'name',
@@ -524,14 +659,56 @@ const columns: TableColumn<AvailableProfile>[] = [
       : h(UBadge, { color: 'primary', variant: 'subtle', class: 'whitespace-nowrap' }, () => 'Workspace')
   },
   {
+    accessorKey: 'createdAt',
+    // FEAT-044 (api-contract §3.1): sortable like Name — and the column the table is sorted by on load (desc)
+    header: ({ column }) => {
+      const isSorted = column.getIsSorted()
+      return h(UButton, {
+        color: 'neutral',
+        variant: 'ghost',
+        label: 'Created',
+        icon: isSorted
+          ? isSorted === 'asc'
+            ? 'i-lucide-arrow-up-narrow-wide'
+            : 'i-lucide-arrow-down-wide-narrow'
+          : 'i-lucide-arrow-up-down',
+        class: '-mx-2.5',
+        onClick: () => column.toggleSorting(column.getIsSorted() === 'asc')
+      })
+    },
+    // ISO strings compare lexicographically; a first-sync batch shares the timestamp (AS-4) → tie-break on name, then
+    // id. TanStack negates the whole comparator for `desc`, so the tie-breaks are negated here to come out **asc** in
+    // the default (desc) view — that is the order AC-13 pins.
+    sortingFn: (a, b) => {
+      const byDate = a.original.createdAt.localeCompare(b.original.createdAt)
+      if (byDate !== 0) return byDate
+      const byName = a.original.name.localeCompare(b.original.name, undefined, { sensitivity: 'base' })
+      return byName !== 0 ? -byName : -a.original.id.localeCompare(b.original.id)
+    },
+    cell: ({ row }) => {
+      const iso = row.original.createdAt
+      const date = new Date(iso)
+      const valid = !Number.isNaN(date.getTime())
+      return h('span', {
+        'class': 'whitespace-nowrap text-muted',
+        'title': valid ? date.toLocaleString() : iso,
+        'data-testid': 'bp-created',
+        'data-iso': iso
+      }, valid ? formatTimeAgo(date) : '—')
+    }
+  },
+  {
     id: 'actions',
     header: '',
     enableSorting: false,
-    // functions 2.11: the only row action — disabled for rows with nothing to close, spinning while the node works
+    // functions 2.11 "Force close" (disabled for rows with nothing to close, spinning while the node works) +
+    // FEAT-044 icon-only "Delete" (api-contract §3.2) — both stay on one line, also at 390 px
     cell: ({ row }) => {
       const p = row.original
       const busy = forceClosing.value.includes(p.id) && p.runState === 'closing'
-      return h('div', { class: 'flex justify-end' }, [
+      const deleting = isDeleting(p)
+      const reason = deleteReason(p)
+      return h('div', { class: 'flex justify-end gap-1' }, [
         h(UButton, {
           'label': 'Force close',
           'aria-label': `Force close ${p.name}`,
@@ -539,13 +716,26 @@ const columns: TableColumn<AvailableProfile>[] = [
           'color': 'error',
           'variant': 'outline',
           'size': 'xs',
-          'disabled': !canForceClose(p) || busy,
+          'disabled': !canForceClose(p) || busy || deleting,
           'loading': busy,
           'title': canForceClose(p) ? 'Close the Chrome window right now, even if a job is using it' : 'Nothing to close — the browser is not open',
           'data-testid': 'bp-force-close',
           'data-state': p.runState,
           'onClick': () => askForceClose(p)
-        })
+        }),
+        h(UTooltip, { text: reason }, () => h(UButton, {
+          'aria-label': `Delete ${p.name}`,
+          'icon': 'i-lucide-trash-2',
+          'color': 'error',
+          'variant': 'ghost',
+          'size': 'xs',
+          'disabled': !canDelete(p),
+          'title': reason,
+          'data-testid': 'bp-delete',
+          'data-state': p.runState,
+          'data-deleting': deleting ? 'true' : 'false',
+          'onClick': () => askDelete(p)
+        }))
       ])
     }
   }
@@ -842,6 +1032,42 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
                 :loading="forcePosting"
                 data-testid="bp-force-confirm-ok"
                 @click="runForceClose"
+              />
+            </div>
+          </div>
+        </template>
+      </UModal>
+
+      <!-- FEAT-044 (functions 2.12): the delete is real and irreversible — AdsPower loses the profile too -->
+      <UModal
+        v-model:open="deleteConfirmOpen"
+        title="Delete this profile?"
+        :description="deleteTarget ? `${deleteTarget.name} · ${deleteTarget.providerProfileId ?? 'not created in AdsPower yet'}` : ''"
+        :dismissible="!deletePosting"
+        :ui="{ content: 'max-w-md' }"
+        :content="deleteModalContent"
+      >
+        <template #body>
+          <div class="flex flex-col gap-4">
+            <p class="text-sm text-muted">
+              The profile is deleted from AdsPower too and the next Sync will not bring it back. This cannot be undone.
+            </p>
+            <div class="flex flex-wrap justify-end gap-2">
+              <UButton
+                label="Keep profile"
+                color="neutral"
+                variant="subtle"
+                :disabled="deletePosting"
+                data-testid="bp-delete-confirm-cancel"
+                @click="deleteConfirmOpen = false"
+              />
+              <UButton
+                label="Delete"
+                icon="i-lucide-trash-2"
+                color="error"
+                :loading="deletePosting"
+                data-testid="bp-delete-confirm-ok"
+                @click="runDelete"
               />
             </div>
           </div>

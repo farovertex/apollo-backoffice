@@ -16,6 +16,10 @@
  * `proxyMode: 'auto' | 'none'` (`ProfileSettings`), the defaults view has 8 keys (no `proxyId`, no `proxy`), and
  * `POST /browser-profiles/create` takes **either** `proxyMode` **or** `proxyId` (`ProfileProxyChoice`), never both
  * and never neither. The FEAT-027 AS-1 `proxyWarning` is removed from the 201 body.
+ * FEAT-044 v1 (api-contract §1/§2/§3.4): every `/available` item gains `createdAt` (ISO, never null) and `deleting`
+ * (a `provider{delete}` job of that row is `waiting|active`) → the item key set grows from 17 to **19** keys; new
+ * `POST /browser-profiles/:id/delete` (202 `DeleteProfileResponse`) really deletes an **empty** profile (provider
+ * included) through that job. `DELETE /browser-profiles/:id` (2.8, DB-only unregister) is unchanged.
  */
 
 export interface AvailableProfileProxy {
@@ -70,6 +74,16 @@ export interface AvailableProfile {
   runState: ProfileRunState
   /** FEAT-024 — why the last provider op failed (never a secret); `null` unless something failed */
   provisionError: string | null
+  /**
+   * FEAT-044 — ISO, never null: when **our** row was created (first sync for a synced profile, the reservation for a
+   * BO-created one — not AdsPower's own creation time, AS-4). The default sort of the table is `createdAt` desc.
+   */
+  createdAt: string
+  /**
+   * FEAT-044 — `true` while a `provider{delete}` job of this row is `waiting|active` (derived by the API from the job
+   * queue, not a stored field, AS-6). The row then shows the `Deleting…` badge and both row actions are disabled.
+   */
+  deleting: boolean
 }
 
 /**
@@ -121,6 +135,18 @@ export interface ForceCloseResponse {
     /** the pending request (`null` once the node has closed the browser, or the close failed) */
     forceClose: { requestedAt: string, startedAt: string | null } | null
   }
+}
+
+/**
+ * FEAT-044 (api-contract §2.1) — `POST /browser-profiles/:id/delete` (202): the API queues a `provider{delete}` job
+ * that removes the profile from the provider **and** the row. The request itself does not change the row; the next
+ * `/available` read answers `deleting: true` until the job is over. 409 (`{ error }`, shown verbatim) when the
+ * profile is not empty: bound · locked · open/closing · provisioning · another job pending.
+ */
+export interface DeleteProfileResponse {
+  jobId: string
+  /** true = a delete job of this profile was already queued/running; nothing new was written */
+  reused: boolean
 }
 
 // ── FEAT-006 — fingerprint, options, defaults, create ─────────────────────────────────────────────────────────────────
