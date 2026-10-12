@@ -407,3 +407,46 @@ export interface PatchAdTemplateBody {
 export interface DeleteAdTemplateResponse {
   ok: boolean
 }
+
+/**
+ * FEAT-045 — `POST /ad-templates/:id/utm/sync` body (api-contract §1.1): `dryRun: true` only counts the rows
+ * that would change (no write, no audit), the real run is the same route with `{}` / `{ dryRun: false }`.
+ * The object is strict on the API side — never send another key.
+ */
+export interface UtmSyncBody {
+  dryRun?: boolean
+}
+
+/**
+ * FEAT-045 — how many rows of one collection carry the template's UTM (api-contract §1.2):
+ * `total` = rows that belong to this template, `updated` = rows whose UTM differs from the template's current
+ * one (on a real run: the rows actually written).
+ */
+export interface UtmSyncCounts {
+  total: number
+  updated: number
+}
+
+/**
+ * FEAT-045 — the ad counts (api-contract §1.2): same two numbers plus `unlinked` = ads of the same published
+ * campaigns that are not linked to a build yet (`buildId: null`), which the sync never touches — the next KPI
+ * link stamps them from the now-updated build (spec AS-5).
+ */
+export interface UtmSyncAdCounts extends UtmSyncCounts {
+  unlinked: number
+}
+
+/**
+ * FEAT-045 — `POST /ad-templates/:id/utm/sync` 200 body (api-contract §1.2), identical for both modes:
+ * the 7-string `utm` that was (or would be) written into `campaignOrders.adConfig.utm`, `builds.utm` and
+ * `ads.utm` (4 ids only there), plus the counts per collection. `syncedAt` is `null` on a dry run.
+ */
+export interface UtmSyncResponse {
+  templateId: string
+  dryRun: boolean
+  utm: UtmRef
+  orders: UtmSyncCounts
+  builds: UtmSyncCounts
+  ads: UtmSyncAdCounts
+  syncedAt: string | null
+}
