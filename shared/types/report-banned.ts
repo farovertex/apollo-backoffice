@@ -13,6 +13,8 @@ export interface BannedRow {
   workspace: { id: string, name: string | null }
   advertiser: { id: string, name: string, tiktokAdvertiserId: string }
   bannedAt: string | null
+  /** FEAT-047 — newest `publishedAt` (else newest `createdAt`) over the advertiser's `builds`; `null` with no build at all. */
+  launchedAt: string | null
   adCount: number
   metrics: KpiMetrics
 }
