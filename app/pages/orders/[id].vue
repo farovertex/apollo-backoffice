@@ -21,10 +21,19 @@
  * testids, same 5 s poll, which keeps running whatever the open tab is. Report (`?tab=report`) mounts
  * `ReportsOrderReportPanel` on its first open and is then kept alive; that panel does its own single GET and
  * never polls.
+ *
+ * FEAT-046: the `Ad template` row of `od-summary` also shows the cover of the post the template is bound to
+ * (`AdTemplatesPostCover`, FEAT-042). After the order's **first** GET (not the 5 s poll, not an action POST),
+ * one `GET /ad-templates/<adTemplate.id>` (`retry: 0`) reads `postInfo`; `hasPostCover()` / `postInfoCheckedAt()`
+ * decide whether the cover bytes are requested (`useCoverImage`, only while `postInfo.cover.ok === true`, so
+ * this never produces an expected 404 of its own). `templateState` tracks the lookup: `gone` on 404 shows
+ * `od-adt-gone`, any other failure shows `od-adt-cover-error` — both muted text under the name, no toast, no
+ * retry loop. The order itself always renders from its own snapshot regardless of this lookup's outcome.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
+import type { AdTemplate } from '#shared/types/ad-templates'
 import type {
   BuildConflictBody,
   BuildScreenshotResponse,
@@ -61,7 +70,32 @@ const actionError = ref<string | null>(null)
 // bumped on every request so a late response (or a poll tick after unmount) is dropped
 let session = 0
 
+// FEAT-046 — the ad template's post cover (one GET per order open, never on a poll tick or action POST)
+const template = ref<AdTemplate | null>(null)
+const templateState = ref<'loading' | 'ready' | 'gone' | 'error'>('loading')
+let loadedTemplateId: string | null = null
+// bumped on every template id change so a late response of a superseded template is dropped
+let templateSession = 0
+
 useSeoMeta({ title: () => order.value?.name ?? 'Order' })
+
+async function loadTemplate(id: string) {
+  const s = ++templateSession
+  template.value = null
+  templateState.value = 'loading'
+  try {
+    // retry: 0 — exactly one request per order open, never repeated by the poll or an action
+    const res = await api<AdTemplate>(`/ad-templates/${encodeURIComponent(id)}`, { retry: 0 })
+    if (s !== templateSession) return
+    template.value = res
+    templateState.value = 'ready'
+  } catch (e) {
+    if (s !== templateSession) return
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    templateState.value = status === 404 ? 'gone' : 'error'
+  }
+}
 
 function apply(res: OrderDetailResponse) {
   order.value = res.order ?? null
@@ -70,6 +104,11 @@ function apply(res: OrderDetailResponse) {
   error.value = null
   forbidden.value = null
   notFound.value = null
+  const templateId = order.value?.adTemplate?.id ?? null
+  if (templateId && templateId !== loadedTemplateId) {
+    loadedTemplateId = templateId
+    void loadTemplate(templateId)
+  }
 }
 
 /** `silent` = a poll tick or the refresh after an action: keep the page as it is while it runs */
@@ -141,6 +180,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   session++
+  templateSession++
   stopPolling()
 })
 
@@ -574,8 +614,23 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                 <dt class="text-muted">
                   Ad template
                 </dt>
-                <dd class="text-highlighted" data-testid="od-adt">
-                  {{ order.adTemplate?.name ?? '—' }}
+                <dd class="flex items-start gap-3 text-highlighted">
+                  <AdTemplatesPostCover
+                    size="card"
+                    testid="od-adt-cover"
+                    :template-id="order.adTemplate?.id"
+                    :checked-at="postInfoCheckedAt(template?.postInfo)"
+                    :ok="hasPostCover(template?.postInfo)"
+                  />
+                  <div class="flex flex-col gap-0.5">
+                    <span data-testid="od-adt">{{ order.adTemplate?.name ?? '—' }}</span>
+                    <span v-if="templateState === 'gone'" class="text-xs text-muted" data-testid="od-adt-gone">
+                      Template no longer exists
+                    </span>
+                    <span v-else-if="templateState === 'error'" class="text-xs text-muted" data-testid="od-adt-cover-error">
+                      Cover unavailable
+                    </span>
+                  </div>
                 </dd>
                 <template v-if="sparkPostCode">
                   <dt class="text-muted">
