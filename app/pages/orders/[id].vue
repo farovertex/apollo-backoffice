@@ -14,8 +14,11 @@
  *
  * A build without `steps[]` shows `No steps yet` in its expanded row. FEAT-017 (AC-30): a step that carries a
  * `screenshotUrl` gets `od-step-shot`, and one click issues exactly one
- * `GET /backend/builds/:id/screenshots/:no` whose `{ mimeType, base64 }` body becomes `od-shot-img`
- * (`od-shot-loading` while it runs, `od-shot-error` with the API text on 404 / any failure).
+ * `GET /backend/builds/:id/screenshots/:no` whose body becomes `od-shot-img` — the presigned `url` shape
+ * (FEAT-048 api-contract.md v1 §3) directly, or the legacy `{ mimeType, base64 }` as a data URI
+ * (`od-shot-loading` while it runs, `od-shot-error` with the API text on 404 / any failure). An `<img>` load
+ * failure (expired/403 presigned URL) triggers exactly one refetch of the same endpoint (a fresh URL); a
+ * second failure falls back to the same error alert.
  *
  * FEAT-020 (api-contract §6.4): the page gained two tabs. **Builds is unchanged** — same markup, same
  * testids, same 5 s poll, which keeps running whatever the open tab is. Report (`?tab=report`) mounts
@@ -34,12 +37,13 @@ import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { AdTemplate } from '#shared/types/ad-templates'
-import type {
-  BuildConflictBody,
-  BuildScreenshotResponse,
-  BuildView,
-  OrderDetail,
-  OrderDetailResponse
+import {
+  type BuildConflictBody,
+  type BuildScreenshotResponse,
+  type BuildView,
+  isBuildScreenshotUrl,
+  type OrderDetail,
+  type OrderDetailResponse
 } from '#shared/types/campaign-orders'
 
 const POLL_MS = 5000
@@ -328,18 +332,25 @@ const shotSrc = ref<string | null>(null)
 const shotLoading = ref(false)
 const shotError = ref<string | null>(null)
 let shotSession = 0
+/** the endpoint path of the open screenshot, kept so an `<img>` load failure can refetch it */
+let shotUrl: string | null = null
+/** one automatic refetch per click, triggered by `<img @error>`, not by the API call itself */
+let shotImgRetried = false
 
 async function openScreenshot(url: string) {
   const s = ++shotSession
+  shotUrl = url
   shotSrc.value = null
   shotError.value = null
   shotLoading.value = true
   screenshotOpen.value = true
   try {
-    // retry: 0 — exactly one request per click
+    // retry: 0 — exactly one request per click (or per `<img>` refetch)
     const res = await api<BuildScreenshotResponse>(url, { retry: 0 })
     if (s !== shotSession) return
-    shotSrc.value = res.base64 ? `data:${res.mimeType};base64,${res.base64}` : null
+    shotSrc.value = isBuildScreenshotUrl(res)
+      ? res.url
+      : (res.base64 ? `data:${res.mimeType};base64,${res.base64}` : null)
     if (!shotSrc.value) shotError.value = 'The screenshot came back empty'
   } catch (e) {
     if (s !== shotSession) return
@@ -352,13 +363,27 @@ async function openScreenshot(url: string) {
 
 /** the click handler (the request itself is awaited inside `openScreenshot`) */
 function showScreenshot(url: string) {
+  shotImgRetried = false
   void openScreenshot(url)
+}
+
+/** `<img>` failed to load the (possibly presigned) `src` — refetch the endpoint once for a fresh URL. */
+function onShotImgError() {
+  if (shotImgRetried || !shotUrl) {
+    shotSrc.value = null
+    shotError.value = 'Could not load the screenshot image'
+    return
+  }
+  shotImgRetried = true
+  void openScreenshot(shotUrl)
 }
 
 watch(screenshotOpen, (isOpen) => {
   if (isOpen) return
   // a request still in flight must not land in a closed modal
   shotSession++
+  shotUrl = null
+  shotImgRetried = false
   shotSrc.value = null
   shotError.value = null
   shotLoading.value = false
@@ -928,6 +953,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
             alt="Build step screenshot"
             class="w-full rounded-lg"
             data-testid="od-shot-img"
+            @error="onShotImgError"
           >
         </template>
       </UModal>
