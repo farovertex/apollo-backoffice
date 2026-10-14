@@ -19,6 +19,7 @@ import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { MediaAssetView } from '#shared/types/media'
 import {
+  MEDIA_IMG_MAX_RETRIES,
   formatMediaBytes,
   formatMediaDimensions,
   isMediaRatioOff,
@@ -58,30 +59,44 @@ const toast = useToast()
 const testid = (name: string) => `${props.prefix}-${name}`
 
 // ── image load state ────────────────────────────────────────────────────────────────────────────────────────────────
-/** `${id}|${url}` → state of that exact src; a re-read gives a new url and therefore a new load */
-const imgState = ref<Record<string, 'ready' | 'error'>>({})
-/** per card: how often its image failed — at most one silent re-read per card (spec AC-20) */
+/**
+ * `src` → it loaded; and per **card** how often its image failed. The counter is never reset, so a permanently
+ * broken image costs exactly one extra list read for the whole page lifetime and can never loop.
+ * After `MEDIA_IMG_MAX_RETRIES` failures the card shows the error box and stops requesting bytes.
+ */
+const imgLoaded = ref<Record<string, boolean>>({})
 const imgFails = ref<Record<string, number>>({})
 
-const srcKey = (asset: MediaAssetView) => `${asset.id}|${asset.url}`
+/**
+ * A storage-mode `url` is signed: the retry has to come from the list re-read (a new signature), appending
+ * anything would make the signature invalid. A Mongo-mode url (`/media/<id>/content` through `/backend`) never
+ * changes, so the retry carries `_retry=<n>` to force the browser to request the bytes again.
+ */
+function imgSrc(asset: MediaAssetView): string {
+  const base = mediaSrc(asset.url)
+  const fails = imgFails.value[asset.id] ?? 0
+  if (fails === 0 || !asset.url.startsWith('/')) return base
+  return `${base}${base.includes('?') ? '&' : '?'}_retry=${fails}`
+}
+
+function hardFailed(asset: MediaAssetView): boolean {
+  return (imgFails.value[asset.id] ?? 0) > MEDIA_IMG_MAX_RETRIES
+}
 
 function cardState(asset: MediaAssetView): 'loading' | 'ready' | 'error' {
-  return imgState.value[srcKey(asset)] ?? 'loading'
+  if (hardFailed(asset)) return 'error'
+  return imgLoaded.value[imgSrc(asset)] ? 'ready' : 'loading'
 }
 
 function onImgLoad(asset: MediaAssetView) {
-  imgState.value = { ...imgState.value, [srcKey(asset)]: 'ready' }
+  imgLoaded.value = { ...imgLoaded.value, [imgSrc(asset)]: true }
 }
 
 function onImgError(asset: MediaAssetView) {
   const fails = (imgFails.value[asset.id] ?? 0) + 1
   imgFails.value = { ...imgFails.value, [asset.id]: fails }
-  if (fails === 1) {
-    // most likely an expired presigned URL — ask for one silent re-read, the new url re-renders this card
-    emit('refresh')
-    return
-  }
-  imgState.value = { ...imgState.value, [srcKey(asset)]: 'error' }
+  // most likely an expired presigned URL — one silent re-read, then this card is an error
+  if (fails <= MEDIA_IMG_MAX_RETRIES) emit('refresh')
 }
 
 // ── inline rename (page mode only) ──────────────────────────────────────────────────────────────────────────────────
@@ -176,7 +191,7 @@ function onCardClick(asset: MediaAssetView) {
       <div class="relative flex aspect-video items-center justify-center overflow-hidden bg-elevated">
         <img
           v-if="cardState(asset) !== 'error'"
-          :src="mediaSrc(asset.url)"
+          :src="imgSrc(asset)"
           :alt="asset.name"
           loading="lazy"
           decoding="async"
