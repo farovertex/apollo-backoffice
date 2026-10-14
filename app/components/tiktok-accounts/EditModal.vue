@@ -1,17 +1,20 @@
 <script setup lang="ts">
 /**
- * Edit account modal (2026-10-12, human request — functions 3.2 "edit credential"). Opened by the row action
- * **Edit** (`ta-edit`) on /tiktok-accounts. Exactly four fields are editable — **Login email**, **Email password**,
- * **Recovery email** and **TikTok password**; label, browser profile and every flag stay read-only (the API's
- * `PATCH /tiktok-accounts/:id` body is `.strict()` on those four keys).
+ * Edit account modal (2026-10-12, human request — functions 3.2 "edit credential"; 2026-10-14 TASK-account-label
+ * added the Label field). Opened by the row action **Edit** (`ta-edit`) on /tiktok-accounts. Five fields are
+ * editable — **Label**, **Login email**, **Email password**, **Recovery email** and **TikTok password**; the
+ * browser profile and every flag stay read-only (the API's `PATCH /tiktok-accounts/:id` body is `.strict()` on
+ * those five keys).
  * On every open the form is prefilled from the row; both passwords start masked (eye toggles, same as the Add
  * modal) and the modal never puts a secret anywhere but the inputs. Submit sends **only the keys that differ** from
  * the row (`PatchAccountBody`) — nothing changed → the Save button is disabled, no request. `recoveryEmail` is
- * sent as `null` when the user cleared it. 200 → close + toast + `updated` (the page refreshes the list);
+ * sent as `null` when the user cleared it, and so is `label` (an empty label clears it, matching the Add modal's
+ * "omitted/empty → null" rule). 200 → close + toast + `updated` (the page refreshes the list);
  * 409 (login email already in the workspace) / 400 → `UAlert` under the form (`ta-edit-error`), modal stays open.
- * zod mirrors the API: email trim → lowercase → valid ≤ 254; passwords 1..128 verbatim (no trim); recovery email
- * optional, non-empty must be a valid email. An old row whose `emailPassword` is null may leave that field empty
- * (the key is simply not sent); a row that has one cannot clear it (the API refuses `''`).
+ * zod mirrors the API: label trimmed ≤ 100, optional; email trim → lowercase → valid ≤ 254; passwords 1..128
+ * verbatim (no trim); recovery email optional, non-empty must be a valid email. An old row whose `emailPassword`
+ * is null may leave that field empty (the key is simply not sent); a row that has one cannot clear it (the API
+ * refuses `''`).
  * BUG-045: `validate-on` is `['input']` only — see AddModal.vue for why `blur`/`change` must not come back.
  */
 import * as z from 'zod'
@@ -38,6 +41,7 @@ const toast = useToast()
 
 // ── form ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 interface FormState {
+  label: string
   loginEmail: string
   emailPassword: string
   recoveryEmail: string
@@ -47,6 +51,7 @@ interface FormState {
 /** what the row holds, normalised the way the API stores it — the submit diffs the form against this */
 function stateOf(account: TikTokAccount | null): FormState {
   return {
+    label: account?.label ?? '',
     loginEmail: account?.loginEmail ?? '',
     emailPassword: account?.emailPassword ?? '',
     recoveryEmail: account?.recoveryEmail ?? '',
@@ -58,6 +63,10 @@ const original = ref<FormState>(stateOf(null))
 const state = reactive<FormState>(stateOf(null))
 
 const schema = z.object({
+  label: z.string()
+    .trim()
+    .max(100, 'Label must be at most 100 characters')
+    .optional(),
   loginEmail: z.string({ error: 'Login email is required' })
     .trim()
     .toLowerCase()
@@ -91,9 +100,10 @@ const showPassword = ref(false)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
 
-/** true while at least one of the four fields differs from the row (the raw input, before zod normalises it) */
+/** true while at least one of the five fields differs from the row (the raw input, before zod normalises it) */
 const dirty = computed(() =>
-  state.loginEmail !== original.value.loginEmail
+  state.label !== original.value.label
+  || state.loginEmail !== original.value.loginEmail
   || state.emailPassword !== original.value.emailPassword
   || state.recoveryEmail !== original.value.recoveryEmail
   || state.password !== original.value.password
@@ -122,9 +132,11 @@ function errorState(e: unknown): { title: string, description?: string } {
   }
 }
 
-/** only the keys whose normalised value differs from the row; `recoveryEmail: null` when cleared */
+/** only the keys whose normalised value differs from the row; `recoveryEmail`/`label` are `null` when cleared */
 function changedBody(data: Schema): PatchAccountBody {
   const body: PatchAccountBody = {}
+  const label = data.label ?? ''
+  if (label !== original.value.label) body.label = label || null
   if (data.loginEmail !== original.value.loginEmail) body.loginEmail = data.loginEmail
   if (data.emailPassword && data.emailPassword !== original.value.emailPassword) body.emailPassword = data.emailPassword
   const recovery = data.recoveryEmail ?? ''
@@ -147,7 +159,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     // retry: 0 — exactly one PATCH per click (ofetch would otherwise re-issue it on 5xx)
     const updated = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(account.id)}`, { method: 'PATCH', body, retry: 0 })
     open.value = false
-    toast.add({ title: 'Account updated', description: updated.loginEmail, color: 'success' })
+    toast.add({ title: 'Account updated', description: updated.label ?? updated.loginEmail, color: 'success' })
     emit('updated', updated)
   } catch (e) {
     submitError.value = errorState(e)
@@ -161,7 +173,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   <UModal
     v-model:open="open"
     :title="`Edit account ${account?.label ?? account?.loginEmail ?? ''}`"
-    description="Only the login email, both passwords and the recovery email can be changed here."
+    description="The label, login email, both passwords and the recovery email can be changed here."
     :dismissible="!submitting"
     :ui="{ content: 'max-w-lg' }"
     :content="modalContent"
@@ -174,6 +186,17 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         class="space-y-4"
         @submit="onSubmit"
       >
+        <UFormField label="Label" name="label" hint="Shown everywhere instead of the login email">
+          <UInput
+            v-model="state.label"
+            autocomplete="off"
+            placeholder="Optional"
+            class="w-full"
+            :disabled="submitting"
+            data-testid="ta-edit-label"
+          />
+        </UFormField>
+
         <UFormField label="Login email" name="loginEmail" required>
           <UInput
             v-model="state.loginEmail"
