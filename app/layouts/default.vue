@@ -30,6 +30,23 @@ const canSeeCashier = computed(() => {
  */
 const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
 
+/**
+ * FEAT-049 — Media library (`/media-library`, functions 5.1/5.2/5.4) is a **public** library: the API guards it
+ * with `AuthGuard` only, so every role sees the item (spec F9). Built once and spliced into whichever spot
+ * applies: directly after "Ad templates" for a template manager (GOD/Admin), directly after "TikTok accounts"
+ * for a Payment-only admin, who has no template group at all.
+ */
+function mediaLibraryLink() {
+  return {
+    label: 'Media library',
+    icon: 'i-lucide-images',
+    to: '/media-library',
+    onSelect: () => {
+      open.value = false
+    }
+  }
+}
+
 const links = computed(() => [[{
   label: 'Home',
   icon: 'i-lucide-house',
@@ -51,7 +68,8 @@ const links = computed(() => [[{
   onSelect: () => {
     open.value = false
   }
-}, ...(isTemplateManager.value
+  // FEAT-049 — a Payment-only admin has no template group: Media library sits right under TikTok accounts
+}, ...(isTemplateManager.value ? [] : [mediaLibraryLink()]), ...(isTemplateManager.value
   ? [{
       // FEAT-008 — ad group templates (function 6.8), directly under TikTok accounts, above Proxies;
       // hidden when the admin has neither GOD nor Admin (Payment-only)
@@ -69,8 +87,9 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
-    }, {
-      // FEAT-016 — launch ads (functions 6.2–6.4), directly under Ad templates; same role gate
+      // FEAT-049 — Media library, directly under Ad templates and above Launch ads (spec "UI behaviour")
+    }, mediaLibraryLink(), {
+      // FEAT-016 — launch ads (functions 6.2–6.4), directly under Media library; same role gate
       label: 'Launch ads',
       icon: 'i-lucide-rocket',
       to: '/launch-ads',
