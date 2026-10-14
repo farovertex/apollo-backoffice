@@ -17,7 +17,8 @@ export interface GroupedAdvertiser {
 
 /** One account row of table 1 with its advertisers nested inside (contract §3 `rs-acc-row`). */
 export interface GroupedAccount {
-  account: { id: string, label: string | null }
+  /** TASK-account-label (2026-10-14) — `loginEmail` joined `label` so the BO can fall back when there is no label */
+  account: { id: string, label: string | null, loginEmail: string | null }
   workspace: { id: string, name: string | null }
   adCount: number
   advertiserCount: number

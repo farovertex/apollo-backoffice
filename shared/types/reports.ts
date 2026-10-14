@@ -92,7 +92,8 @@ export interface AdRowAdvertiser {
 export interface AdReportRow {
   id: string
   workspace: { id: string, name: string | null }
-  account: { id: string, label: string | null }
+  /** TASK-account-label (2026-10-14) — `loginEmail` joined `label` so the BO can fall back when there is no label */
+  account: { id: string, label: string | null, loginEmail?: string | null }
   advertiser: AdRowAdvertiser
   tiktokCampaignId: string | null
   tiktokAdGroupId: string | null
@@ -256,7 +257,8 @@ export interface OrderReportBuild {
     tiktokCampaignId: string | null
     publishedAt: string | null
   }
-  account: { id: string, label: string | null }
+  /** TASK-account-label (2026-10-14) — `loginEmail` joined `label` so the BO can fall back when there is no label */
+  account: { id: string, label: string | null, loginEmail?: string | null }
   advertiser: { id: string, name: string, tiktokAdvertiserId: string }
   tracking: AdvertiserReport
   totals: KpiMetrics

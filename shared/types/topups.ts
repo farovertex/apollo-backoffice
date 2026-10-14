@@ -52,7 +52,8 @@ export interface TopupView {
   advertiserId: string | null
   /** `tiktokAdvertiserId` is masked to `****1234` by the API for Admin — the BO shows what it gets · null when `level === 'account'` */
   advertiser: { id: string, name: string, tiktokAdvertiserId: string } | null
-  account: { id: string, label: string | null, bcOrgName: string | null }
+  /** TASK-account-label (2026-10-14) — `loginEmail` joined `label` so the BO can fall back when there is no label */
+  account: { id: string, label: string | null, loginEmail: string | null, bcOrgName: string | null }
   /** BC `org_id` of an account-level round */
   bcOrgId: string | null
   amount: number

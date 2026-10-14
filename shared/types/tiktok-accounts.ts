@@ -273,10 +273,13 @@ export interface LoginConflictBody {
 /**
  * `PATCH /tiktok-accounts/:id` body (`.strict()`, every key optional, at least one required). Sent by the Edit
  * modal (`TiktokAccountsEditModal`, 2026-10-12 human request) with **only the keys the user changed**. Exactly
- * these four fields are editable; anything else (label, profile, flags) is 400 on the API.
+ * these five fields are editable; anything else (profile, flags) is 400 on the API.
  * FEAT-036 history: the body used to carry `recoveryEmail` alone (a string sets it, `null` clears it — unchanged).
+ * TASK-account-label (2026-10-14): `label` joined the editable keys — trimmed ≤ 100, `''`/`null` clears it.
  */
 export interface PatchAccountBody {
+  /** trimmed ≤ 100; `''` or `null` clears it (response `label: null`) */
+  label?: string | null
   loginEmail?: string
   /** mailbox password */
   emailPassword?: string
