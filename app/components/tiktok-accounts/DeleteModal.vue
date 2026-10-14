@@ -52,7 +52,7 @@ async function confirm() {
     open.value = false
     toast.add({
       title: withProfile ? 'Account deleted, profile deletion queued' : 'Account deleted',
-      description: account.loginEmail,
+      description: account.label ?? account.loginEmail,
       color: 'success'
     })
     emit('deleted', account)
@@ -72,7 +72,7 @@ async function confirm() {
 <template>
   <UModal
     v-model:open="open"
-    :title="`Delete account ${account?.loginEmail ?? ''}?`"
+    :title="`Delete account ${account?.label ?? account?.loginEmail ?? ''}?`"
     :description="description"
     :dismissible="!deleting"
     :ui="{ content: 'max-w-md' }"

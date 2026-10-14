@@ -113,7 +113,7 @@ function remember(list: Ref<{ id: string, name: string }[]>, id: string | null |
 function rememberFromGrouped(response: GroupedReportResponse) {
   for (const account of response.accounts) {
     remember(knownWorkspaces, account.workspace.id, account.workspace.name)
-    remember(knownAccounts, account.account.id, account.account.label)
+    remember(knownAccounts, account.account.id, account.account.label ?? account.account.loginEmail)
     for (const advertiser of account.advertisers) {
       remember(knownAdvertisers, advertiser.advertiser.id, advertiser.advertiser.name)
     }

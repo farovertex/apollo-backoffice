@@ -71,7 +71,7 @@ function compareRows<T extends { adCount: number, metrics: KpiMetrics }>(
 export function sortGroups(accounts: GroupedAccount[], sort: string): GroupedAccount[] {
   const { field, desc } = parseGroupSort(sort)
   return [...accounts]
-    .sort((a, b) => compareRows(a, b, field, desc, item => item.account.label, item => item.account.id))
+    .sort((a, b) => compareRows(a, b, field, desc, item => item.account.label ?? item.account.loginEmail, item => item.account.id))
     .map(account => ({
       ...account,
       advertisers: [...account.advertisers].sort(

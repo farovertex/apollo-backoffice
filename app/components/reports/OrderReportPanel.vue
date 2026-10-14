@@ -315,7 +315,7 @@ const confirmContent = { 'data-testid': 'or-confirm' } as Record<string, string>
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div class="flex min-w-0 flex-col">
             <span class="font-medium text-highlighted">
-              {{ item.account?.label || REPORT_DASH }} · {{ item.advertiser?.name || REPORT_DASH }}
+              <span :title="item.account?.loginEmail ?? ''">{{ item.account?.label ?? item.account?.loginEmail ?? REPORT_DASH }}</span> · {{ item.advertiser?.name || REPORT_DASH }}
             </span>
             <span class="text-xs text-muted">
               advertiser {{ last4(item.advertiser?.tiktokAdvertiserId) }}

@@ -127,7 +127,7 @@ function remember(list: Ref<{ id: string, name: string }[]>, id: string | null |
 function rememberFromRows(list: AdReportRow[]) {
   for (const row of list) {
     remember(knownWorkspaces, row.workspace?.id, row.workspace?.name)
-    remember(knownAccounts, row.account?.id, row.account?.label)
+    remember(knownAccounts, row.account?.id, row.account?.label ?? row.account?.loginEmail)
     remember(knownAdvertisers, row.advertiser?.id, row.advertiser?.name)
     remember(knownOrders, row.order?.id, row.order?.name)
   }

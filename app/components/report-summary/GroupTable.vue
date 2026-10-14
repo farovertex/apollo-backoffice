@@ -107,10 +107,10 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
                 <NuxtLink
                   :to="`/reports?tiktokAccountId=${account.account.id}`"
                   class="max-w-48 truncate text-primary hover:underline"
-                  :title="account.account.label ?? ''"
+                  :title="account.account.loginEmail ?? ''"
                   data-testid="rs-acc-name"
                 >
-                  {{ account.account.label || REPORT_DASH }}
+                  {{ account.account.label ?? account.account.loginEmail ?? REPORT_DASH }}
                 </NuxtLink>
                 <span class="text-xs font-normal text-muted">
                   {{ account.workspace.name || REPORT_DASH }} · {{ account.advertiserCount }} advertisers

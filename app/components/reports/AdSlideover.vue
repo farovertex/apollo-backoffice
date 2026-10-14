@@ -690,7 +690,7 @@ const TABS: { key: Tab, label: string }[] = [
 
     <template #footer>
       <div class="flex w-full items-center justify-between gap-3 text-xs text-muted">
-        <span>{{ ad?.workspace?.name || REPORT_DASH }} · {{ ad?.account?.label || REPORT_DASH }} · {{ ad?.advertiser?.name || REPORT_DASH }}</span>
+        <span>{{ ad?.workspace?.name || REPORT_DASH }} · <span :title="ad?.account?.loginEmail ?? ''">{{ ad?.account?.label ?? ad?.account?.loginEmail ?? REPORT_DASH }}</span> · {{ ad?.advertiser?.name || REPORT_DASH }}</span>
         <UButton
           label="ปิด"
           color="neutral"

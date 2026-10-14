@@ -536,8 +536,8 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                       <span class="font-mono text-xs text-muted" data-testid="tp-row-advertiser-id">{{ row.advertiser?.tiktokAdvertiserId || REPORT_DASH }}</span>
                     </div>
                   </td>
-                  <td class="border-b border-default px-2 py-2 whitespace-nowrap" data-testid="tp-row-account">
-                    {{ row.account?.label || REPORT_DASH }}
+                  <td class="border-b border-default px-2 py-2 whitespace-nowrap" data-testid="tp-row-account" :title="row.account?.loginEmail ?? ''">
+                    {{ row.account?.label ?? row.account?.loginEmail ?? REPORT_DASH }}
                   </td>
                   <td class="border-b border-default px-2 py-2 font-mono text-xs whitespace-nowrap" data-testid="tp-row-workspace">
                     …{{ row.workspaceId.slice(-6) }}
