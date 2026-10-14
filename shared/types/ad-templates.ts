@@ -282,10 +282,28 @@ export interface AdTemplatePostInfo extends Omit<AdTemplatePostInfoSummary, 'cov
   cover: AdTemplatePostCover | null
 }
 
-/** FEAT-042 — `GET /ad-templates/:id/cover` 200 body (api-contract §1.4), like the build screenshots. */
-export interface AdTemplateCover {
+/**
+ * FEAT-042/FEAT-048 — `GET /ad-templates/:id/cover` 200 body (FEAT-048 api-contract.md v1 §3), like the build
+ * screenshots. Storage on + the row migrated to object storage → the `url` shape (a presigned GET valid 15
+ * minutes on `STORAGE_PUBLIC_ENDPOINT`, loaded by the browser directly, no auth header, no CORS); a legacy row
+ * that still has bytes in Mongo → the `base64` shape, storage on or off. Consumer rule:
+ * `isAdTemplateCoverUrl(cover) ? <img src=cover.url> : data:<mimeType>;base64,<base64>`. Treat a `url` body as
+ * stale 60 s before `expiresAt` (`useCoverImage`).
+ */
+export interface AdTemplateCoverUrl {
+  mimeType: string
+  url: string
+  /** ISO — presign TTL is fixed at 900 s server-side, not configurable from the BO */
+  expiresAt: string
+}
+export interface AdTemplateCoverInline {
   mimeType: string
   base64: string
+}
+export type AdTemplateCover = AdTemplateCoverUrl | AdTemplateCoverInline
+
+export function isAdTemplateCoverUrl(cover: AdTemplateCover): cover is AdTemplateCoverUrl {
+  return 'url' in cover
 }
 
 /** FEAT-042 — `POST /ad-templates/:id/post-info/verify` 202 body (api-contract §2.2). */

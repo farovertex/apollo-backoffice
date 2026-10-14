@@ -178,12 +178,26 @@ export interface BuildStep {
 }
 
 /**
- * `GET /builds/:id/screenshots/:no` 200 body (FEAT-017 api-contract §6) — the PNG inline, base64 without a
- * data-URI prefix. 404 `{ error: 'ไม่พบ screenshot' }` when the step has none or the file is gone.
+ * `GET /builds/:id/screenshots/:no` 200 body (FEAT-017 api-contract §6; FEAT-048 api-contract.md v1 §3) — the
+ * PNG either inline (base64 without a data-URI prefix, legacy row or storage off) or as a presigned GET
+ * (`url`, 15 minutes, storage on + the row has `storageKey`). 404 `{ error: 'ไม่พบ screenshot' }` when the step
+ * has none or the file is gone. Consumer rule: `isBuildScreenshotUrl(body) ? <img src=body.url> :
+ * data:<mimeType>;base64,<base64>`. Treat a `url` body as stale 60 s before `expiresAt`.
  */
-export interface BuildScreenshotResponse {
+export interface BuildScreenshotUrl {
+  mimeType: string
+  url: string
+  /** ISO — presign TTL is fixed at 900 s server-side, not configurable from the BO */
+  expiresAt: string
+}
+export interface BuildScreenshotInline {
   mimeType: string
   base64: string
+}
+export type BuildScreenshotResponse = BuildScreenshotUrl | BuildScreenshotInline
+
+export function isBuildScreenshotUrl(shot: BuildScreenshotResponse): shot is BuildScreenshotUrl {
+  return 'url' in shot
 }
 
 /** api-contract §6 "BuildView" — one build = one advertiser of the order. */
