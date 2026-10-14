@@ -8,6 +8,12 @@
  * component never produces a 404. Anything else renders the placeholder box — `loading` (spinner), a failed
  * download or no cover at all (image icon) — which keeps the row height stable in every state.
  * `data-state` tells a test which one it is.
+ *
+ * FEAT-048 — `src` may now be a presigned URL instead of a data URI, so the browser's own `<img>` fetch of it
+ * can fail (expired/403) even after the composable's own request succeeded. One `@error` calls the
+ * composable's `retry()` (drops the cache entry, refetches the endpoint once); a second `@error` on the new
+ * `src` is treated as a hard failure (`data-state="error"`, title "โหลดรูปปกไม่ได้") instead of retrying again.
+ * The guard resets on template id / `checkedAt` change, never on the retry's own src churn.
  */
 const props = withDefaults(defineProps<{
   templateId: string | null | undefined
@@ -24,7 +30,7 @@ const props = withDefaults(defineProps<{
   testid: 'adt-post-cover'
 })
 
-const { src, loading, error } = useCoverImage(
+const { src, loading, error, retry } = useCoverImage(
   () => props.templateId,
   () => props.checkedAt,
   () => props.ok
@@ -33,7 +39,26 @@ const { src, loading, error } = useCoverImage(
 const BOX_CLASS = { thumb: 'size-8', row: 'h-14 w-10', card: 'h-28 w-20' } as const
 const ICON_CLASS = { thumb: 'size-3.5', row: 'size-4', card: 'size-6' } as const
 
+/** `<img>` load-failure guard — keyed on identity, not on `src` (which churns on retry itself). */
+const cacheKey = computed(() => `${props.templateId ?? ''}|${props.checkedAt ?? ''}`)
+const imgFailCount = ref(0)
+const imgError = ref<string | null>(null)
+watch(cacheKey, () => {
+  imgFailCount.value = 0
+  imgError.value = null
+})
+
+function onImgError() {
+  imgFailCount.value++
+  if (imgFailCount.value === 1) {
+    retry()
+    return
+  }
+  imgError.value = 'โหลดรูปปกไม่ได้'
+}
+
 const state = computed(() => {
+  if (imgError.value) return 'error'
   if (src.value) return 'ready'
   if (loading.value) return 'loading'
   if (error.value) return 'error'
@@ -49,20 +74,21 @@ const state = computed(() => {
     :data-testid="`${testid}-box`"
   >
     <img
-      v-if="src"
+      v-if="src && !imgError"
       :src="src"
       alt=""
       loading="lazy"
       decoding="async"
       class="size-full object-cover"
       :data-testid="testid"
+      @error="onImgError"
     >
     <UIcon
       v-else
       :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-image-off'"
       class="text-dimmed"
       :class="[ICON_CLASS[size], loading ? 'animate-spin' : '']"
-      :title="error ?? undefined"
+      :title="imgError ?? error ?? undefined"
     />
   </div>
 </template>
