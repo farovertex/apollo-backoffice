@@ -84,8 +84,9 @@
  *     `ta-first-login` simply does not exist in that row's cell (it was pure noise next to the status badge).
  * 2026-10-16 (human request) — **Login email** and **Browser profile** merged into one column **Account**
  * (`id: 'account'`), in the Login email's old place right after Label, so the table is down to 9 columns. The
- * cell (`ta-account`) is two lines: the login email on top (`ta-account-email`, plain text — Label stays the
- * only bold column) and the AdsPower **provider profile id** below (`ta-account-profile-id`, `font-mono
+ * cell (`ta-account`) is two lines: the login email on top (`ta-account-email`, `text-highlighted` — the
+ * foreground colour, not the muted one a `<td>` inherits, so the address reads as the row's identity; it stays
+ * unbolded, Label is the only bold column) and the AdsPower **provider profile id** below (`ta-account-profile-id`, `font-mono
  * text-xs text-muted`, `title` = the full id, and `data-profile-id` = the id or `''` so a spec can read it
  * without parsing text). The browser-profile **name** (`faro-01`) is not displayed anywhere any more — the
  * Label column already carries the human-readable name — but the client-side search still matches it, so a row
@@ -701,7 +702,7 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       // human-readable name.
       const pid = row.original.browserProfile?.providerProfileId ?? null
       return h('div', { 'class': 'flex min-w-0 flex-col', 'data-testid': 'ta-account' }, [
-        h('span', { 'class': 'whitespace-nowrap', 'data-testid': 'ta-account-email' }, row.original.loginEmail),
+        h('span', { 'class': 'whitespace-nowrap text-highlighted', 'data-testid': 'ta-account-email' }, row.original.loginEmail),
         h('span', {
           'class': 'font-mono text-xs text-muted',
           'data-testid': 'ta-account-profile-id',
