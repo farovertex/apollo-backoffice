@@ -6,7 +6,7 @@
  * strings the spec pins down ("ไฟล์ใหญ่เกิน 2 MB", "สัดส่วนต่างจาก 750×421") come out of these builders with
  * the current options, byte for byte.
  */
-import type { MediaOptions } from '#shared/types/media'
+import type { MediaAssetType, MediaOptions } from '#shared/types/media'
 
 /** a presigned `url` counts as stale this long before its real `expiresAt` (spec "presigned-URL refresh") */
 export const MEDIA_STALE_MARGIN_MS = 60_000
@@ -43,6 +43,26 @@ export function formatMediaBytes(bytes: number): string {
 /** `750×421` */
 export function formatMediaDimensions(width: number, height: number): string {
   return `${width}×${height}`
+}
+
+const ASSET_TYPE_LABELS: Record<MediaAssetType, string> = {
+  'add-on': 'Add-On',
+  'call-action': 'Call-Action'
+}
+
+/** `Add-On` · `Call-Action` · `—` when the row predates `assetType` */
+export function mediaAssetTypeLabel(type: string | null | undefined): string {
+  if (type === 'add-on' || type === 'call-action') return ASSET_TYPE_LABELS[type]
+  return '—'
+}
+
+/** `2026-10-15 14:30` in the browser timezone; `—` for null / an unparsable date */
+export function formatMediaDateTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 /** `|w/h − rw/rh| / (rw/rh) > 10 %` — never blocking, only the chip / the upload note */

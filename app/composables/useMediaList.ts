@@ -3,10 +3,10 @@
  * Used by `pages/media-library.vue` (24 per page, pagination) and by `components/media/MediaPicker.vue`
  * (first page only), so "exactly one `GET /media` per trigger" is implemented in exactly one place.
  *
- * Triggers: first `load()` · Refresh · page change · 300 ms-debounced search · after an upload batch ·
- * after a delete · the presigned-URL refresh (silent). A new search goes back to page 1, and because the
- * page watcher and the search watcher collapse into one `queryKey` the two changes still cost one request.
- * `search` is omitted from the query while the box is empty.
+ * Triggers: first `load()` · Refresh · page change · 300 ms-debounced search · asset-type filter ·
+ * after an upload batch · after a delete · the presigned-URL refresh (silent). A new search or type filter
+ * goes back to page 1, and because those watchers run before the `queryKey` watcher the two changes still
+ * cost one request. `search` is omitted while the box is empty; `assetType` is omitted while it is `all`.
  *
  * Presigned-URL refresh: the list keeps **one** timer at the earliest `expiresAt − 60 s` of the items it
  * currently shows and then re-reads the list silently (no skeleton, no scroll reset). An item set whose
@@ -16,14 +16,16 @@
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { MediaAssetView, MediaListResponse } from '#shared/types/media'
+import type { MediaAssetType, MediaAssetView, MediaListResponse } from '#shared/types/media'
 import { MEDIA_DEBOUNCE_MS, MEDIA_PAGE_SIZE, mediaStaleAt } from '~/utils/media'
 
-export function useMediaList(limit: number = MEDIA_PAGE_SIZE) {
+export function useMediaList(limit: number = MEDIA_PAGE_SIZE, initialAssetType: MediaAssetType | 'all' = 'all') {
   const api = useApi()
 
   const page = ref(1)
   const search = ref('')
+  /** `all` is omitted from the query — the API then returns every type, including rows with no `assetType` */
+  const assetType = ref<MediaAssetType | 'all'>(initialAssetType)
   const searchDebounced = refDebounced(search, MEDIA_DEBOUNCE_MS)
 
   const items = ref<MediaAssetView[]>([])
@@ -55,7 +57,13 @@ export function useMediaList(limit: number = MEDIA_PAGE_SIZE) {
       // retry: 0 — exactly one request per trigger, ofetch must not re-issue it on 5xx
       const res = await api<MediaListResponse>('/media', {
         retry: 0,
-        query: { scope: 'public', page: page.value, limit, search: q || undefined }
+        query: {
+          scope: 'public',
+          page: page.value,
+          limit,
+          search: q || undefined,
+          assetType: assetType.value === 'all' ? undefined : assetType.value
+        }
       })
       if (s !== session) return
       items.value = res.items ?? []
@@ -79,7 +87,11 @@ export function useMediaList(limit: number = MEDIA_PAGE_SIZE) {
     page.value = 1
   })
 
-  const queryKey = computed(() => `${page.value}|${searchDebounced.value.trim()}`)
+  watch(assetType, () => {
+    page.value = 1
+  })
+
+  const queryKey = computed(() => `${page.value}|${searchDebounced.value.trim()}|${assetType.value}`)
   watch(queryKey, () => {
     void load()
   })
@@ -119,6 +131,7 @@ export function useMediaList(limit: number = MEDIA_PAGE_SIZE) {
   }
 
   const hasSearch = computed(() => searchDebounced.value.trim() !== '')
+  const hasTypeFilter = computed(() => assetType.value !== 'all')
   const isEmpty = computed(() => loaded.value && !error.value && total.value === 0)
 
   /** a deleted card leaves the grid at once; the single re-read right after keeps pagination honest */
@@ -141,6 +154,7 @@ export function useMediaList(limit: number = MEDIA_PAGE_SIZE) {
   return {
     page,
     search,
+    assetType,
     searchDebounced,
     items,
     total,
@@ -148,6 +162,7 @@ export function useMediaList(limit: number = MEDIA_PAGE_SIZE) {
     loaded,
     error,
     hasSearch,
+    hasTypeFilter,
     isEmpty,
     limit,
     load,

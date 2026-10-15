@@ -16,16 +16,19 @@
  * pagination here: the search is the way to reach an older image (the grid shows the newest 24).
  */
 import type { ModalProps } from '@nuxt/ui'
-import type { MediaAssetView, MediaPickerSelection } from '#shared/types/media'
+import type { MediaAssetType, MediaAssetView, MediaPickerSelection } from '#shared/types/media'
 import { MEDIA_PAGE_SIZE, formatMediaBytes, mediaMimeLabels } from '~/utils/media'
 
 const props = withDefaults(defineProps<{
   /** the image the parent currently has selected (highlighted in the grid) */
   selectedId?: string | null
   title?: string
+  /** uploads and the list stay on this type — the display-card caller wants add-on images */
+  assetType?: MediaAssetType
 }>(), {
   selectedId: null,
-  title: 'เลือกรูปจากคลัง'
+  title: 'เลือกรูปจากคลัง',
+  assetType: 'add-on'
 })
 
 const emit = defineEmits<{
@@ -36,7 +39,7 @@ const open = defineModel<boolean>('open', { default: false })
 // UModal's root is renderless: the testid has to go on the rendered dialog content
 const modalContent = { 'data-testid': 'mp-modal' } as ModalProps['content']
 
-const list = useMediaList(MEDIA_PAGE_SIZE)
+const list = useMediaList(MEDIA_PAGE_SIZE, props.assetType)
 const upload = useMediaUpload()
 
 const chosenId = ref<string | null>(props.selectedId)
@@ -75,7 +78,7 @@ async function onFiles(event: Event) {
   const files = Array.from(input.files ?? [])
   input.value = ''
   if (files.length === 0) return
-  const created = await upload.uploadFiles(files)
+  const created = await upload.uploadFiles(files, props.assetType)
   if (created.length === 0) return
   list.reloadNewest()
   // the image the user just uploaded is the one they wanted (spec: "an upload inside selects the new image")

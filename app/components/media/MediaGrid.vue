@@ -21,8 +21,10 @@ import type { MediaAssetView } from '#shared/types/media'
 import {
   MEDIA_IMG_MAX_RETRIES,
   formatMediaBytes,
+  formatMediaDateTime,
   formatMediaDimensions,
   isMediaRatioOff,
+  mediaAssetTypeLabel,
   mediaRatioWarning,
   mediaSrc,
   mediaUsedByTooltip,
@@ -271,8 +273,23 @@ function onCardClick(asset: MediaAssetView) {
         </div>
 
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+          <UBadge
+            color="neutral"
+            variant="subtle"
+            size="sm"
+            class="w-fit"
+            :data-testid="testid('type')"
+            :data-type="asset.assetType ?? ''"
+          >
+            {{ mediaAssetTypeLabel(asset.assetType) }}
+          </UBadge>
           <span :data-testid="testid('dims')">{{ formatMediaDimensions(asset.width, asset.height) }}</span>
           <span :data-testid="testid('bytes')">{{ formatMediaBytes(asset.bytes) }}</span>
+        </div>
+
+        <div class="flex flex-col gap-0.5 text-xs text-muted">
+          <span :data-testid="testid('created-at')">{{ formatMediaDateTime(asset.createdAt) }}</span>
+          <span :data-testid="testid('created-by')">โดย {{ asset.uploadedBy?.username ?? '—' }}</span>
         </div>
 
         <span class="text-xs text-muted" :data-testid="testid('used')">{{ mediaUsedLabel(asset.usedBy?.count ?? 0) }}</span>

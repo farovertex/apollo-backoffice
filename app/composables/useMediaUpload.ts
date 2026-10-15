@@ -26,6 +26,7 @@ import type { ApiErrorBody } from '#shared/types/auth'
 import type {
   ConfirmMediaBody,
   ConfirmMediaResponse,
+  MediaAssetType,
   MediaAssetView,
   MediaOptions,
   UploadUrlResponse
@@ -156,7 +157,7 @@ export function useMediaUpload() {
     return isMediaRatioOff(width, height, opts.recommended) ? mediaRatioWarning(opts.recommended) : null
   }
 
-  async function uploadOne(uid: string, file: File, opts: MediaOptions): Promise<MediaAssetView | null> {
+  async function uploadOne(uid: string, file: File, opts: MediaOptions, assetType: MediaAssetType): Promise<MediaAssetView | null> {
     // 1. client validation — a rejected file never reaches the API
     set(uid, { state: 'validating' })
     if (!opts.mimeTypes.includes(file.type)) {
@@ -179,6 +180,7 @@ export function useMediaUpload() {
     const body: ConfirmMediaBody = {
       // the API falls back to `originalFilename` (truncated) when `name` is absent — contract §5.3
       ...(name && name.length <= NAME_MAX ? { name } : {}),
+      assetType,
       originalFilename: file.name,
       mimeType: file.type,
       bytes: file.size,
@@ -243,7 +245,7 @@ export function useMediaUpload() {
    * Queues the selected files and uploads them one after another. Resolves with the assets that were created
    * (the caller re-reads the list once and, in the picker, selects the last one).
    */
-  async function uploadFiles(files: File[]): Promise<MediaAssetView[]> {
+  async function uploadFiles(files: File[], assetType: MediaAssetType): Promise<MediaAssetView[]> {
     if (busy.value || files.length === 0) return []
     const opts = options.value ?? await loadOptions()
     const queued = files.map(file => ({
@@ -266,7 +268,7 @@ export function useMediaUpload() {
       for (const [index, file] of files.entries()) {
         const row = queued[index]
         if (!row) continue
-        const asset = await uploadOne(row.uid, file, opts)
+        const asset = await uploadOne(row.uid, file, opts, assetType)
         if (asset) created.push(asset)
       }
     } finally {

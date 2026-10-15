@@ -18,6 +18,9 @@
 /** The allow-list is served by `GET /media/options`; this union is only the shape the API can answer with. */
 export type MediaMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
 
+/** Chosen at upload and stored on `mediaAssets.assetType`. `null` = a row uploaded before the field existed. */
+export type MediaAssetType = 'add-on' | 'call-action'
+
 /** `storage` = presigned PUT straight to the bucket · `mongo` = base64 in the confirm body */
 export type MediaMode = 'storage' | 'mongo'
 
@@ -48,9 +51,10 @@ export interface MediaUsedBy {
   templates: MediaUsedByTemplate[]
 }
 
-/** `toMediaAssetView()` — exactly 13 keys (contract §4) */
+/** `toMediaAssetView()` — exactly 14 keys (contract §4 + `assetType`) */
 export interface MediaAssetView {
   id: string
+  assetType: MediaAssetType | null
   name: string
   originalFilename: string
   mimeType: string
@@ -67,7 +71,7 @@ export interface MediaAssetView {
   updatedAt: string
 }
 
-/** `GET /media?scope=public&page=&limit=&search=&sort=` 200 */
+/** `GET /media?scope=public&page=&limit=&search=&assetType=&sort=` 200 */
 export interface MediaListResponse {
   items: MediaAssetView[]
   page: number
@@ -101,6 +105,8 @@ export interface ConfirmMediaBody {
   storageKey?: string
   data?: string
   name?: string
+  /** `add-on` | `call-action` — required; the library page chooses it before the file is sent */
+  assetType: MediaAssetType
   originalFilename: string
   mimeType: string
   bytes: number

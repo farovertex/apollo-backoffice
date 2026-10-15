@@ -9,15 +9,15 @@
  * - `GET /media/options` **once per page lifetime** (cached in `useMediaUpload` at module level, shared with a
  *   mounted `MediaPicker`): it decides the upload flow (`mode`) and carries every limit, so the page hard-codes
  *   no size, no mime list and no recommended ratio;
- * - exactly one `GET /media?scope=public&page=&limit=24[&search=]` per load / Refresh / page change /
- *   debounced search / finished upload batch / delete / presigned refresh (`useMediaList`);
+ * - exactly one `GET /media?scope=public&page=&limit=24[&search=][&assetType=]` per load / Refresh / page change /
+ *   debounced search / type filter / finished upload batch / delete / presigned refresh (`useMediaList`);
  * - `PATCH /media/:id` from the inline rename (the row is patched in place, no list re-read) and
  *   `DELETE /media/:id` from the confirm modal (the card leaves at once, then one re-read).
  *
  * The only requests that do **not** go through the proxy are the presigned `PUT` of an upload and the `<img>`
  * loads of a storage-mode `url` — both are browser-to-bucket by design (contract §8).
  */
-import type { MediaAssetView } from '#shared/types/media'
+import type { MediaAssetType, MediaAssetView } from '#shared/types/media'
 import { MEDIA_PAGE_SIZE, formatMediaBytes, mediaMimeLabels } from '~/utils/media'
 
 useSeoMeta({ title: 'Media library' })
@@ -26,6 +26,19 @@ const list = useMediaList(MEDIA_PAGE_SIZE)
 const upload = useMediaUpload()
 
 const fileInput = ref<HTMLInputElement | null>(null)
+
+/** the type written onto every file in the next batch — the select is the only way to choose it */
+const uploadType = ref<MediaAssetType>('add-on')
+
+const TYPE_ITEMS: { label: string, value: MediaAssetType }[] = [
+  { label: 'Add-On', value: 'add-on' },
+  { label: 'Call-Action', value: 'call-action' }
+]
+
+const FILTER_ITEMS: { label: string, value: MediaAssetType | 'all' }[] = [
+  { label: 'ทุกประเภท', value: 'all' },
+  ...TYPE_ITEMS
+]
 
 const deleteOpen = ref(false)
 const deleteTarget = ref<MediaAssetView | null>(null)
@@ -49,7 +62,7 @@ async function onFiles(event: Event) {
   // the same file can be picked again right after (change only fires on a different value)
   input.value = ''
   if (files.length === 0) return
-  const created = await upload.uploadFiles(files)
+  const created = await upload.uploadFiles(files, uploadType.value)
   // a batch that created nothing (every file rejected client-side) has nothing new to show → no request
   if (created.length > 0) list.reloadNewest()
 }
@@ -78,6 +91,11 @@ function onRenamed(asset: MediaAssetView) {
 /** first `<img>` failure of a card (probably an expired presigned url) → one silent list re-read */
 function onImgRefresh() {
   list.reload(undefined, true)
+}
+
+function clearFilters() {
+  list.clearSearch()
+  list.assetType.value = 'all'
 }
 
 const showGrid = computed(() => !list.error.value && !list.isEmpty.value && list.items.value.length > 0)
@@ -125,11 +143,27 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
             data-testid="ml-search"
           />
 
+          <USelect
+            v-model="list.assetType.value"
+            :items="FILTER_ITEMS"
+            class="w-full sm:w-44"
+            aria-label="กรองตามประเภท"
+            data-testid="ml-filter-type"
+          />
+
           <!-- a plain native input (not a dropzone widget): a test sets the files on this exact element -->
           <div
             class="flex min-w-0 flex-1 flex-col gap-1 rounded-lg border border-dashed border-default p-2"
             data-testid="ml-upload"
           >
+            <USelect
+              v-model="uploadType"
+              :items="TYPE_ITEMS"
+              :disabled="upload.busy.value"
+              class="w-full sm:w-44"
+              aria-label="ประเภทของรูปที่จะอัปโหลด"
+              data-testid="ml-upload-type"
+            />
             <input
               ref="fileInput"
               type="file"
@@ -189,27 +223,27 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
         </div>
 
         <UEmpty
-          v-else-if="list.isEmpty.value && !list.hasSearch.value"
+          v-else-if="list.isEmpty.value && !list.hasSearch.value && !list.hasTypeFilter.value"
           icon="i-lucide-images"
           title="ยังไม่มีรูปในคลัง"
-          description="เลือกไฟล์ด้านบนเพื่ออัปโหลดรูปแรก"
+          description="เลือกประเภท แล้วเลือกไฟล์ด้านบนเพื่ออัปโหลดรูปแรก"
           data-testid="ml-empty"
         />
 
         <UEmpty
           v-else-if="list.isEmpty.value"
           icon="i-lucide-search-x"
-          title="ไม่พบรูปที่ค้นหา"
+          title="ไม่พบรูปตามตัวกรอง"
           data-testid="ml-no-match"
         >
           <template #actions>
             <UButton
-              label="ล้างคำค้น"
+              label="ล้างตัวกรอง"
               icon="i-lucide-x"
               color="neutral"
               variant="outline"
               data-testid="ml-clear-search"
-              @click="list.clearSearch()"
+              @click="clearFilters()"
             />
           </template>
         </UEmpty>
