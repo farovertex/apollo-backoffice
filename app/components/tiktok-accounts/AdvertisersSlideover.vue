@@ -540,10 +540,13 @@ function onSync() {
                   :viewer="viewer"
                   prefix="ta-adv-topup"
                   :busy="busyId === adv.topup?.id"
+                  :balance-currency="account.balanceCurrency"
+                  :account-name="adv.name"
                   @created="patchTopup"
                   @open="onOpenTopup"
                   @recheck="recheckTopup"
                   @release="releaseTopup"
+                  @changed="patchTopup"
                 />
               </div>
             </div>

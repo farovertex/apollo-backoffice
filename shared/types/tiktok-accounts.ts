@@ -30,6 +30,7 @@
  * `mailboxIdentityCheck` (the mailbox driver could not pass account.live.com/identity/confirm).
  */
 
+import type { HumanTaskKind } from './human-tasks'
 import type { TopupView } from './topups'
 
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
@@ -93,10 +94,14 @@ export interface AccountBrowserProfile {
   groupName: string | null
 }
 
-/** Open (not expired) human task of the account, as embedded in the account view. */
+/**
+ * Open (not expired) human task of the account, as embedded in the account view.
+ * FEAT-051: `kind` may also be `paymentOtp` (the bank's 3DS code of a card top-up) — the login modal only ever
+ * reacts to `otp`, the payment code is asked for on the round itself (`/topups`).
+ */
 export interface OpenHumanTask {
   id: string
-  kind: 'otp'
+  kind: HumanTaskKind
   createdAt: string
   expiresAt: string
 }
