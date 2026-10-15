@@ -23,7 +23,8 @@
  * opens `TiktokAccountsBatchModal` (parses the CSV in the browser, one `POST /backend/tiktok-accounts/batch`,
  * refresh on `imported`). The Password column became **Email password** (`ta-email-password`) + **TikTok password**
  * (`ta-password`), each with its own reveal set, and a **First login** column (`ta-first-login`) shows
- * `email_fail 2/3` / "Pending" / `—`. The flag's field name is never printed as a label.
+ * `email_fail 2/3` / "Pending" / `—` (2026-10-16: no column and no `—` any more — see below). The flag's field
+ * name is never printed as a label.
  * Account-level (Business Center) top-up: column **Balance** (`ta-balance`, the BC's shared cash balance read from
  * `query_payment_summary`) with **Reload balance** (`ta-balance-reload` → `POST /backend/topups/accounts/:id/balance`
  * 202 `{ jobId }`, then the same 2 s account poll until that job is no longer the running one), and column **Top up**
@@ -75,8 +76,10 @@
  *     the **Actions** cell: `ta-cards-open` (GOD/Payment only) and `ta-delete`. A Nuxt UI menu item object is
  *     not bound to the DOM, so both ids are stamped onto the rendered item element from the `item-label` slot
  *     (`stampMenuItem`), and the menu itself is teleported out of the `<tr>`.
- *   · **First login** (`—` on almost every row) → appended to the **Session status** cell, same element, same
- *     `ta-first-login` / `data-pending` / `data-fail` attributes and the same tooltips.
+ *   · **First login** (`—` on almost every row) → appended to the **Session status** cell, same badges, same
+ *     `ta-first-login` / `data-pending` / `data-fail` attributes and the same tooltips — but the column's `—`
+ *     placeholder is **dropped**: a row with neither a fail nor a pending flag renders no element at all, so
+ *     `ta-first-login` simply does not exist in that row's cell (it was pure noise next to the status badge).
  * `ta-edit`, `ta-sync`, `ta-login`, `ta-balance*`, `ta-topup*`, `ta-adv-*` and `ta-bc-org*` are untouched.
  */
 import type { VNode } from 'vue'
@@ -207,11 +210,14 @@ function sessionBadge(s: SessionStatus) {
 }
 
 /**
- * FEAT-023 "Auto first login" — `email_fail 2/3` / "Pending" / `—`. The flag's field name is never printed as a
+ * FEAT-023 "Auto first login" — `email_fail 2/3` or "Pending". The flag's field name is never printed as a
  * label. 2026-10-16: this used to be the **First login** column; it is rendered inside the Session status cell
- * now (byte-identical element, so `ta-first-login` + `data-pending` + `data-fail` keep working row-scoped).
+ * now (byte-identical badges, so `ta-first-login` + `data-pending` + `data-fail` keep working row-scoped).
+ * A row with nothing to say renders **nothing at all** — the column's `—` placeholder made sense in a column of
+ * its own, next to the session badge it is exactly the noise this task removes, so `ta-first-login` does not
+ * exist in the cell of a clean row.
  */
-function firstLoginNode(a: TikTokAccount): VNode {
+function firstLoginNode(a: TikTokAccount): VNode | null {
   const fail = a.firstLoginFail
   if (fail) {
     // spec.md "UI behaviour": the badge reads `email_fail 2/3`; the tooltip explains the code
@@ -241,7 +247,7 @@ function firstLoginNode(a: TikTokAccount): VNode {
       'data-pending': 'true'
     }, () => 'Pending'))
   }
-  return h('span', { 'class': 'text-muted', 'data-testid': 'ta-first-login', 'data-pending': 'false' }, '—')
+  return null
 }
 
 // ── launching ads (FEAT-029) ─────────────────────────────────────────────────────────────────────────────────────────
@@ -705,9 +711,10 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
           'data-error': err
         }, () => loginErrorShort(err)))
       }
-      // 2026-10-16 — the former **First login** column (FEAT-023); same element, same ids, same tooltips, it
-      // just sits next to the status badge now instead of filling a column with `—`.
-      children.push(firstLoginNode(a))
+      // 2026-10-16 — the former **First login** column (FEAT-023); same badges, same ids, same tooltips, next
+      // to the status badge now. Nothing to say → nothing is appended (no `—`, no `ta-first-login`).
+      const firstLogin = firstLoginNode(a)
+      if (firstLogin) children.push(firstLogin)
       return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
     }
   },
