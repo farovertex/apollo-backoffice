@@ -32,9 +32,9 @@
  * with a `title` while the row is unbound) opens `AdTemplatesUtmSyncModal`, which previews the affected rows with
  * `POST /ad-templates/:id/utm/sync { dryRun: true }` and writes them on confirm. After a save that changed the
  * UTM **key** (the 4 ids — `utmChanged` alone is not enough, spec AS-10) the page opens that modal by itself with
- * `prompted = true`, as soon as the form modal is closed: a FEAT-042 save that starts a post lookup keeps the form
- * open, so the prompt waits in `pendingPrompt` for `formOpen` to turn false. A sync never changes the row itself —
- * the single `reload()` afterwards only keeps the page honest.
+ * `prompted = true`, as soon as the form modal is closed — which since 2026-10-16 is every accepted save, so the
+ * prompt normally opens right away; `pendingPrompt` stays as the fallback for a form that is still open when the
+ * save is emitted. A sync never changes the row itself — the single `reload()` afterwards only keeps the page honest.
  *
  * **FEAT-050** (spec AC-18): the name cell carries the badge `adt-addon-badge` ("บัตรดิสเพลย์") for every row
  * whose `config.addOn` is not `null`. It is read from the list row the page already has — no new column, no
@@ -324,7 +324,7 @@ const syncTarget = ref<AdTemplate | null>(null)
 const syncPrompted = ref(false)
 /** the modal's write request is in flight → that row's button is disabled (api-contract §3.1) */
 const syncPosting = ref(false)
-/** a save changed the UTM but the form modal is still open (FEAT-042 post lookup) — prompt once it closes */
+/** fallback: a save changed the UTM while the form modal was somehow still open — prompt once it closes */
 const pendingPrompt = ref<AdTemplate | null>(null)
 
 function openCreate() {
@@ -382,7 +382,7 @@ function onUpdated(updated: AdTemplate) {
   const utmChanged = after !== null && !sameUtmKey(utmKeyOf(formTarget.value), after)
   reload()
   if (!utmChanged) return
-  // a FEAT-042 save that starts a post lookup keeps the form open — the prompt waits for it
+  // the save closes the form before it emits, so this normally prompts at once (fallback: wait for the close)
   if (formOpen.value) pendingPrompt.value = updated
   else promptUtmSync(updated)
 }
