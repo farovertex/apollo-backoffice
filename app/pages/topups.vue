@@ -22,6 +22,13 @@
  * detector's state (`data-sound`, `data-sound-events`, `data-sound-played`, `data-sound-blocked`). All of it lives
  * in `useTopupQrSound`, wired to the **active** rows of `useTopupsLive`, so the sound exists on this page only (G-6)
  * and both tabs share it (the stream runs on both).
+ *
+ * FEAT-051 (api-contract v1 §6, spec "UI behaviour", AC-34/AC-36): a **ช่องทาง** column (`tp-row-channel`
+ * `[data-channel]`), the three card statuses in the badge and the status filter, the `cardFailed` reason in the
+ * existing `tp-row-error`, and — through `TopupsRowActions`, so the accounts table and the slide-over get the
+ * same thing — "จ่ายเงิน"/"ยกเลิก" + the 24 h countdown of a `pendingApproval` round and "กรอก OTP" of an
+ * `awaitingOtp` one. The OTP alert sound reuses the FEAT-033 detector (`observe`, AS-9): the same one-shot,
+ * coalesced play, counted separately in `data-sound-otp-events`.
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
@@ -70,6 +77,7 @@ const {
   state: soundState,
   busy: soundBusy,
   events: soundEvents,
+  otpEvents: soundOtpEvents,
   played: soundPlayed,
   blocked: soundBlocked,
   toggle: toggleSound,
@@ -217,6 +225,17 @@ function onCreated() {
   if (tab.value === 'history') void loadHistory()
 }
 
+/**
+ * FEAT-051 — approve / cancel / OTP of a card round (the row ran the request itself). The answer is patched in
+ * right away so the button set changes without waiting for the stream, and the active list is re-read because a
+ * cancelled round leaves it (`active: false`).
+ */
+function onChanged(topup: TopupView) {
+  patchRow(topup)
+  void refreshActive()
+  if (tab.value === 'history') void loadHistory()
+}
+
 /** "Top up หลายบัญชี" — account-level (BC) rounds for many TikTok accounts at once, one amount */
 const bulkOpen = ref(false)
 
@@ -346,6 +365,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
         :data-tab="tab"
         :data-sound="soundState"
         :data-sound-events="soundEvents"
+        :data-sound-otp-events="soundOtpEvents"
         :data-sound-played="soundPlayed"
         :data-sound-blocked="soundBlocked ? 'true' : 'false'"
         class="flex flex-1 flex-col gap-4"
@@ -473,6 +493,9 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                     ยอด
                   </th>
                   <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                    ช่องทาง
+                  </th>
+                  <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                     สถานะ
                   </th>
                   <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
@@ -497,7 +520,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
               </thead>
               <tbody :class="pending ? 'opacity-60' : ''">
                 <tr v-if="pending && rows.length === 0" data-testid="tp-table-loading">
-                  <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="11">
+                  <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="12">
                     กำลังโหลด…
                   </td>
                 </tr>
@@ -545,9 +568,23 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                   <td class="border-b border-default px-2 py-2 text-right tabular-nums whitespace-nowrap" data-testid="tp-row-amount">
                     {{ formatInt(row.amount) }}
                   </td>
+                  <!-- FEAT-051 — ช่องทาง: QR (every old row included) or บัตร + its last 4 digits -->
+                  <td class="border-b border-default px-2 py-2" data-testid="tp-row-channel" :data-channel="topupChannel(row)">
+                    <UBadge
+                      :label="TOPUP_CHANNEL_LABEL[topupChannel(row)]"
+                      :color="topupChannel(row) === 'card' ? 'primary' : 'neutral'"
+                      variant="subtle"
+                      size="sm"
+                      :icon="topupChannel(row) === 'card' ? 'i-lucide-credit-card' : 'i-lucide-qr-code'"
+                      class="whitespace-nowrap"
+                    />
+                    <span v-if="row.card" class="mt-0.5 block font-mono text-xs whitespace-nowrap text-muted" data-testid="tp-row-card">
+                      {{ cardMask(row.card.last4) }}
+                    </span>
+                  </td>
                   <td class="border-b border-default px-2 py-2">
                     <TopupsStatusBadge :topup="row" testid="tp-row-status" />
-                    <p v-if="row.status === 'qrFailed' && row.error" class="mt-0.5 max-w-48 text-xs break-words text-error" data-testid="tp-row-error">
+                    <p v-if="(row.status === 'qrFailed' || row.status === 'cardFailed') && row.error" class="mt-0.5 max-w-48 text-xs break-words text-error" data-testid="tp-row-error">
                       {{ row.error }}
                     </p>
                     <p v-else-if="row.status === 'verifying'" class="mt-0.5 text-xs whitespace-nowrap text-muted" data-testid="tp-row-check-info">
@@ -594,10 +631,12 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                       :viewer="viewer"
                       prefix="tp-row"
                       :busy="busyId === row.id"
+                      :account-name="topupTargetName(row)"
                       @created="onCreated"
                       @open="onOpenTopup"
                       @recheck="onRecheck"
                       @release="onRelease"
+                      @changed="onChanged"
                     />
                   </td>
                 </tr>

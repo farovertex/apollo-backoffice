@@ -12,11 +12,21 @@
  *
  * `advertiserId: null` = an account-level round (BC payment page): `POST /topups/accounts` with this one account,
  * whose per-account `error` is shown like any other failure.
+ *
+ * FEAT-051 (AC-31/AC-32, spec "UI behaviour") — under the amount field there is now a **channel** chooser,
+ * `[ QR ]` (default) and `[ บัตรเครดิต/เดบิต ]`:
+ *   - **QR is untouched**: same single step, same `POST` body (no `channel` key at all), same `ta-adv-topup-submit`
+ *     button, same error element, same test ids. A surface that never selects a card behaves exactly as before.
+ *   - card → the button becomes "ถัดไป" (`ta-adv-topup-next`) and opens `TopupsCardPayModal` with the amount;
+ *     the create request happens in there. The option is disabled with a visible reason when the account's
+ *     currency is unknown or has no card limits (`cardChannelBlockedReason`), and the amount hint follows the
+ *     per-currency minimum instead of the QR one (AC-6: USD 10 is valid).
+ * The channel never reaches `POST /topups` from here, so nothing of the QR path can change by accident.
  */
 import type { FetchError } from 'ofetch'
 import type { PopoverProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { AccountTopupResponse, TopupView } from '#shared/types/topups'
+import type { AccountTopupResponse, TopupChannel, TopupView } from '#shared/types/topups'
 
 const props = withDefaults(defineProps<{
   tiktokAccountId: string
@@ -30,12 +40,24 @@ const props = withDefaults(defineProps<{
   triggerTestid?: string
   size?: 'xs' | 'sm' | 'md'
   disabled?: boolean
+  /**
+   * FEAT-051 — `balanceCurrency` of the TikTok account: `undefined` = this surface does not know it (the card
+   * option stays open and the API's 409/400 text is what the admin reads), `null` = the account has none yet.
+   */
+  balanceCurrency?: string | null
+  /** FEAT-051 — which channel the chooser starts on (a retry of a `cardFailed` round starts on `card`) */
+  defaultChannel?: TopupChannel
+  /** FEAT-051 — advertiser / BC name for the card modal and the confirm dialog */
+  accountName?: string
 }>(), {
   defaultAmount: undefined,
   retry: false,
   triggerTestid: 'ta-adv-topup-pay',
   size: 'xs',
-  disabled: false
+  disabled: false,
+  balanceCurrency: undefined,
+  defaultChannel: 'qr',
+  accountName: ''
 })
 
 const emit = defineEmits<{
@@ -53,16 +75,64 @@ const touched = ref(false)
 
 const popoverContent = { 'data-testid': 'ta-adv-topup-popover' } as PopoverProps['content']
 
-const localError = computed(() => topupAmountError(amount.value))
+// ── FEAT-051 · channel ───────────────────────────────────────────────────────────────────────────────────────────────
+const channel = ref<TopupChannel>(props.defaultChannel)
+const cardOpen = ref(false)
+
+/** why the card option cannot be used (unknown currency / a currency without card limits), null = it can */
+const cardBlocked = computed(() => cardChannelBlockedReason(props.balanceCurrency))
+const isCard = computed(() => channel.value === 'card')
+
+function selectChannel(next: TopupChannel) {
+  if (next === 'card' && cardBlocked.value) return
+  channel.value = next
+  serverError.value = null
+}
+
+const localError = computed(() =>
+  isCard.value
+    ? topupAmountError(amount.value, { channel: 'card', currency: props.balanceCurrency })
+    : topupAmountError(amount.value)
+)
 const errorText = computed(() => serverError.value ?? (touched.value ? localError.value : null))
 const canSubmit = computed(() => !submitting.value && !props.disabled && localError.value === null)
+
+/** the amount label says which currency is being typed (QR keeps the words it always had) */
+const amountLabel = computed(() =>
+  isCard.value && props.balanceCurrency
+    ? `จำนวนเงิน (${props.balanceCurrency})`
+    : 'จำนวนเงิน (บาท)'
+)
 
 watch(open, (isOpen) => {
   if (!isOpen) return
   amount.value = props.defaultAmount
   serverError.value = null
   touched.value = false
+  channel.value = props.defaultChannel === 'card' && !cardBlocked.value ? 'card' : 'qr'
 })
+
+/** card: step two is the modal; the round is created there, not here */
+function next() {
+  touched.value = true
+  serverError.value = null
+  if (!canSubmit.value) return
+  open.value = false
+  cardOpen.value = true
+}
+
+function onCardCreated(topup: TopupView) {
+  emit('created', topup)
+}
+
+/** one handler for the form: QR creates the round right here, card goes to the modal (AC-31 keeps QR identical) */
+function onSubmit() {
+  if (isCard.value) {
+    next()
+    return
+  }
+  void submit()
+}
 
 async function submit() {
   touched.value = true
@@ -133,8 +203,8 @@ function failToast(message: string, status: number | undefined) {
     />
 
     <template #content>
-      <form class="flex w-56 flex-col gap-2 p-3" @submit.prevent="submit">
-        <label class="text-xs text-muted" for="ta-adv-topup-amount-input">จำนวนเงิน (บาท)</label>
+      <form class="flex w-60 flex-col gap-2 p-3" @submit.prevent="onSubmit">
+        <label class="text-xs text-muted" for="ta-adv-topup-amount-input">{{ amountLabel }}</label>
         <UInput
           id="ta-adv-topup-amount-input"
           v-model.number="amount"
@@ -150,7 +220,51 @@ function failToast(message: string, status: number | undefined) {
         <p v-if="errorText" class="text-xs text-error" data-testid="ta-adv-topup-amount-error">
           {{ errorText }}
         </p>
+
+        <!-- FEAT-051 — channel: QR is the default and keeps the single-step flow -->
+        <div
+          class="flex flex-col gap-1"
+          role="radiogroup"
+          aria-label="ช่องทางการจ่ายเงิน"
+          data-testid="ta-adv-topup-channel"
+          :data-channel="channel"
+        >
+          <div class="grid grid-cols-2 gap-1">
+            <UButton
+              label="QR"
+              icon="i-lucide-qr-code"
+              size="xs"
+              block
+              role="radio"
+              :aria-checked="!isCard"
+              :color="!isCard ? 'primary' : 'neutral'"
+              :variant="!isCard ? 'solid' : 'outline'"
+              data-testid="ta-adv-topup-channel-qr"
+              @click="selectChannel('qr')"
+            />
+            <UTooltip :text="cardBlocked ?? 'บัตรเครดิต/เดบิตของบัญชีนี้'">
+              <UButton
+                label="บัตร"
+                icon="i-lucide-credit-card"
+                size="xs"
+                block
+                role="radio"
+                :aria-checked="isCard"
+                :color="isCard ? 'primary' : 'neutral'"
+                :variant="isCard ? 'solid' : 'outline'"
+                :disabled="!!cardBlocked"
+                data-testid="ta-adv-topup-channel-card"
+                @click="selectChannel('card')"
+              />
+            </UTooltip>
+          </div>
+          <p v-if="cardBlocked" class="text-xs text-warning" data-testid="ta-adv-topup-channel-reason">
+            {{ cardBlocked }}
+          </p>
+        </div>
+
         <UButton
+          v-if="!isCard"
           type="submit"
           label="ยืนยัน"
           color="primary"
@@ -159,7 +273,28 @@ function failToast(message: string, status: number | undefined) {
           :loading="submitting"
           data-testid="ta-adv-topup-submit"
         />
+        <UButton
+          v-else
+          type="submit"
+          label="ถัดไป"
+          icon="i-lucide-arrow-right"
+          color="primary"
+          size="sm"
+          block
+          data-testid="ta-adv-topup-next"
+        />
       </form>
     </template>
   </UPopover>
+
+  <!-- step two of the card channel: which card + the confirm dialog + the one create request -->
+  <TopupsCardPayModal
+    v-model:open="cardOpen"
+    :tiktok-account-id="tiktokAccountId"
+    :advertiser-id="advertiserId"
+    :amount="amount ?? null"
+    :currency="balanceCurrency ?? null"
+    :account-name="accountName"
+    @created="onCardCreated"
+  />
 </template>

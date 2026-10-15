@@ -5,6 +5,8 @@
  * (api-contract v1.1 §C). `paying` reads "กำลังจ่ายเงิน · <ชื่อคนจอง>".
  * FEAT-029 §7: the badge also carries `data-trigger` (`manual` | `auto`) so a round the system opened is
  * recognisable wherever the badge is rendered; rows from an API that predates the feature read `manual`.
+ * FEAT-051: and `data-channel` (`qr` | `card`, missing field ⇒ `qr`) — the three new statuses get their label
+ * and colour from the same `TOPUP_BADGE` table, so nothing here is status-aware.
  */
 import type { TopupView } from '#shared/types/topups'
 
@@ -28,6 +30,7 @@ withDefaults(defineProps<{
     :data-testid="testid"
     :data-status="topup.status"
     :data-trigger="topup.trigger ?? 'manual'"
+    :data-channel="topupChannel(topup)"
   >
     {{ topupBadgeLabel(topup) }}
   </UBadge>

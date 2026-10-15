@@ -7,12 +7,30 @@
  * Nothing here talks to the API and nothing invents a state: the API owns the status, the BO owns the words.
  * FEAT-029 adds the two words of an auto round: `topupTrigger()` (missing field ⇒ `manual`) and
  * `topupRequesterName()` (`requestedBy: null` ⇒ "ระบบ").
+ *
+ * FEAT-051 (api-contract v1 §1/§6, spec "UI behaviour") adds the **card channel** on top of exactly the same
+ * table: `topupChannel()` reads a missing `channel` as `qr`, the three new states get a badge, and
+ * `topupRowActions()` learns three buttons (`approve` / `cancel` / `otp`). **Every QR rule above is untouched**
+ * (AC-31): `topupAmountError(amount)` with one argument still answers with the QR minimum, and no existing
+ * function changed its name, its signature or its result.
  */
 import type { AdminRole } from '#shared/types/auth'
-import type { TopupStatus, TopupTrigger, TopupView } from '#shared/types/topups'
+import type { PaymentCardView } from '#shared/types/payment-cards'
+import type { TopupCardSnapshot, TopupChannel, TopupStatus, TopupTrigger, TopupView } from '#shared/types/topups'
 
 /** `TOPUP_MIN_AMOUNT` of the API (api-contract §1). The API's 400 body stays the authority — this is the hint. */
 export const TOPUP_MIN_AMOUNT = 400
+
+/**
+ * FEAT-051 — the **default** `TOPUP_CARD_LIMITS` of the API (api-contract §3), mirrored here as a hint only.
+ * The real table lives in the API's `.env` and the BO has no endpoint to read it, so this is used for two things
+ * and nothing else: the local amount hint inside the popover and the "this currency has no card channel" reason
+ * on the card option. The API's own 400/409 text always wins and is displayed as-is.
+ */
+export const TOPUP_CARD_LIMITS: Record<string, { min: number, maxPerRound: number }> = {
+  USD: { min: 10, maxPerRound: 500 },
+  THB: { min: 400, maxPerRound: 20_000 }
+}
 
 export type TopupBadgeColor = 'neutral' | 'primary' | 'info' | 'warning' | 'success' | 'error'
 
@@ -25,7 +43,17 @@ export const TOPUP_BADGE: Record<TopupStatus, { label: string, color: TopupBadge
   verifying: { label: 'กำลังตรวจสอบเงิน', color: 'info' },
   paid: { label: 'สำเร็จ', color: 'success' },
   notFound: { label: 'ไม่พบยอด', color: 'error' },
-  expired: { label: 'QR หมดอายุ', color: 'neutral' }
+  expired: { label: 'QR หมดอายุ', color: 'neutral' },
+  // FEAT-051 (spec "UI behaviour") — the three states of the card channel
+  pendingApproval: { label: 'รออนุมัติ', color: 'neutral' },
+  awaitingOtp: { label: 'รอ OTP', color: 'warning' },
+  cardFailed: { label: 'จ่ายด้วยบัตรไม่สำเร็จ', color: 'error' }
+}
+
+/** FEAT-051 — the word on the channel badge / the channel chooser */
+export const TOPUP_CHANNEL_LABEL: Record<TopupChannel, string> = {
+  qr: 'QR',
+  card: 'บัตร'
 }
 
 /** every status, in the order of the state machine — the `status` filter of the history tab */
@@ -61,6 +89,17 @@ export function qrRemainingMs(topup: TopupView | null | undefined, now = Date.no
 export function leaseRemainingMs(topup: TopupView | null | undefined, now = Date.now()): number {
   if (!topup || topup.status !== 'paying') return 0
   return remainingMs(topup.payingExpiresAt, now)
+}
+
+/** FEAT-051 — milliseconds left on the approval clock (`approvalExpiresAt`, `TOPUP_APPROVAL_TTL_HOURS`) */
+export function approvalRemainingMs(topup: TopupView | null | undefined, now = Date.now()): number {
+  if (!topup || topup.status !== 'pendingApproval') return 0
+  return remainingMs(topup.approvalExpiresAt, now)
+}
+
+/** FEAT-051 — milliseconds left on the bank's OTP (`humanTask.expiresAt`, `TOPUP_OTP_WAIT_MS`) */
+export function otpRemainingMs(topup: TopupView | null | undefined, now = Date.now()): number {
+  return remainingMs(topup?.humanTask?.expiresAt, now)
 }
 
 function pad(n: number): string {
@@ -100,9 +139,24 @@ export interface TopupRowActions {
   release: boolean
   /** "ตรวจอีกครั้ง" on a `notFound` round (AC-8b / D15) */
   recheck: boolean
+  /** FEAT-051 — "จ่ายเงิน" on a `pendingApproval` card round: the confirm dialog → `POST /topups/:id/approve` */
+  approve: boolean
+  /** FEAT-051 — "ยกเลิก" a `pendingApproval` card round → `POST /topups/:id/cancel` */
+  cancel: boolean
+  /** FEAT-051 — "กรอก OTP" on an `awaitingOtp` round → the OTP modal */
+  otp: boolean
 }
 
-const NO_ACTIONS: TopupRowActions = { pay: false, retry: false, open: false, release: false, recheck: false }
+const NO_ACTIONS: TopupRowActions = {
+  pay: false,
+  retry: false,
+  open: false,
+  release: false,
+  recheck: false,
+  approve: false,
+  cancel: false,
+  otp: false
+}
 
 /** only GOD and Payment may change a round; Admin is read-only (spec D17) */
 export function canPayTopups(viewer: TopupViewer): boolean {
@@ -129,9 +183,18 @@ export function topupRowActions(topup: TopupView | null | undefined, viewer: Top
     case 'readyToPay':
       return { ...NO_ACTIONS, open: true }
     case 'paying':
+      // FEAT-051 — a card round in `paying` is the worker's: there is no lease, no QR and no claim to break
+      if (topupChannel(topup) === 'card') return NO_ACTIONS
       return topup.payingBy && viewer.id && topup.payingBy.id === viewer.id
         ? { ...NO_ACTIONS, open: true }
         : { ...NO_ACTIONS, release: canReleaseTopups(viewer) }
+    // FEAT-051 (spec "UI behaviour", AC-34)
+    case 'pendingApproval':
+      return { ...NO_ACTIONS, approve: true, cancel: true }
+    case 'awaitingOtp':
+      return { ...NO_ACTIONS, otp: true }
+    case 'cardFailed':
+      return { ...NO_ACTIONS, pay: true, retry: true }
     // waitingQr and verifying are worker/scheduler territory — the row only shows a badge
     default:
       return NO_ACTIONS
@@ -170,6 +233,133 @@ export function topupTrigger(topup: Pick<TopupView, 'trigger'> | null | undefine
   return topup?.trigger === 'auto' ? 'auto' : 'manual'
 }
 
+// ── FEAT-051 · channel and card ──────────────────────────────────────────────────────────────────────────────────────
+
+/** `qr` for every round that does not say otherwise — rows written before the feature included (AC-1) */
+export function topupChannel(topup: Pick<TopupView, 'channel'> | null | undefined): TopupChannel {
+  return topup?.channel === 'card' ? 'card' : 'qr'
+}
+
+/** the card of a round, `null` on a QR round (or on an API that predates the feature) */
+export function topupCard(topup: TopupView | null | undefined): TopupCardSnapshot | null {
+  return topup?.card ?? null
+}
+
+const CARD_BRAND_LABEL: Record<string, string> = {
+  visa: 'Visa',
+  mastercard: 'Mastercard',
+  amex: 'Amex',
+  jcb: 'JCB',
+  unionpay: 'UnionPay',
+  discover: 'Discover',
+  unknown: 'บัตร'
+}
+
+/** `mastercard` → `Mastercard`; an unknown brand is shown as the API sent it (never empty) */
+export function cardBrandLabel(brand: string | null | undefined): string {
+  if (!brand) return 'บัตร'
+  return CARD_BRAND_LABEL[brand.toLowerCase()] ?? brand
+}
+
+/** `****9706` */
+export function cardMask(last4: string | null | undefined): string {
+  return `****${last4 ?? '????'}`
+}
+
+/** `Mastercard ****9706 · NARUTCHAI SOMBUN (10/29)` — the one line the modal, the dialog and the row share */
+export function cardSummary(card: TopupCardSnapshot | PaymentCardView | null | undefined): string {
+  if (!card) return ''
+  const parts = [`${cardBrandLabel(card.brand)} ${cardMask(card.last4)}`]
+  if (card.holderName) parts.push(card.holderName)
+  return card.expiry ? `${parts.join(' · ')} (${card.expiry})` : parts.join(' · ')
+}
+
+/** a card the API would accept for a new round: `removed` and `expired` cards are not offered */
+export function isUsableCard(card: PaymentCardView): boolean {
+  return card.status !== 'removed' && card.status !== 'expired'
+}
+
+/** the card the pay modal starts with: the default one, else the newest usable one */
+export function pickDefaultCard(cards: PaymentCardView[] | null | undefined): PaymentCardView | null {
+  const usable = (cards ?? []).filter(isUsableCard)
+  return usable.find(c => c.isDefault) ?? usable[0] ?? null
+}
+
+/**
+ * Why the card channel cannot be used for this account, or `null` when it can (as far as the BO can tell).
+ *  - `undefined` → the surface does not know the account's currency: the option stays enabled and the API's own
+ *    409/400 text is what the admin reads (the BO never invents a reason).
+ *  - `null`       → the account has no `balanceCurrency` yet (AC-5, the API answers 409).
+ *  - a currency outside `TOPUP_CARD_LIMITS` → the API answers 400 (AC-6).
+ */
+export function cardChannelBlockedReason(currency: string | null | undefined): string | null {
+  if (currency === undefined) return null
+  if (!currency) return 'ยังไม่รู้สกุลเงินของบัญชีนี้ — กด Sync หรืออ่านยอดคงเหลือก่อน'
+  if (!TOPUP_CARD_LIMITS[currency.toUpperCase()]) return `ช่องทางบัตรไม่รองรับสกุลเงิน ${currency}`
+  return null
+}
+
+/** digits only — spaces and dashes of a typed card number / expiry are not part of the value */
+export function onlyDigits(value: string | null | undefined): string {
+  return (value ?? '').replace(/\D+/g, '')
+}
+
+/** 13–19 digits (api-contract §1); the message is a hint, the API's 400 is the authority */
+export function cardNumberError(value: string): string | null {
+  const digits = onlyDigits(value)
+  if (!digits) return 'กรอกหมายเลขบัตร'
+  if (digits.length < 13 || digits.length > 19) return 'หมายเลขบัตรต้องเป็นตัวเลข 13–19 หลัก'
+  return null
+}
+
+/** `MM/YY`, not in the past (AC-30 is the API's; this is the hint that saves a round trip) */
+export function cardExpiryError(value: string, now = new Date()): string | null {
+  const digits = onlyDigits(value)
+  if (!digits) return 'กรอกวันหมดอายุ (MM/YY)'
+  if (digits.length !== 4) return 'วันหมดอายุต้องเป็น MM/YY'
+  const month = Number(digits.slice(0, 2))
+  const year = 2000 + Number(digits.slice(2))
+  if (month < 1 || month > 12) return 'เดือนต้องเป็น 01–12'
+  // a card is valid through the last day of its month
+  const endOfMonth = new Date(year, month, 1).getTime()
+  if (endOfMonth <= now.getTime()) return 'บัตรหมดอายุแล้ว'
+  return null
+}
+
+/** 3–4 digits */
+export function cardCvvError(value: string): string | null {
+  const digits = onlyDigits(value)
+  if (!digits) return 'กรอก CVV/CVC'
+  if (digits.length < 3 || digits.length > 4) return 'CVV/CVC ต้องเป็นตัวเลข 3–4 หลัก'
+  return null
+}
+
+/** required, ≤ 64 (api-contract §1) */
+export function cardHolderError(value: string): string | null {
+  const name = (value ?? '').trim()
+  if (!name) return 'กรอกชื่อผู้ถือบัตร'
+  if (name.length > 64) return 'ชื่อผู้ถือบัตรยาวเกิน 64 ตัวอักษร'
+  return null
+}
+
+/** `4111…` → `visa`; only used for the live brand hint next to the number field, never sent to the API */
+export function cardBrandFromNumber(value: string): string | null {
+  const digits = onlyDigits(value)
+  if (digits.length < 2) return null
+  if (digits.startsWith('4')) return 'visa'
+  if (/^3[47]/.test(digits)) return 'amex'
+  if (/^(5[1-5]|2[2-7])/.test(digits)) return 'mastercard'
+  if (digits.startsWith('35')) return 'jcb'
+  if (digits.startsWith('62')) return 'unionpay'
+  return null
+}
+
+/** the last 4 digits of what is being typed (the confirm dialog shows them; the number itself never travels) */
+export function cardLast4FromNumber(value: string): string {
+  const digits = onlyDigits(value)
+  return digits.slice(-4)
+}
+
 /** "400.00 THB" — ยอดคงเหลือหลังบวกเงินฝากที่ตรวจผ่าน */
 export function balanceText(amount: string | null | undefined, currency: string | null | undefined): string {
   if (!amount) return ''
@@ -181,9 +371,31 @@ export function topupBalanceText(topup: TopupView | null | undefined): string {
   return balanceText(topup?.balanceAmount, topup?.balanceCurrency)
 }
 
-/** integer baht ≥ `TOPUP_MIN_AMOUNT`; the message mirrors the API's 400 text (api-contract §4) */
-export function topupAmountError(amount: number | undefined | null): string | null {
+/**
+ * integer baht ≥ `TOPUP_MIN_AMOUNT`; the message mirrors the API's 400 text (api-contract §4).
+ *
+ * FEAT-051: called with **one argument it is the QR rule, byte for byte as before** (AC-1/AC-31). With
+ * `{ channel: 'card', currency }` it uses the per-currency `min`/`maxPerRound` of `TOPUP_CARD_LIMITS` instead
+ * (AC-6: USD 10 must pass without tripping the QR minimum of 400). An unknown currency has no local rule —
+ * only "an integer" is checked and the API's 400/409 decides the rest.
+ */
+export function topupAmountError(
+  amount: number | undefined | null,
+  options?: { channel?: TopupChannel, currency?: string | null }
+): string | null {
   if (amount === undefined || amount === null || Number.isNaN(amount)) return 'กรอกจำนวนเงิน'
+
+  if (options?.channel === 'card') {
+    if (!Number.isInteger(amount) || amount <= 0) return 'amount ต้องเป็นจำนวนเต็ม'
+    const currency = (options.currency ?? '').toUpperCase()
+    const limits = currency ? TOPUP_CARD_LIMITS[currency] : undefined
+    if (!limits) return null
+    if (amount < limits.min || amount > limits.maxPerRound) {
+      return `amount ต้องเป็นจำนวนเต็ม ${limits.min}–${limits.maxPerRound} ${currency}`
+    }
+    return null
+  }
+
   if (!Number.isInteger(amount) || amount < TOPUP_MIN_AMOUNT) {
     return `amount ต้องเป็นจำนวนเต็มตั้งแต่ ${TOPUP_MIN_AMOUNT} บาท`
   }

@@ -30,6 +30,13 @@ import type { TopupStatus, TopupView } from '#shared/types/topups'
  *  - a `paying → readyToPay` release chimes again — it is a QR waiting for a payer once more (AS-5);
  *  - several rounds in the same list change count as several events but make **one** sound, and so does any event
  *    inside `TOPUP_SOUND_COALESCE_MS` after a sound (G-8/G-11, no queue, no repeat).
+ *
+ * **FEAT-051 (AS-9, AC-34).** A round that turns `awaitingOtp` needs a human *right now* (the bank's code lives
+ * 5 minutes), so it rings through exactly the same mechanism: same preference, same `<audio>`, same coalescing,
+ * same "seeded silently on the first armed read" rule. It is counted in its **own** counter (`otpEvents`,
+ * `tp-page[data-sound-otp-events]`) so the QR counters keep meaning what FEAT-033 asserts, and it is "once per
+ * task": the id of the `paymentOtp` task is remembered, so a re-render, a poll tick or a reconnect never replays
+ * the same code. No new audio file (G-1).
  */
 
 /** the file already tracked in `public/sounds/` (G-1) — nobody adds another one */
@@ -54,6 +61,8 @@ export function useTopupQrSound() {
   const busy = ref(false)
 
   const events = ref(0)
+  /** FEAT-051 — `awaitingOtp` detections (counted even while the switch is off, like `events`) */
+  const otpEvents = ref(0)
   const played = ref(0)
   const blocked = ref(false)
 
@@ -64,6 +73,8 @@ export function useTopupQrSound() {
   /** `null` = disarmed (no successful list load yet, or the filter just changed); otherwise id → last seen status */
   let seen: Map<string, TopupStatus> | null = null
   let lastPlayAt = 0
+  /** FEAT-051 — ids of the `paymentOtp` tasks that already rang (one alert per code, never a replay) */
+  const otpTasksSeen = new Set<string>()
 
   /**
    * One sound from the start. The rejection is swallowed on purpose: before the first user gesture the autoplay
@@ -157,18 +168,31 @@ export function useTopupQrSound() {
         if (!seen) {
           // first armed evaluation: whatever is on screen is "already known", nothing chimes (G-9)
           seen = next
+          // …and the codes already waiting are not announced either (same rule, FEAT-051)
+          for (const row of list) {
+            const taskId = row.status === 'awaitingOtp' ? row.humanTask?.id : null
+            if (taskId) otpTasksSeen.add(taskId)
+          }
           return
         }
 
         let detected = 0
+        let otpDetected = 0
         for (const row of list) {
           if (row.status === 'readyToPay' && seen.get(row.id) !== 'readyToPay') detected += 1
+          // FEAT-051 — one alert per `paymentOtp` task, whatever path brought the row in
+          const taskId = row.status === 'awaitingOtp' ? row.humanTask?.id : null
+          if (taskId && !otpTasksSeen.has(taskId)) {
+            otpTasksSeen.add(taskId)
+            otpDetected += 1
+          }
         }
         // ids that left the active list are dropped with the replacement, so a round that comes back chimes again
         seen = next
-        if (detected === 0) return
+        if (detected === 0 && otpDetected === 0) return
 
         events.value += detected
+        otpEvents.value += otpDetected
         if (!enabled.value) return
 
         const now = Date.now()
@@ -183,5 +207,5 @@ export function useTopupQrSound() {
 
   onMounted(load)
 
-  return { audioRef, enabled, state, busy, events, played, blocked, load, toggle, test, observe }
+  return { audioRef, enabled, state, busy, events, otpEvents, played, blocked, load, toggle, test, observe }
 }
