@@ -15,6 +15,9 @@
  *   `awaitingOtp`     → **กรอก OTP** (`<prefix>-otp`) → `TopupsOtpModal`
  * Those three run their own request (`useTopupCard`) instead of going through the parent, so a surface only has
  * to listen to `@changed` and patch its row; `verifying` / `paid` / every QR state is rendered exactly as before.
+ *
+ * FEAT-053 — `prefix` is also handed to the pay popover, where it names the one new element of that feature
+ * (`<prefix>-topup-remaining-today`). Every other id inside the popover is unchanged.
  */
 import type { TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
@@ -105,6 +108,7 @@ async function onCancel() {
       :balance-currency="currency"
       :default-channel="defaultChannel"
       :account-name="name"
+      :prefix="prefix"
       @created="emit('created', $event)"
     />
 

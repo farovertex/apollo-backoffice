@@ -13,23 +13,89 @@
  * `topupRowActions()` learns three buttons (`approve` / `cancel` / `otp`). **Every QR rule above is untouched**
  * (AC-31): `topupAmountError(amount)` with one argument still answers with the QR minimum, and no existing
  * function changed its name, its signature or its result.
+ *
+ * FEAT-053 (api-contract v1 §1/§3, AC-19/AC-22) — the numbers stop being hardcoded: `topupCardLimit()`,
+ * `topupQrMinAmount()` and `topupRemainingToday()` read what `GET /topups/options` sent (`useTopupOptions`) and
+ * fall back to `TOPUP_CARD_LIMITS` / `TOPUP_MIN_AMOUNT` **silently** when it did not answer, so every FEAT-051
+ * rule still holds when the new endpoint is down. `accountAutoTopupChannel()` reads the account's auto channel.
  */
 import type { AdminRole } from '#shared/types/auth'
 import type { PaymentCardView } from '#shared/types/payment-cards'
-import type { TopupCardSnapshot, TopupChannel, TopupStatus, TopupTrigger, TopupView } from '#shared/types/topups'
+import type { TikTokAccount } from '#shared/types/tiktok-accounts'
+import type { TopupCardLimit, TopupCardSnapshot, TopupChannel, TopupOptionsResponse, TopupStatus, TopupTrigger, TopupView } from '#shared/types/topups'
 
 /** `TOPUP_MIN_AMOUNT` of the API (api-contract §1). The API's 400 body stays the authority — this is the hint. */
 export const TOPUP_MIN_AMOUNT = 400
 
 /**
  * FEAT-051 — the **default** `TOPUP_CARD_LIMITS` of the API (api-contract §3), mirrored here as a hint only.
- * The real table lives in the API's `.env` and the BO has no endpoint to read it, so this is used for two things
- * and nothing else: the local amount hint inside the popover and the "this currency has no card channel" reason
- * on the card option. The API's own 400/409 text always wins and is displayed as-is.
+ *
+ * FEAT-053 — `GET /topups/options` is now the source of these numbers (`useTopupOptions`), and this table is
+ * only the **fallback** used when that request did not answer 200 (spec assumption 9: the FEAT-051 UI rules keep
+ * working byte for byte when the new endpoint is down). Nothing else reads it directly — go through
+ * `topupCardLimit()` / `topupQrMinAmount()`.
  */
 export const TOPUP_CARD_LIMITS: Record<string, { min: number, maxPerRound: number }> = {
   USD: { min: 10, maxPerRound: 500 },
   THB: { min: 400, maxPerRound: 20_000 }
+}
+
+/** the per-round rule the popover validates against: `min`/`maxPerRound` only (the per-day cap is the API's) */
+export interface TopupRoundLimit {
+  min: number
+  maxPerRound: number
+}
+
+/**
+ * FEAT-053 — the card limits of one currency: the server's table when `GET /topups/options` answered, else the
+ * fallback above. `null` = that currency has no card channel at all (same meaning as before).
+ */
+export function topupCardLimit(
+  currency: string | null | undefined,
+  options?: TopupOptionsResponse | null
+): TopupRoundLimit | null {
+  const key = (currency ?? '').toUpperCase()
+  if (!key) return null
+  const fromApi = options?.card?.limits?.[key]
+  if (fromApi) return { min: fromApi.min, maxPerRound: fromApi.maxPerRound }
+  // the endpoint answered and simply does not list this currency → no card channel (do not fall back)
+  if (options?.card?.limits) return null
+  return TOPUP_CARD_LIMITS[key] ?? null
+}
+
+/** FEAT-053 — `qr.minAmount` of the server, falling back to the hardcoded `TOPUP_MIN_AMOUNT` */
+export function topupQrMinAmount(options?: TopupOptionsResponse | null): number {
+  const min = options?.qr?.minAmount
+  return Number.isInteger(min) ? (min as number) : TOPUP_MIN_AMOUNT
+}
+
+/** FEAT-053 — the whole limit row of the account's currency (incl. `maxPerDay`/`autoAmount`), API only */
+export function topupAccountLimit(options?: TopupOptionsResponse | null): TopupCardLimit | null {
+  return options?.card?.account?.limit ?? null
+}
+
+/**
+ * FEAT-053 (AC-22) — how much of the per-day cap is left for this account+currency, or `null` when there is no
+ * cap (`maxPerDay: null`) or the options could not be read. `null` ⇒ the "เหลือวันนี้" line is not rendered.
+ */
+export function topupRemainingToday(options?: TopupOptionsResponse | null): number | null {
+  const remaining = options?.card?.account?.remainingToday
+  return typeof remaining === 'number' ? remaining : null
+}
+
+/** FEAT-053 — "เหลือวันนี้ 100 USD" */
+export function remainingTodayText(remaining: number, currency: string | null | undefined): string {
+  return currency ? `เหลือวันนี้ ${formatInt(remaining)} ${currency}` : `เหลือวันนี้ ${formatInt(remaining)}`
+}
+
+/**
+ * FEAT-053 — the auto top-up channel of an account: a row written before the feature (and an API that predates
+ * it) reads `qr`, exactly like the API's schema default (api-contract §3).
+ */
+export function accountAutoTopupChannel(
+  account: Pick<TikTokAccount, 'autoTopupChannel'> | null | undefined
+): TopupChannel {
+  return account?.autoTopupChannel === 'card' ? 'card' : 'qr'
 }
 
 export type TopupBadgeColor = 'neutral' | 'primary' | 'info' | 'warning' | 'success' | 'error'
@@ -290,12 +356,18 @@ export function pickDefaultCard(cards: PaymentCardView[] | null | undefined): Pa
  *  - `undefined` → the surface does not know the account's currency: the option stays enabled and the API's own
  *    409/400 text is what the admin reads (the BO never invents a reason).
  *  - `null`       → the account has no `balanceCurrency` yet (AC-5, the API answers 409).
- *  - a currency outside `TOPUP_CARD_LIMITS` → the API answers 400 (AC-6).
+ *  - a currency the server has no limits for → the API answers 400 (AC-6).
+ *
+ * FEAT-053: the list of supported currencies comes from `GET /topups/options` when it answered; the wording is
+ * unchanged (AC-22: "ข้อความเดิมของ FEAT-051 เป๊ะ", only the numbers/currencies behind it are the server's).
  */
-export function cardChannelBlockedReason(currency: string | null | undefined): string | null {
+export function cardChannelBlockedReason(
+  currency: string | null | undefined,
+  options?: TopupOptionsResponse | null
+): string | null {
   if (currency === undefined) return null
   if (!currency) return 'ยังไม่รู้สกุลเงินของบัญชีนี้ — กด Sync หรืออ่านยอดคงเหลือก่อน'
-  if (!TOPUP_CARD_LIMITS[currency.toUpperCase()]) return `ช่องทางบัตรไม่รองรับสกุลเงิน ${currency}`
+  if (!topupCardLimit(currency, options)) return `ช่องทางบัตรไม่รองรับสกุลเงิน ${currency}`
   return null
 }
 
@@ -375,20 +447,23 @@ export function topupBalanceText(topup: TopupView | null | undefined): string {
  * integer baht ≥ `TOPUP_MIN_AMOUNT`; the message mirrors the API's 400 text (api-contract §4).
  *
  * FEAT-051: called with **one argument it is the QR rule, byte for byte as before** (AC-1/AC-31). With
- * `{ channel: 'card', currency }` it uses the per-currency `min`/`maxPerRound` of `TOPUP_CARD_LIMITS` instead
- * (AC-6: USD 10 must pass without tripping the QR minimum of 400). An unknown currency has no local rule —
- * only "an integer" is checked and the API's 400/409 decides the rest.
+ * `{ channel: 'card', currency }` it uses the per-currency `min`/`maxPerRound` instead (AC-6: USD 10 must pass
+ * without tripping the QR minimum of 400). An unknown currency has no local rule — only "an integer" is checked
+ * and the API's 400/409 decides the rest.
+ *
+ * FEAT-053 (AC-22): `limit` / `qrMin` carry the numbers `GET /topups/options` sent. **The two messages are
+ * unchanged** — only the numbers inside them may now come from the server instead of the fallback table.
  */
 export function topupAmountError(
   amount: number | undefined | null,
-  options?: { channel?: TopupChannel, currency?: string | null }
+  options?: { channel?: TopupChannel, currency?: string | null, limit?: TopupRoundLimit | null, qrMin?: number }
 ): string | null {
   if (amount === undefined || amount === null || Number.isNaN(amount)) return 'กรอกจำนวนเงิน'
 
   if (options?.channel === 'card') {
     if (!Number.isInteger(amount) || amount <= 0) return 'amount ต้องเป็นจำนวนเต็ม'
     const currency = (options.currency ?? '').toUpperCase()
-    const limits = currency ? TOPUP_CARD_LIMITS[currency] : undefined
+    const limits = options.limit !== undefined ? options.limit : (currency ? TOPUP_CARD_LIMITS[currency] : undefined)
     if (!limits) return null
     if (amount < limits.min || amount > limits.maxPerRound) {
       return `amount ต้องเป็นจำนวนเต็ม ${limits.min}–${limits.maxPerRound} ${currency}`
@@ -396,8 +471,9 @@ export function topupAmountError(
     return null
   }
 
-  if (!Number.isInteger(amount) || amount < TOPUP_MIN_AMOUNT) {
-    return `amount ต้องเป็นจำนวนเต็มตั้งแต่ ${TOPUP_MIN_AMOUNT} บาท`
+  const qrMin = Number.isInteger(options?.qrMin) ? (options?.qrMin as number) : TOPUP_MIN_AMOUNT
+  if (!Number.isInteger(amount) || amount < qrMin) {
+    return `amount ต้องเป็นจำนวนเต็มตั้งแต่ ${qrMin} บาท`
   }
   return null
 }

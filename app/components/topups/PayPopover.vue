@@ -22,6 +22,13 @@
  *     currency is unknown or has no card limits (`cardChannelBlockedReason`), and the amount hint follows the
  *     per-currency minimum instead of the QR one (AC-6: USD 10 is valid).
  * The channel never reaches `POST /topups` from here, so nothing of the QR path can change by accident.
+ *
+ * FEAT-053 (AC-22) — the minimum, the per-round maximum and the list of currencies that have a card channel are
+ * no longer hardcoded: opening the popover fires **one** `GET /topups/options?tiktokAccountId=…`
+ * (`useTopupOptions`) and the numbers of that answer feed the same rules and the same messages as before. When
+ * the request does not answer 200 nothing is shown and the fallback table of `app/utils/topup.ts` is used, so
+ * the FEAT-051 behaviour is untouched. A currency with a per-day cap also renders one extra read-only line,
+ * `<prefix>-topup-remaining-today` ("เหลือวันนี้ X <CUR>"), which does not exist without a cap.
  */
 import type { FetchError } from 'ofetch'
 import type { PopoverProps } from '@nuxt/ui'
@@ -49,6 +56,12 @@ const props = withDefaults(defineProps<{
   defaultChannel?: TopupChannel
   /** FEAT-051 — advertiser / BC name for the card modal and the confirm dialog */
   accountName?: string
+  /**
+   * FEAT-053 — the surface's own testid prefix, used **only** for the new "เหลือวันนี้" line
+   * (`<prefix>-topup-remaining-today`, spec table). Every other id inside the popover keeps the single
+   * `ta-adv-topup-*` set it has had since FEAT-021 on all three surfaces (AC-23: none of them may change).
+   */
+  prefix?: 'ta-adv-topup' | 'tp-row' | 'ta-topup'
 }>(), {
   defaultAmount: undefined,
   retry: false,
@@ -57,7 +70,8 @@ const props = withDefaults(defineProps<{
   disabled: false,
   balanceCurrency: undefined,
   defaultChannel: 'qr',
-  accountName: ''
+  accountName: '',
+  prefix: 'ta-adv-topup'
 })
 
 const emit = defineEmits<{
@@ -75,12 +89,19 @@ const touched = ref(false)
 
 const popoverContent = { 'data-testid': 'ta-adv-topup-popover' } as PopoverProps['content']
 
+// ── FEAT-053 · the server's limits (one request per open, silent fallback) ───────────────────────────────────────────
+const { options: topupOptions, load: loadOptions, reset: resetOptions } = useTopupOptions()
+/** `min`/`maxPerRound` of this account's currency — the server's row when it answered, else the hint table */
+const cardLimit = computed(() => topupCardLimit(props.balanceCurrency, topupOptions.value))
+/** how much of the per-day cap is left; null = no cap for this currency, or options unavailable → no line */
+const remainingToday = computed(() => topupRemainingToday(topupOptions.value))
+
 // ── FEAT-051 · channel ───────────────────────────────────────────────────────────────────────────────────────────────
 const channel = ref<TopupChannel>(props.defaultChannel)
 const cardOpen = ref(false)
 
 /** why the card option cannot be used (unknown currency / a currency without card limits), null = it can */
-const cardBlocked = computed(() => cardChannelBlockedReason(props.balanceCurrency))
+const cardBlocked = computed(() => cardChannelBlockedReason(props.balanceCurrency, topupOptions.value))
 const isCard = computed(() => channel.value === 'card')
 
 function selectChannel(next: TopupChannel) {
@@ -91,8 +112,8 @@ function selectChannel(next: TopupChannel) {
 
 const localError = computed(() =>
   isCard.value
-    ? topupAmountError(amount.value, { channel: 'card', currency: props.balanceCurrency })
-    : topupAmountError(amount.value)
+    ? topupAmountError(amount.value, { channel: 'card', currency: props.balanceCurrency, limit: cardLimit.value })
+    : topupAmountError(amount.value, { qrMin: topupQrMinAmount(topupOptions.value) })
 )
 const errorText = computed(() => serverError.value ?? (touched.value ? localError.value : null))
 const canSubmit = computed(() => !submitting.value && !props.disabled && localError.value === null)
@@ -109,17 +130,22 @@ const amountLabel = computed(() =>
  * amount (10 USD) would be refused by the browser before the handler ever runs. QR keeps `TOPUP_MIN_AMOUNT`.
  */
 const amountMin = computed(() => {
-  if (!isCard.value) return TOPUP_MIN_AMOUNT
-  const limits = TOPUP_CARD_LIMITS[(props.balanceCurrency ?? '').toUpperCase()]
-  return limits?.min ?? 1
+  if (!isCard.value) return topupQrMinAmount(topupOptions.value)
+  return cardLimit.value?.min ?? 1
 })
 
 watch(open, (isOpen) => {
-  if (!isOpen) return
+  if (!isOpen) {
+    // the next open reads the limits again (the cap moves with every round somebody pays)
+    resetOptions()
+    return
+  }
   amount.value = props.defaultAmount
   serverError.value = null
   touched.value = false
   channel.value = props.defaultChannel === 'card' && !cardBlocked.value ? 'card' : 'qr'
+  // FEAT-053 — exactly one `GET /topups/options` per open
+  void loadOptions(props.tiktokAccountId)
 })
 
 /** card: step two is the modal; the round is created there, not here */
@@ -229,6 +255,20 @@ function failToast(message: string, status: number | undefined) {
         />
         <p v-if="errorText" class="text-xs text-error" data-testid="ta-adv-topup-amount-error">
           {{ errorText }}
+        </p>
+
+        <!--
+          FEAT-053 (AC-22) — how much of the account's per-day card cap is left. Rendered **only** when
+          `GET /topups/options` answered and that currency has a `maxPerDay`; no cap / no answer = no element.
+        -->
+        <p
+          v-if="remainingToday !== null"
+          class="text-xs tabular-nums text-muted"
+          :data-testid="`${prefix}-topup-remaining-today`"
+          :data-remaining="remainingToday"
+          :data-currency="balanceCurrency ?? ''"
+        >
+          {{ remainingTodayText(remainingToday, balanceCurrency) }}
         </p>
 
         <!-- FEAT-051 — channel: QR is the default and keeps the single-step flow -->

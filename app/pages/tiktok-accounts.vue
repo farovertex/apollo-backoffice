@@ -55,6 +55,13 @@
  * **GOD / Payment only** — every payment-card route answers 403 for an Admin (AS-4), so the BO does not even
  * offer it. The Top up cell passes the account's `balanceCurrency` and name down to `TopupsRowActions`, which is
  * what decides whether the card channel of the pay popover is offered or disabled with a reason (AC-32).
+ * FEAT-053 (AC-19/AC-20, api-contract §2/§3) — column **ช่องทาง auto** (`ta-auto-channel`) with the two-value
+ * switch `ta-auto-channel-qr` / `ta-auto-channel-card`: which channel the system uses when it opens an auto
+ * top-up round for this account. Changing it is **one** `PATCH /tiktok-accounts/:id` with
+ * `{ autoTopupChannel }` and nothing else; 200 replaces the row with the returned view, 400 (no usable card) /
+ * 403 (role) / 503 (no card key) leave the old value in place and toast the API's own text. Like the **บัตร**
+ * column the whole column exists for **GOD / Payment only** — for an Admin it is not rendered at all and the
+ * page issues no request for it (the key is 403 for them).
  */
 import type { VNode } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
@@ -63,8 +70,8 @@ import type { UseTimeAgoMessages } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { DiscoverJobResponse } from '#shared/types/advertisers'
-import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
-import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
+import type { AccountsResponse, LoginConflictBody, LoginJobResponse, PatchAccountBody, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
+import type { AccountBalanceResponse, TopupChannel, TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
 
 useSeoMeta({ title: 'TikTok accounts' })
@@ -518,6 +525,50 @@ function openCards(account: TikTokAccount) {
   cardsOpen.value = true
 }
 
+// ── FEAT-053 · auto top-up channel of the account (GOD/Payment only) ────────────────────────────────────────────────
+/** the account whose PATCH is in flight — the whole switch of that row is disabled while it is set */
+const autoChannelBusy = ref<string | null>(null)
+
+/**
+ * One `PATCH /tiktok-accounts/:id` per **change** (AC-19). Clicking the value the account already has sends
+ * nothing. There is no optimistic write: `data-channel` only ever shows what the API confirmed, so a 400 / 403 /
+ * 503 leaves the old value standing by construction and the toast carries the API's own text as-is.
+ */
+async function setAutoChannel(account: TikTokAccount, next: TopupChannel) {
+  if (autoChannelBusy.value) return
+  if (accountAutoTopupChannel(account) === next) return
+  const label = account.label ?? account.loginEmail
+  autoChannelBusy.value = account.id
+  try {
+    // retry: 0 — exactly one PATCH per click (ofetch would otherwise re-issue it on 5xx)
+    const updated = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(account.id)}`, {
+      method: 'PATCH',
+      retry: 0,
+      body: { autoTopupChannel: next } satisfies PatchAccountBody
+    })
+    // the row is replaced by the view the API returned (never by what was clicked)
+    polledById.value = new Map(polledById.value).set(updated.id, updated)
+    toast.add({
+      'title': `ช่องทางเติมอัตโนมัติ: ${TOPUP_CHANNEL_LABEL[accountAutoTopupChannel(updated)]}`,
+      'description': label,
+      'color': 'success',
+      'data-testid': 'ta-toast'
+    } as Parameters<typeof toast.add>[0])
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    toast.add({
+      // the API's own text, whatever the status (400 no card / 403 role / 503 no key) — never rewritten here
+      'title': 'ตั้งช่องทางเติมอัตโนมัติไม่สำเร็จ',
+      'description': err.data?.error ?? err.message ?? 'ทำรายการไม่สำเร็จ',
+      'color': status === 403 || status === 409 ? 'warning' : 'error',
+      'data-testid': 'ta-toast'
+    } as Parameters<typeof toast.add>[0])
+  } finally {
+    autoChannelBusy.value = null
+  }
+}
+
 const advOpen = ref(false)
 const advTargetId = ref<string | null>(null)
 // resolved from the live rows so the slideover sees the polled `runningJob` / `advertiserCount`
@@ -533,7 +584,11 @@ function openAdvertisers(account: TikTokAccount) {
 }
 
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const columns: TableColumn<TikTokAccount>[] = [
+/**
+ * FEAT-053 — the list is a computed because the **ช่องทาง auto** column must not exist at all for an Admin
+ * (AC-20); every other column is exactly the one it was before.
+ */
+const columns = computed<TableColumn<TikTokAccount>[]>(() => [
   {
     accessorKey: 'label',
     header: 'Label',
@@ -828,6 +883,42 @@ const columns: TableColumn<TikTokAccount>[] = [
       ])
     }
   },
+  // FEAT-053 (AC-19/AC-20) — which channel the system uses for an auto round of this account; GOD/Payment only
+  ...(canPay.value
+    ? [{
+      id: 'autoChannel',
+      header: 'ช่องทาง auto',
+      cell: ({ row }: { row: { original: TikTokAccount } }) => {
+        const a = row.original
+        const current = accountAutoTopupChannel(a)
+        const busy = autoChannelBusy.value === a.id
+        const option = (value: TopupChannel, icon: string) => h(UButton, {
+          'label': TOPUP_CHANNEL_LABEL[value],
+          icon,
+          'color': current === value ? 'primary' : 'neutral',
+          'variant': current === value ? 'solid' : 'outline',
+          'size': 'xs',
+          'role': 'radio',
+          'aria-checked': current === value,
+          'disabled': busy,
+          'data-testid': `ta-auto-channel-${value}`,
+          // clicking the current value sends nothing (`setAutoChannel` returns early)
+          'onClick': () => setAutoChannel(a, value)
+        })
+        return h('div', {
+          'class': 'flex items-center gap-1 whitespace-nowrap',
+          'role': 'radiogroup',
+          'aria-label': 'ช่องทางเติมเงินอัตโนมัติ',
+          'data-testid': 'ta-auto-channel',
+          'data-channel': current,
+          'data-busy': busy ? '1' : '0'
+        }, [
+          option('qr', 'i-lucide-qr-code'),
+          option('card', 'i-lucide-credit-card')
+        ])
+      }
+    } satisfies TableColumn<TikTokAccount>]
+    : []),
   {
     accessorKey: 'createdAt',
     header: 'Created',
@@ -905,7 +996,7 @@ const columns: TableColumn<TikTokAccount>[] = [
       ])
     }
   }
-]
+])
 
 // ── states ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const errorDescription = computed<string | undefined>(() => {
