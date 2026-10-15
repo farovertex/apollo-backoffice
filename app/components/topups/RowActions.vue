@@ -17,7 +17,7 @@
  * to listen to `@changed` and patch its row; `verifying` / `paid` / every QR state is rendered exactly as before.
  *
  * FEAT-053 — `prefix` is also handed to the pay popover, where it names the one new element of that feature
- * (`<prefix>-topup-remaining-today`). Every other id inside the popover is unchanged.
+ * (`<prefix>-remaining-today`). Every other id inside the popover is unchanged.
  */
 import type { TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'

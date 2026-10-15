@@ -28,7 +28,7 @@
  * (`useTopupOptions`) and the numbers of that answer feed the same rules and the same messages as before. When
  * the request does not answer 200 nothing is shown and the fallback table of `app/utils/topup.ts` is used, so
  * the FEAT-051 behaviour is untouched. A currency with a per-day cap also renders one extra read-only line,
- * `<prefix>-topup-remaining-today` ("เหลือวันนี้ X <CUR>"), which does not exist without a cap.
+ * `<prefix>-remaining-today` ("เหลือวันนี้ X <CUR>"), which does not exist without a cap.
  */
 import type { FetchError } from 'ofetch'
 import type { PopoverProps } from '@nuxt/ui'
@@ -58,8 +58,8 @@ const props = withDefaults(defineProps<{
   accountName?: string
   /**
    * FEAT-053 — the surface's own testid prefix, used **only** for the new "เหลือวันนี้" line
-   * (`<prefix>-topup-remaining-today`, spec table). Every other id inside the popover keeps the single
-   * `ta-adv-topup-*` set it has had since FEAT-021 on all three surfaces (AC-23: none of them may change).
+   * (`<prefix>-remaining-today`). Every other id inside the popover keeps the single `ta-adv-topup-*` set it has
+   * had since FEAT-021 on all three surfaces (AC-23: none of them may change).
    */
   prefix?: 'ta-adv-topup' | 'tp-row' | 'ta-topup'
 }>(), {
@@ -264,7 +264,7 @@ function failToast(message: string, status: number | undefined) {
         <p
           v-if="remainingToday !== null"
           class="text-xs tabular-nums text-muted"
-          :data-testid="`${prefix}-topup-remaining-today`"
+          :data-testid="`${prefix}-remaining-today`"
           :data-remaining="remainingToday"
           :data-currency="balanceCurrency ?? ''"
         >
