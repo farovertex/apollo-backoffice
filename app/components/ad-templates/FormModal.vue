@@ -63,6 +63,10 @@
  * shape FEAT-038 uses for UTM. A template saved before this feature has no `addOn` key: it opens with the switch
  * off and a save that does not touch it leaves `addOn` out of the PATCH entirely (BUG-008 class, spec AC-16).
  *
+ * The "Call to action" multi-select carries one button in its hint slot (`adt-form-cta-all`, human request
+ * 2026-10-16): it selects every option `/options` offers, and a second press clears the list again (the field
+ * stays required, so an empty list still fails validation).
+ *
  * Layout: seven sections — `adname`, then **UTM**, then TikTok's four in the TikTok page order as an
  * **accordion**, then `addon`.
  * `adname` and `utm` are always open and have no toggle (human decision 2026-10-11: UTM is ours and is set on
@@ -624,6 +628,23 @@ watch(postIsVerifying, (running) => {
 })
 
 onUnmounted(stopPostPolling)
+
+// ── the call-to-action list ──────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * One button toggles the whole list: it selects every option `/options` offers, and a second press clears the
+ * selection again. "Every option" means the options list, not what is stored — a key the list no longer knows
+ * (an older template) counts as nothing here, just as `configFromState()` drops it on save.
+ */
+const ctaAllSelected = computed(() => {
+  const all = props.options.ctaValue.map(item => item.value)
+  if (all.length === 0) return false
+  const picked = new Set(state.config.cta.values)
+  return all.every(value => picked.has(value))
+})
+
+function toggleCtaAll() {
+  state.config.cta.values = ctaAllSelected.value ? [] : props.options.ctaValue.map(item => item.value)
+}
 
 // ── the UTM section (FEAT-038 · spec U1) ─────────────────────────────────────────────────────────────────────────────
 /**
@@ -2061,6 +2082,19 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 :disabled="submitting"
                 data-testid="adt-form-cta"
               />
+              <template #hint>
+                <UButton
+                  :label="ctaAllSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'"
+                  color="neutral"
+                  variant="link"
+                  size="xs"
+                  class="p-0"
+                  :disabled="submitting || options.ctaValue.length === 0"
+                  :aria-pressed="ctaAllSelected"
+                  data-testid="adt-form-cta-all"
+                  @click="toggleCtaAll"
+                />
+              </template>
             </UFormField>
           </div>
         </section>
