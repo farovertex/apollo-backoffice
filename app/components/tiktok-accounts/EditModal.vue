@@ -1,10 +1,18 @@
 <script setup lang="ts">
 /**
  * Edit account modal (2026-10-12, human request — functions 3.2 "edit credential"; 2026-10-14 TASK-account-label
- * added the Label field). Opened by the row action **Edit** (`ta-edit`) on /tiktok-accounts. Five fields are
- * editable — **Label**, **Login email**, **Email password**, **Recovery email** and **TikTok password**; the
- * browser profile and every flag stay read-only (the API's `PATCH /tiktok-accounts/:id` body is `.strict()` on
- * those five keys).
+ * added the Label field). Opened by the row action **Edit** (`ta-edit`) on /tiktok-accounts. Six fields are
+ * editable — **Label**, **Login email**, **Email password**, **Recovery email**, **TikTok password** and
+ * (2026-10-16, GOD/Payment only) **ช่องทางเติมอัตโนมัติ**; the browser profile and every flag stay read-only
+ * (the API's `PATCH /tiktok-accounts/:id` body is `.strict()` on those six keys).
+ * 2026-10-16 (human request) — the auto top-up channel (FEAT-053 AC-19) moved here from the table's
+ * **ช่องทาง auto** column: two buttons in a `role="radiogroup"` (`ta-edit-auto-channel` + `-qr` / `-card`),
+ * rendered only when the `canPay` prop is true (the page passes `canPayTopups(viewer)`; the key is 403 for an
+ * Admin, AC-20, and an Admin's modal must not even show it). It is an ordinary field of the diff: the change
+ * travels in the **one** PATCH behind Save, together with whatever else was edited, so the whole edit is atomic.
+ * A 400 (no usable card) / 503 (no card key) therefore fails the whole save — nothing is written, the modal
+ * stays open and the API's own text is shown in `ta-edit-error`. That is deliberate: no fallback, no second
+ * request.
  * On every open the form is prefilled from the row; both passwords start masked (eye toggles, same as the Add
  * modal) and the modal never puts a secret anywhere but the inputs. Submit sends **only the keys that differ** from
  * the row (`PatchAccountBody`) — nothing changed → the Save button is disabled, no request. `recoveryEmail` is
@@ -22,9 +30,12 @@ import type { FetchError } from 'ofetch'
 import type { FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { PatchAccountBody, TikTokAccount } from '#shared/types/tiktok-accounts'
+import type { TopupChannel } from '#shared/types/topups'
 
 const props = defineProps<{
   account: TikTokAccount | null
+  /** GOD/Payment (`canPayTopups`) — only they may send `autoTopupChannel`, so only they see the field */
+  canPay?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -46,6 +57,8 @@ interface FormState {
   emailPassword: string
   recoveryEmail: string
   password: string
+  /** FEAT-053 — read through `accountAutoTopupChannel()`, never from the raw key (an old row has none) */
+  autoTopupChannel: TopupChannel
 }
 
 /** what the row holds, normalised the way the API stores it — the submit diffs the form against this */
@@ -55,7 +68,8 @@ function stateOf(account: TikTokAccount | null): FormState {
     loginEmail: account?.loginEmail ?? '',
     emailPassword: account?.emailPassword ?? '',
     recoveryEmail: account?.recoveryEmail ?? '',
-    password: account?.password ?? ''
+    password: account?.password ?? '',
+    autoTopupChannel: accountAutoTopupChannel(account)
   }
 }
 
@@ -82,7 +96,8 @@ const schema = z.object({
     .optional(),
   password: z.string({ error: 'TikTok password is required' })
     .min(1, 'TikTok password is required')
-    .max(128, 'TikTok password must be at most 128 characters')
+    .max(128, 'TikTok password must be at most 128 characters'),
+  autoTopupChannel: z.enum(['qr', 'card'])
 }).superRefine((data, ctx) => {
   if (!data.emailPassword && original.value.emailPassword) {
     ctx.addIssue({ code: 'custom', path: ['emailPassword'], message: 'Email password is required' })
@@ -100,13 +115,14 @@ const showPassword = ref(false)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
 
-/** true while at least one of the five fields differs from the row (the raw input, before zod normalises it) */
+/** true while at least one of the six fields differs from the row (the raw input, before zod normalises it) */
 const dirty = computed(() =>
   state.label !== original.value.label
   || state.loginEmail !== original.value.loginEmail
   || state.emailPassword !== original.value.emailPassword
   || state.recoveryEmail !== original.value.recoveryEmail
   || state.password !== original.value.password
+  || state.autoTopupChannel !== original.value.autoTopupChannel
 )
 
 function resetForm() {
@@ -142,6 +158,8 @@ function changedBody(data: Schema): PatchAccountBody {
   const recovery = data.recoveryEmail ?? ''
   if (recovery !== original.value.recoveryEmail) body.recoveryEmail = recovery || null
   if (data.password !== original.value.password) body.password = data.password
+  // GOD/Payment only, and only when it really changed — an Admin never has the field and never sends the key
+  if (props.canPay && data.autoTopupChannel !== original.value.autoTopupChannel) body.autoTopupChannel = data.autoTopupChannel
   return body
 }
 
@@ -173,7 +191,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   <UModal
     v-model:open="open"
     :title="`Edit account ${account?.label ?? account?.loginEmail ?? ''}`"
-    description="The label, login email, both passwords and the recovery email can be changed here."
+    :description="canPay
+      ? 'The label, login email, both passwords, the recovery email and the auto top-up channel can be changed here.'
+      : 'The label, login email, both passwords and the recovery email can be changed here.'"
     :dismissible="!submitting"
     :ui="{ content: 'max-w-lg' }"
     :content="modalContent"
@@ -279,6 +299,49 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </template>
           </UInput>
+        </UFormField>
+
+        <!-- 2026-10-16 — FEAT-053's auto channel; GOD/Payment only, saved by the same diff PATCH as the rest -->
+        <UFormField
+          v-if="canPay"
+          label="ช่องทางเติมอัตโนมัติ"
+          name="autoTopupChannel"
+        >
+          <div
+            class="flex items-center gap-1"
+            role="radiogroup"
+            aria-label="ช่องทางเติมเงินอัตโนมัติ"
+            data-testid="ta-edit-auto-channel"
+            :data-channel="state.autoTopupChannel"
+          >
+            <UButton
+              :label="TOPUP_CHANNEL_LABEL.qr"
+              icon="i-lucide-qr-code"
+              :color="state.autoTopupChannel === 'qr' ? 'primary' : 'neutral'"
+              :variant="state.autoTopupChannel === 'qr' ? 'solid' : 'outline'"
+              size="xs"
+              role="radio"
+              :aria-checked="state.autoTopupChannel === 'qr'"
+              :disabled="submitting"
+              data-testid="ta-edit-auto-channel-qr"
+              @click="state.autoTopupChannel = 'qr'"
+            />
+            <UButton
+              :label="TOPUP_CHANNEL_LABEL.card"
+              icon="i-lucide-credit-card"
+              :color="state.autoTopupChannel === 'card' ? 'primary' : 'neutral'"
+              :variant="state.autoTopupChannel === 'card' ? 'solid' : 'outline'"
+              size="xs"
+              role="radio"
+              :aria-checked="state.autoTopupChannel === 'card'"
+              :disabled="submitting"
+              data-testid="ta-edit-auto-channel-card"
+              @click="state.autoTopupChannel = 'card'"
+            />
+          </div>
+          <template #help>
+            <span data-testid="ta-edit-auto-channel-helper">ช่องทางที่ระบบใช้เมื่อเปิดรอบเติมเงินอัตโนมัติให้บัญชีนี้</span>
+          </template>
         </UFormField>
 
         <UAlert
