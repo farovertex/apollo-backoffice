@@ -6,7 +6,7 @@
  * strings the spec pins down ("ไฟล์ใหญ่เกิน 2 MB", "สัดส่วนต่างจาก 750×421") come out of these builders with
  * the current options, byte for byte.
  */
-import type { MediaAssetType, MediaOptions } from '#shared/types/media'
+import type { MediaAssetType, MediaOptions, MediaRecommended, MediaRecommendedSize } from '#shared/types/media'
 
 /** a presigned `url` counts as stale this long before its real `expiresAt` (spec "presigned-URL refresh") */
 export const MEDIA_STALE_MARGIN_MS = 60_000
@@ -48,6 +48,32 @@ export function formatMediaDimensions(width: number, height: number): string {
 const ASSET_TYPE_LABELS: Record<MediaAssetType, string> = {
   'add-on': 'Add-On',
   'call-action': 'Call-Action'
+}
+
+/** what each type is for, shown under its label on the upload modal's type cards */
+const ASSET_TYPE_HINTS: Record<MediaAssetType, string> = {
+  'add-on': 'รูปบัตรดิสเพลย์ (add-on เชิงโต้ตอบ)',
+  'call-action': 'รูปของปุ่ม Call-Action'
+}
+
+/** the two types in the order they are offered, built from the labels (no second list to keep in sync) */
+export const MEDIA_ASSET_TYPES = Object.keys(ASSET_TYPE_LABELS) as MediaAssetType[]
+
+export function mediaAssetTypeHint(type: MediaAssetType): string {
+  return ASSET_TYPE_HINTS[type]
+}
+
+/**
+ * The recommended size of **one** type (contract v2). `null` while the options are not loaded yet, and for a row
+ * whose `assetType` is `null` (uploaded before the field existed) — such a row gets no ratio chip at all, because
+ * there is no type to compare it against.
+ */
+export function mediaRecommendedFor(
+  recommended: MediaRecommended | null | undefined,
+  type: MediaAssetType | null | undefined
+): MediaRecommendedSize | null {
+  if (!recommended || !type) return null
+  return recommended[type] ?? null
 }
 
 /** `Add-On` · `Call-Action` · `—` when the row predates `assetType` */

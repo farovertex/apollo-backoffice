@@ -1,14 +1,18 @@
 <script setup lang="ts">
 /**
- * FEAT-049 — Media library (คลังรูปกลาง · functions 5.1 / 5.2 / 5.4; api-contract.md **v1** §5).
+ * FEAT-049 — Media library (คลังรูปกลาง · functions 5.1 / 5.2 / 5.4; api-contract.md **v2** §5).
  *
  * One public library for every workspace and every role (`mediaAssets.workspaceId = null`, the API guards with
  * `AuthGuard` only), so this page has no role gate and no workspace filter — the sidebar shows it to everybody.
  *
+ * Uploading happens in `MediaUploadModal` (2026-10-15), not on the page: `assetType` is written once and can
+ * never be patched, so the type has to be an explicit choice in front of the file picker instead of a select
+ * sitting next to a file button that works without it.
+ *
  * Requests, all through `useApi()` → `/backend`:
- * - `GET /media/options` **once per page lifetime** (cached in `useMediaUpload` at module level, shared with a
- *   mounted `MediaPicker`): it decides the upload flow (`mode`) and carries every limit, so the page hard-codes
- *   no size, no mime list and no recommended ratio;
+ * - `GET /media/options` **once per page lifetime** (cached in `useMediaUpload` at module level, shared with the
+ *   upload modal and a mounted `MediaPicker`): it decides the upload flow (`mode`) and carries every limit, so
+ *   the page hard-codes no size, no mime list and no recommended ratio (which is per `assetType` since v2);
  * - exactly one `GET /media?scope=public&page=&limit=24[&search=][&assetType=]` per load / Refresh / page change /
  *   debounced search / type filter / finished upload batch / delete / presigned refresh (`useMediaList`);
  * - `PATCH /media/:id` from the inline rename (the row is patched in place, no list re-read) and
@@ -18,37 +22,30 @@
  * loads of a storage-mode `url` — both are browser-to-bucket by design (contract §8).
  */
 import type { MediaAssetType, MediaAssetView } from '#shared/types/media'
-import { MEDIA_PAGE_SIZE, formatMediaBytes, mediaMimeLabels } from '~/utils/media'
+import { MEDIA_ASSET_TYPES, MEDIA_PAGE_SIZE, mediaAssetTypeLabel } from '~/utils/media'
 
 useSeoMeta({ title: 'Media library' })
 
 const list = useMediaList(MEDIA_PAGE_SIZE)
+/** the page itself uploads nothing — it only needs `options.recommended` for the grid's per-type ratio chip */
 const upload = useMediaUpload()
-
-const fileInput = ref<HTMLInputElement | null>(null)
-
-/** the type written onto every file in the next batch — the select is the only way to choose it */
-const uploadType = ref<MediaAssetType>('add-on')
-
-const TYPE_ITEMS: { label: string, value: MediaAssetType }[] = [
-  { label: 'Add-On', value: 'add-on' },
-  { label: 'Call-Action', value: 'call-action' }
-]
 
 const FILTER_ITEMS: { label: string, value: MediaAssetType | 'all' }[] = [
   { label: 'ทุกประเภท', value: 'all' },
-  ...TYPE_ITEMS
+  ...MEDIA_ASSET_TYPES.map(value => ({ label: mediaAssetTypeLabel(value), value }))
 ]
 
+const uploadOpen = ref(false)
 const deleteOpen = ref(false)
 const deleteTarget = ref<MediaAssetView | null>(null)
 
-/** `accept` of the native input — from `/media/options`, never a literal list */
-const accept = computed(() => upload.options.value?.mimeTypes.join(',') ?? 'image/*')
-const uploadHint = computed(() => {
-  const options = upload.options.value
-  if (!options) return 'กำลังโหลดค่าตั้ง…'
-  return `${mediaMimeLabels(options.mimeTypes)} · ไม่เกิน ${formatMediaBytes(options.maxBytes)} · แนะนำ ${options.recommended.width}×${options.recommended.height}`
+/**
+ * what the upload modal starts on: the type the list is filtered to, or nothing — a type is never guessed for
+ * the user, because `assetType` cannot be changed after the upload (contract §5.6 patches `name` only).
+ */
+const uploadDefaultType = computed<MediaAssetType | null>(() => {
+  const filter = list.assetType.value
+  return filter === 'all' ? null : filter
 })
 
 onMounted(() => {
@@ -56,15 +53,9 @@ onMounted(() => {
   void upload.loadOptions()
 })
 
-async function onFiles(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  // the same file can be picked again right after (change only fires on a different value)
-  input.value = ''
-  if (files.length === 0) return
-  const created = await upload.uploadFiles(files, uploadType.value)
-  // a batch that created nothing (every file rejected client-side) has nothing new to show → no request
-  if (created.length > 0) list.reloadNewest()
+/** one finished batch inside the modal → the newest page, exactly one request (the modal stays open) */
+function onUploaded() {
+  list.reloadNewest()
 }
 
 function askDelete(asset: MediaAssetView) {
@@ -122,6 +113,17 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
             data-testid="ml-refresh"
             @click="list.reload()"
           />
+
+          <UButton
+            label="อัปโหลดรูป"
+            aria-label="อัปโหลดรูป"
+            icon="i-lucide-upload"
+            color="primary"
+            variant="solid"
+            :ui="{ label: 'hidden sm:inline' }"
+            data-testid="ml-upload-open"
+            @click="uploadOpen = true"
+          />
         </template>
       </UDashboardNavbar>
     </template>
@@ -133,7 +135,7 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
         :data-mode="upload.options.value?.mode ?? ''"
         class="flex flex-1 flex-col gap-4"
       >
-        <!-- search + upload stack vertically on mobile (spec "viewports") -->
+        <!-- search + filter stack vertically on mobile (spec "viewports"); uploading lives in its own modal -->
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
           <UInput
             v-model="list.search.value"
@@ -150,46 +152,7 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
             aria-label="กรองตามประเภท"
             data-testid="ml-filter-type"
           />
-
-          <!-- a plain native input (not a dropzone widget): a test sets the files on this exact element -->
-          <div
-            class="flex min-w-0 flex-1 flex-col gap-1 rounded-lg border border-dashed border-default p-2"
-            data-testid="ml-upload"
-          >
-            <USelect
-              v-model="uploadType"
-              :items="TYPE_ITEMS"
-              :disabled="upload.busy.value"
-              class="w-full sm:w-44"
-              aria-label="ประเภทของรูปที่จะอัปโหลด"
-              data-testid="ml-upload-type"
-            />
-            <input
-              ref="fileInput"
-              type="file"
-              multiple
-              :accept="accept"
-              :disabled="!upload.options.value || upload.busy.value"
-              class="w-full cursor-pointer rounded-md border border-default bg-default p-1.5 text-sm text-default
-                file:mr-3 file:cursor-pointer file:rounded file:border-0 file:bg-elevated file:px-2 file:py-1
-                file:text-sm file:font-medium file:text-default"
-              @change="onFiles"
-            >
-            <span class="text-xs text-muted">{{ uploadHint }}</span>
-          </div>
         </div>
-
-        <UAlert
-          v-if="upload.optionsError.value"
-          color="warning"
-          variant="subtle"
-          icon="i-lucide-triangle-alert"
-          title="โหลดค่าตั้งคลังรูปไม่ได้"
-          :description="upload.optionsError.value"
-          data-testid="ml-options-error"
-        />
-
-        <MediaUploadList :items="upload.items.value" />
 
         <UAlert
           v-if="list.error.value"
@@ -226,9 +189,20 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
           v-else-if="list.isEmpty.value && !list.hasSearch.value && !list.hasTypeFilter.value"
           icon="i-lucide-images"
           title="ยังไม่มีรูปในคลัง"
-          description="เลือกประเภท แล้วเลือกไฟล์ด้านบนเพื่ออัปโหลดรูปแรก"
+          description="กดอัปโหลดรูป แล้วเลือกประเภทกับไฟล์ในหน้าต่างที่เปิดขึ้น"
           data-testid="ml-empty"
-        />
+        >
+          <template #actions>
+            <UButton
+              label="อัปโหลดรูป"
+              icon="i-lucide-upload"
+              color="primary"
+              variant="solid"
+              data-testid="ml-empty-upload"
+              @click="uploadOpen = true"
+            />
+          </template>
+        </UEmpty>
 
         <UEmpty
           v-else-if="list.isEmpty.value"
@@ -274,6 +248,12 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
           />
         </div>
       </div>
+
+      <MediaUploadModal
+        v-model:open="uploadOpen"
+        :default-type="uploadDefaultType"
+        @uploaded="onUploaded"
+      />
 
       <MediaDeleteConfirm
         v-model:open="deleteOpen"

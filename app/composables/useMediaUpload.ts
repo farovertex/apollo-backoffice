@@ -31,7 +31,7 @@ import type {
   MediaOptions,
   UploadUrlResponse
 } from '#shared/types/media'
-import { isMediaRatioOff, mediaRatioWarning, mediaTooLarge, mediaTypeRejected } from '~/utils/media'
+import { isMediaRatioOff, mediaRatioWarning, mediaRecommendedFor, mediaTooLarge, mediaTypeRejected } from '~/utils/media'
 
 export type MediaUploadState
   = | 'queued'
@@ -152,9 +152,13 @@ export function useMediaUpload() {
     if (row) Object.assign(row, patch)
   }
 
-  /** the non-blocking ratio note shown next to a finished upload (same ±10 % rule as the grid chip) */
-  function ratioNote(opts: MediaOptions, width: number, height: number): string | null {
-    return isMediaRatioOff(width, height, opts.recommended) ? mediaRatioWarning(opts.recommended) : null
+  /**
+   * The non-blocking ratio note shown next to a finished upload (same ±10 % rule as the grid chip) — compared
+   * against the recommended size of **that file's type**, which since contract v2 is not the same for both.
+   */
+  function ratioNote(opts: MediaOptions, assetType: MediaAssetType, width: number, height: number): string | null {
+    const size = mediaRecommendedFor(opts.recommended, assetType)
+    return isMediaRatioOff(width, height, size) ? mediaRatioWarning(size) : null
   }
 
   async function uploadOne(uid: string, file: File, opts: MediaOptions, assetType: MediaAssetType): Promise<MediaAssetView | null> {
@@ -233,7 +237,7 @@ export function useMediaUpload() {
       // retry: 0 — exactly one confirm per file (a retry could answer 409 alreadyConfirmed)
       const res = await api<ConfirmMediaResponse>('/media', { method: 'POST', retry: 0, body })
       const asset = res.asset
-      set(uid, { state: 'done', message: ratioNote(opts, asset.width, asset.height), asset })
+      set(uid, { state: 'done', message: ratioNote(opts, asset.assetType ?? assetType, asset.width, asset.height), asset })
       return asset
     } catch (e) {
       set(uid, { state: 'error', message: apiMessage(e, 'บันทึกรูปไม่สำเร็จ') })

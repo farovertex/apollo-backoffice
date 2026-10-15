@@ -17,7 +17,7 @@
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { MediaAssetView } from '#shared/types/media'
+import type { MediaAssetView, MediaRecommended, MediaRecommendedSize } from '#shared/types/media'
 import {
   MEDIA_IMG_MAX_RETRIES,
   formatMediaBytes,
@@ -26,6 +26,7 @@ import {
   isMediaRatioOff,
   mediaAssetTypeLabel,
   mediaRatioWarning,
+  mediaRecommendedFor,
   mediaSrc,
   mediaUsedByTooltip,
   mediaUsedLabel
@@ -33,8 +34,11 @@ import {
 
 const props = withDefaults(defineProps<{
   items: MediaAssetView[]
-  /** `options.recommended` — the ±10 % ratio chip is skipped while the options are not loaded yet */
-  recommended?: { width: number, height: number } | null
+  /**
+   * `options.recommended` — the whole **per-type** map (contract v2), never one size: every card compares itself
+   * against the size of its own `assetType`. The ±10 % chip is skipped while the options are not loaded yet.
+   */
+  recommended?: MediaRecommended | null
   /** testid namespace: `ml` on the page, `mp` inside the picker */
   prefix?: 'ml' | 'mp'
   /** picker mode: the whole card is a button, no rename and no delete */
@@ -155,8 +159,13 @@ async function saveRename(asset: MediaAssetView) {
 }
 
 // ── presentation ────────────────────────────────────────────────────────────────────────────────────────────────────
+/** the recommended size of **this card's** type (`null` → no chip: nothing to compare against) */
+function recommendedOf(asset: MediaAssetView): MediaRecommendedSize | null {
+  return mediaRecommendedFor(props.recommended, asset.assetType)
+}
+
 function ratioOff(asset: MediaAssetView): boolean {
-  return isMediaRatioOff(asset.width, asset.height, props.recommended)
+  return isMediaRatioOff(asset.width, asset.height, recommendedOf(asset))
 }
 
 function usedNames(asset: MediaAssetView): string {
@@ -303,7 +312,7 @@ function onCardClick(asset: MediaAssetView) {
           class="w-fit"
           :data-testid="testid('ratio-warn')"
         >
-          {{ mediaRatioWarning(recommended) }}
+          {{ mediaRatioWarning(recommendedOf(asset)) }}
         </UBadge>
 
         <div v-if="!selectable" class="mt-auto flex justify-end pt-1">

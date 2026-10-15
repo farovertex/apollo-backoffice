@@ -17,7 +17,13 @@
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { MediaAssetType, MediaAssetView, MediaPickerSelection } from '#shared/types/media'
-import { MEDIA_PAGE_SIZE, formatMediaBytes, mediaMimeLabels } from '~/utils/media'
+import {
+  MEDIA_PAGE_SIZE,
+  formatMediaBytes,
+  formatMediaDimensions,
+  mediaMimeLabels,
+  mediaRecommendedFor
+} from '~/utils/media'
 
 const props = withDefaults(defineProps<{
   /** the image the parent currently has selected (highlighted in the grid) */
@@ -51,7 +57,11 @@ const accept = computed(() => upload.options.value?.mimeTypes.join(',') ?? 'imag
 const uploadHint = computed(() => {
   const options = upload.options.value
   if (!options) return 'กำลังโหลดค่าตั้ง…'
-  return `${mediaMimeLabels(options.mimeTypes)} · ไม่เกิน ${formatMediaBytes(options.maxBytes)}`
+  // the picker's type is pinned by the caller, so the hint can name that type's own recommended size (v2)
+  const size = mediaRecommendedFor(options.recommended, props.assetType)
+  const parts = [mediaMimeLabels(options.mimeTypes), `ไม่เกิน ${formatMediaBytes(options.maxBytes)}`]
+  if (size) parts.push(`แนะนำ ${formatMediaDimensions(size.width, size.height)}`)
+  return parts.join(' · ')
 })
 
 watch(open, (isOpen) => {

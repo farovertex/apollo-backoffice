@@ -24,12 +24,25 @@ export type MediaAssetType = 'add-on' | 'call-action'
 /** `storage` = presigned PUT straight to the bucket · `mongo` = base64 in the confirm body */
 export type MediaMode = 'storage' | 'mongo'
 
+/** one recommended pixel size */
+export interface MediaRecommendedSize {
+  width: number
+  height: number
+}
+
+/**
+ * contract **v2**: the recommended size is **per `assetType`** (a display-card image and a Call-Action image do
+ * not share a ratio), so nothing in the BO may read "the" recommended size without naming a type —
+ * `utils/media.ts#mediaRecommendedFor` is the only way in.
+ */
+export type MediaRecommended = Record<MediaAssetType, MediaRecommendedSize>
+
 /** `GET /media/options` 200 (exactly 4 keys) — the only source of the client-side limits */
 export interface MediaOptions {
   mode: MediaMode
   maxBytes: number
   mimeTypes: string[]
-  recommended: { width: number, height: number }
+  recommended: MediaRecommended
 }
 
 /** `username` is `null` when the admin row is gone (same mapping as `adTemplates.createdBy`) */
