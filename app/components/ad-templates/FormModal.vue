@@ -849,12 +849,14 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
         medium: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('medium')),
         campaign: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('campaign'))
       }),
-      // FEAT-050 — `image` is display-only and is not part of the schema (zod drops it)
+      // FEAT-050 — `image` is display-only and is not part of the schema (zod drops it). `nullish`: clearing a
+      // `UInputNumber` emits `undefined`, and that must read as "out of range" (the text below), not as zod's
+      // own "expected number, received undefined".
       addOn: z.object({
         enabled: z.boolean(),
         imageId: z.string(),
-        zoomClicks: z.number().nullable(),
-        displaySeconds: z.number().nullable()
+        zoomClicks: z.number().nullish(),
+        displaySeconds: z.number().nullish()
       })
     })
   }).superRefine((data, ctx) => {
@@ -955,7 +957,7 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
         }
       ] as const
       for (const field of numbers) {
-        const ok = field.value !== null
+        const ok = field.value !== null && field.value !== undefined
           && Number.isInteger(field.value)
           && field.value >= field.min
           && field.value <= field.max
