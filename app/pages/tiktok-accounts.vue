@@ -2,10 +2,12 @@
 /**
  * FEAT-003 — TikTok accounts (functions 3.1 create, 3.3 list, delete from 3.2; api-contract.md v1).
  * One `GET /backend/tiktok-accounts` per load / Refresh / after create / after delete via `useApi()`; search is
- * client-side (label / loginEmail / profile name / profile id), rows sorted by createdAt desc, no pagination.
- * Password: the table renders the literal mask until the row toggle is on (value never in the DOM while masked);
- * Copy reads it from the row data. Delete confirms in a modal (BUG-029: with an "Also delete the browser profile"
- * checkbox, on by default, that sends `?deleteProfile=1` → `provider/delete` job).
+ * client-side (label / loginEmail / profile name / profile id — the name still matches although it is not
+ * rendered, see below), rows sorted by createdAt desc, no pagination.
+ * The passwords used to be columns with a per-row reveal toggle and a Copy button; they are gone since
+ * 2026-10-11 (see below) and the table renders no secret at all any more. Delete confirms in a modal (BUG-029:
+ * with an "Also delete the browser profile" checkbox, on by default, that sends `?deleteProfile=1` →
+ * `provider/delete` job).
  * FEAT-004: Login → `POST /backend/tiktok-accounts/:id/login` (202 / 409 → `TiktokAccountsLoginModal`, other →
  * toast). BUG-028: the button is **always enabled** — every click POSTs again and the API queues a new login job
  * whatever the account state; the job decides on its own whether it is already logged in (the page guards nothing,
@@ -80,6 +82,18 @@
  *     `ta-first-login` / `data-pending` / `data-fail` attributes and the same tooltips — but the column's `—`
  *     placeholder is **dropped**: a row with neither a fail nor a pending flag renders no element at all, so
  *     `ta-first-login` simply does not exist in that row's cell (it was pure noise next to the status badge).
+ * 2026-10-16 (human request) — **Login email** and **Browser profile** merged into one column **Account**
+ * (`id: 'account'`), in the Login email's old place right after Label, so the table is down to 9 columns. The
+ * cell (`ta-account`) is two lines: the login email on top (`ta-account-email`, plain text — Label stays the
+ * only bold column) and the AdsPower **provider profile id** below (`ta-account-profile-id`, `font-mono
+ * text-xs text-muted`, `title` = the full id, and `data-profile-id` = the id or `''` so a spec can read it
+ * without parsing text). The browser-profile **name** (`faro-01`) is not displayed anywhere any more — the
+ * Label column already carries the human-readable name — but the client-side search still matches it, so a row
+ * can match for a reason that is not visible in the result. The id line is `—` in both null cases:
+ * `browserProfile === null` (orphan account, bound to nothing) and `providerProfileId === null` (FEAT-024: the
+ * profile row is only reserved while the create job runs, or the create failed); `data-profile-id` is `''` for
+ * both. No copy button — this pass removes per-row buttons, it does not add them. Specs used to address these
+ * two cells by column index; they address `ta-account*` now.
  * `ta-edit`, `ta-sync`, `ta-login`, `ta-balance*`, `ta-topup*`, `ta-adv-*` and `ta-bc-org*` are untouched.
  */
 import type { VNode } from 'vue'
@@ -137,6 +151,9 @@ const searchDebounced = refDebounced(search, 250)
 const filtered = computed<TikTokAccount[]>(() => {
   const needle = searchDebounced.value.trim().toLowerCase()
   if (!needle) return accounts.value
+  // 2026-10-16: the browser-profile **name** is no longer rendered anywhere in the table, but it is still
+  // searchable on purpose (people know their profiles as `faro-01`). A row can therefore match for a reason the
+  // eye cannot see in the result — intended, do not "fix" by dropping the name here.
   return accounts.value.filter(a =>
     (a.label ?? '').toLowerCase().includes(needle)
     || a.loginEmail.toLowerCase().includes(needle)
@@ -647,8 +664,8 @@ function openAdvertisers(account: TikTokAccount) {
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
  * The list is a computed because two cells read `canPay`: the Balance cell's auto-channel chip and the "⋯"
- * menu's cards item must not exist at all for an Admin (FEAT-053 AC-20 / FEAT-051 AC-35). Ten columns since the
- * 2026-10-16 declutter.
+ * menu's cards item must not exist at all for an Admin (FEAT-053 AC-20 / FEAT-051 AC-35). Nine columns since
+ * the 2026-10-16 declutter and the Login email + Browser profile merge.
  */
 const columns = computed<TableColumn<TikTokAccount>[]>(() => [
   {
@@ -671,23 +688,26 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       ])
     }
   },
-  {
-    accessorKey: 'loginEmail',
-    header: 'Login email',
-    cell: ({ row }) => h('span', { class: 'whitespace-nowrap' }, row.original.loginEmail)
-  },
   // 2026-10-11 (human request): the "Email password", "Recovery email" and "TikTok password" columns are no
   // longer rendered in the table — the values stay in the row data and in the edit/add modals.
+  // 2026-10-16 (human request): "Login email" + "Browser profile" merged into this one two-line cell.
   {
-    id: 'browserProfile',
-    header: 'Browser profile',
+    id: 'account',
+    header: 'Account',
     cell: ({ row }) => {
-      const p = row.original.browserProfile
-      if (!p) return h('span', { class: 'text-muted' }, '—')
-      return h('div', { class: 'flex flex-col whitespace-nowrap' }, [
-        h('span', { class: 'font-medium text-highlighted' }, p.name),
-        // FEAT-024: null while the profile row is only reserved (create job running) or the create failed
-        h('span', { class: 'font-mono text-xs text-muted' }, p.providerProfileId ?? '—')
+      // `providerProfileId` is null in two cases, both rendered as `—` with `data-profile-id=""`: no profile at
+      // all (orphan account) and FEAT-024 (the profile row is only reserved while the create job runs, or the
+      // create failed). The profile *name* is deliberately not rendered — the Label column carries the
+      // human-readable name.
+      const pid = row.original.browserProfile?.providerProfileId ?? null
+      return h('div', { 'class': 'flex min-w-0 flex-col', 'data-testid': 'ta-account' }, [
+        h('span', { 'class': 'whitespace-nowrap', 'data-testid': 'ta-account-email' }, row.original.loginEmail),
+        h('span', {
+          'class': 'font-mono text-xs text-muted',
+          'data-testid': 'ta-account-profile-id',
+          'data-profile-id': pid ?? '',
+          'title': pid ?? undefined
+        }, pid ?? '—')
       ])
     }
   },
