@@ -61,10 +61,14 @@ const amountText = computed(() => {
   return `${formatInt(topup.amount)} ${topup.currency}`
 })
 
+/**
+ * The same rule the API validates (`human-tasks.dto.ts`: 4–8 letters or digits) so the BO can never refuse a code
+ * the API would have accepted. A bank code is numeric in practice, which is what `inputmode="numeric"` is for.
+ */
 const codeError = computed(() => {
-  const digits = code.value.trim()
-  if (!digits) return 'กรอกรหัส OTP'
-  if (!/^\d{4,8}$/.test(digits)) return 'รหัส OTP เป็นตัวเลข 4–8 หลัก'
+  const value = code.value.trim()
+  if (!value) return 'กรอกรหัส OTP'
+  if (!/^[A-Za-z0-9]{4,8}$/.test(value)) return 'รหัส OTP เป็นตัวเลขหรือตัวอักษร 4–8 ตัว'
   return null
 })
 
