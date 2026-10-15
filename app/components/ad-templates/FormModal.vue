@@ -51,7 +51,8 @@
  * `utm` out of the PATCH entirely.
  *
  * **FEAT-050** (api-contract v1 §1, §2, §7 · spec AC-15…AC-17, AC-20): a 7th section "Add-On เชิงโต้ตอบ"
- * (`addon`, after `tracking`) carries the 8th config key `addOn` — the display card the build puts on the ad.
+ * (`addon`, between `cta` and `tracking` since the human moved it there on 2026-10-16) carries the 8th config
+ * key `addOn` — the display card the build puts on the ad.
  * The switch `adt-addon-enabled` decides the whole block exactly like `adt-utm-enabled` does: off → the body
  * sends `config.addOn: null`, on → the picked image (`adt-addon-pick` mounts FEAT-049's `MediaPicker`, which
  * lists, searches and uploads into the public library) plus `zoomClicks` (−5…5) and `displaySeconds` (2…10),
@@ -63,8 +64,12 @@
  * shape FEAT-038 uses for UTM. A template saved before this feature has no `addOn` key: it opens with the switch
  * off and a save that does not touch it leaves `addOn` out of the PATCH entirely (BUG-008 class, spec AC-16).
  *
- * Layout: seven sections — `adname`, then **UTM**, then TikTok's four in the TikTok page order as an
- * **accordion**, then `addon`.
+ * The "Call to action" multi-select carries one button in its hint slot (`adt-form-cta-all`, human request
+ * 2026-10-16): it selects every option `/options` offers, and a second press clears the list again (the field
+ * stays required, so an empty list still fails validation).
+ *
+ * Layout: seven sections — `adname`, then **UTM**, then TikTok's four as an **accordion** in the TikTok page
+ * order with `addon` in between: `identity`, `destination`, `cta`, `addon`, `tracking`.
  * `adname` and `utm` are always open and have no toggle (human decision 2026-10-11: UTM is ours and is set on
  * every template, so its "ผูก UTM" switch is visible at once and the section sits before ตัวตน; its live badge
  * `adt-sec-utm-default` still reads `ไม่ผูก` while the switch is off, AS-8). `identity` / `destination` / `cta` /
@@ -407,8 +412,8 @@ const SECTIONS = [
     keys: ['destination', 'allowOnTiktokPlatforms'] as const
   },
   { id: 'cta' as const, heading: 'Call to action', keys: ['cta'] as const },
-  { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const },
   { id: 'addon' as const, heading: 'Add-On เชิงโต้ตอบ', keys: ['addOn'] as const },
+  { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const },
   { id: 'utm' as const, heading: 'UTM', keys: ['utm'] as const }
 ] satisfies readonly { id: SectionId, heading: string, keys: readonly (keyof AdConfig)[] }[]
 
@@ -624,6 +629,23 @@ watch(postIsVerifying, (running) => {
 })
 
 onUnmounted(stopPostPolling)
+
+// ── the call-to-action list ──────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * One button toggles the whole list: it selects every option `/options` offers, and a second press clears the
+ * selection again. "Every option" means the options list, not what is stored — a key the list no longer knows
+ * (an older template) counts as nothing here, just as `configFromState()` drops it on save.
+ */
+const ctaAllSelected = computed(() => {
+  const all = props.options.ctaValue.map(item => item.value)
+  if (all.length === 0) return false
+  const picked = new Set(state.config.cta.values)
+  return all.every(value => picked.has(value))
+})
+
+function toggleCtaAll() {
+  state.config.cta.values = ctaAllSelected.value ? [] : props.options.ctaValue.map(item => item.value)
+}
 
 // ── the UTM section (FEAT-038 · spec U1) ─────────────────────────────────────────────────────────────────────────────
 /**
@@ -2061,82 +2083,25 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 :disabled="submitting"
                 data-testid="adt-form-cta"
               />
-            </UFormField>
-          </div>
-        </section>
-
-        <!-- 6. third-party tracking -->
-        <section class="border-t border-default pt-4">
-          <h3 class="text-sm font-semibold text-highlighted">
-            <button
-              type="button"
-              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
-              :aria-expanded="expanded.tracking"
-              aria-controls="adt-sec-tracking"
-              data-testid="adt-sec-tracking-toggle"
-              @click="toggleSection('tracking')"
-            >
-              <UIcon
-                :name="expanded.tracking ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
-                class="size-4 shrink-0 text-muted"
-              />
-              <span>การตั้งค่าการติดตามของบริษัทอื่น</span>
-              <UBadge
-                v-if="sectionIsDefault.tracking"
-                color="neutral"
-                variant="subtle"
-                size="sm"
-                data-testid="adt-sec-tracking-default"
-              >
-                Default
-              </UBadge>
-            </button>
-          </h3>
-
-          <div
-            v-show="expanded.tracking"
-            id="adt-sec-tracking"
-            class="mt-4 space-y-4"
-            data-testid="adt-sec-tracking"
-          >
-            <UFormField
-              label="Impression tracking URL"
-              name="config.tracking.impressionUrl"
-              hint="Optional"
-              :error="serverErrors['config.tracking.impressionUrl']"
-            >
-              <UInput
-                v-model="state.config.tracking.impressionUrl"
-                type="text"
-                inputmode="url"
-                placeholder="https://tracker.example/impression"
-                class="w-full"
-                :disabled="submitting"
-                data-testid="adt-form-impression-url"
-              />
-            </UFormField>
-
-            <UFormField
-              label="Click tracking URL"
-              name="config.tracking.clickUrl"
-              hint="Optional"
-              :error="serverErrors['config.tracking.clickUrl']"
-            >
-              <UInput
-                v-model="state.config.tracking.clickUrl"
-                type="text"
-                inputmode="url"
-                placeholder="https://tracker.example/click"
-                class="w-full"
-                :disabled="submitting"
-                data-testid="adt-form-click-url"
-              />
+              <template #hint>
+                <UButton
+                  :label="ctaAllSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'"
+                  color="neutral"
+                  variant="link"
+                  size="xs"
+                  class="p-0"
+                  :disabled="submitting || options.ctaValue.length === 0"
+                  :aria-pressed="ctaAllSelected"
+                  data-testid="adt-form-cta-all"
+                  @click="toggleCtaAll"
+                />
+              </template>
             </UFormField>
           </div>
         </section>
 
         <!--
-          7. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
+          6. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
           with the `Default` badge while there is no add-on, auto-expanded by `expandSectionsOf` on a 400.
         -->
         <section class="border-t border-default pt-4">
@@ -2281,6 +2246,76 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             >
               {{ addOnSectionError }}
             </p>
+          </div>
+        </section>
+
+        <!-- 7. third-party tracking -->
+        <section class="border-t border-default pt-4">
+          <h3 class="text-sm font-semibold text-highlighted">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
+              :aria-expanded="expanded.tracking"
+              aria-controls="adt-sec-tracking"
+              data-testid="adt-sec-tracking-toggle"
+              @click="toggleSection('tracking')"
+            >
+              <UIcon
+                :name="expanded.tracking ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+                class="size-4 shrink-0 text-muted"
+              />
+              <span>การตั้งค่าการติดตามของบริษัทอื่น</span>
+              <UBadge
+                v-if="sectionIsDefault.tracking"
+                color="neutral"
+                variant="subtle"
+                size="sm"
+                data-testid="adt-sec-tracking-default"
+              >
+                Default
+              </UBadge>
+            </button>
+          </h3>
+
+          <div
+            v-show="expanded.tracking"
+            id="adt-sec-tracking"
+            class="mt-4 space-y-4"
+            data-testid="adt-sec-tracking"
+          >
+            <UFormField
+              label="Impression tracking URL"
+              name="config.tracking.impressionUrl"
+              hint="Optional"
+              :error="serverErrors['config.tracking.impressionUrl']"
+            >
+              <UInput
+                v-model="state.config.tracking.impressionUrl"
+                type="text"
+                inputmode="url"
+                placeholder="https://tracker.example/impression"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="adt-form-impression-url"
+              />
+            </UFormField>
+
+            <UFormField
+              label="Click tracking URL"
+              name="config.tracking.clickUrl"
+              hint="Optional"
+              :error="serverErrors['config.tracking.clickUrl']"
+            >
+              <UInput
+                v-model="state.config.tracking.clickUrl"
+                type="text"
+                inputmode="url"
+                placeholder="https://tracker.example/click"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="adt-form-click-url"
+              />
+            </UFormField>
           </div>
         </section>
 
