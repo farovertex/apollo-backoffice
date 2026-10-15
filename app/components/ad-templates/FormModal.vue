@@ -39,11 +39,12 @@
  * **FEAT-042** (api-contract v1 §1.1, §2.2, §2.3 · spec §Behaviour — BO 1, AC-13): the section
  * "โพสต์ที่ผูกไว้" (`adt-post-info`) under the code field shows what TikTok says that code points at — chip,
  * cover, owner, caption, kind, validity window — and offers "ตรวจ" / "ตรวจอีกครั้ง"
- * (`POST /ad-templates/:id/post-info/verify`). Because the result arrives seconds **after** the save, a save
- * that started a lookup (create, or an edit with a **new** code) no longer closes the modal (spec A-3): it
- * switches to edit mode on the API's answer, toasts and emits as before, and polls `GET /ad-templates/:id`
- * every 2 s for up to 2 min while the status is `verifying`. A save that kept the stored code closes the modal exactly
- * as it always did. The code is never part of the section, of a toast or of a log line.
+ * (`POST /ad-templates/:id/post-info/verify`), which polls `GET /ad-templates/:id` every 2 s for at most 2 min
+ * while the status is `verifying`.
+ * **Every save the API accepted closes the modal** (human decision 2026-10-16) — a new Spark code included,
+ * which drops the stay-open-and-poll of spec A-3. The lookup keeps running on the API side and its result is
+ * read in the table; a later edit shows it in the section and can ask again.
+ * The code is never part of the section, of a toast or of a log line.
  *
  * A `config.utm` issue is not a field — it is rendered under the section (`adt-utm-error`), and so is the
  * `{ error }` text of a **502** (which also raises a toast and keeps the modal open with the values intact).
@@ -51,7 +52,8 @@
  * `utm` out of the PATCH entirely.
  *
  * **FEAT-050** (api-contract v1 §1, §2, §7 · spec AC-15…AC-17, AC-20): a 7th section "Add-On เชิงโต้ตอบ"
- * (`addon`, after `tracking`) carries the 8th config key `addOn` — the display card the build puts on the ad.
+ * (`addon`, between `cta` and `tracking` since the human moved it there on 2026-10-16) carries the 8th config
+ * key `addOn` — the display card the build puts on the ad.
  * The switch `adt-addon-enabled` decides the whole block exactly like `adt-utm-enabled` does: off → the body
  * sends `config.addOn: null`, on → the picked image (`adt-addon-pick` mounts FEAT-049's `MediaPicker`, which
  * lists, searches and uploads into the public library) plus `zoomClicks` (−5…5) and `displaySeconds` (2…10),
@@ -78,8 +80,12 @@
  * ★ `config.destination.page.buttonImageId` (this feature) and `config.cta` (the ad's own call-to-action,
  * section 5 below) are unrelated keys that happen to share the English word "CTA" — never conflated.
  *
- * Layout: seven sections — `adname`, then **UTM**, then TikTok's four in the TikTok page order as an
- * **accordion**, then `addon`.
+ * The "Call to action" multi-select carries one button in its hint slot (`adt-form-cta-all`, human request
+ * 2026-10-16): it selects every option `/options` offers, and a second press clears the list again (the field
+ * stays required, so an empty list still fails validation).
+ *
+ * Layout: seven sections — `adname`, then **UTM**, then TikTok's four as an **accordion** in the TikTok page
+ * order with `addon` in between: `identity`, `destination`, `cta`, `addon`, `tracking`.
  * `adname` and `utm` are always open and have no toggle (human decision 2026-10-11: UTM is ours and is set on
  * every template, so its "ผูก UTM" switch is visible at once and the section sits before ตัวตน; its live badge
  * `adt-sec-utm-default` still reads `ไม่ผูก` while the switch is off, AS-8). `identity` / `destination` / `cta` /
@@ -165,14 +171,10 @@ const { admin } = useAuth()
 const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
 
 /**
- * FEAT-042 — the template a save answered with, while the modal stays open on it (spec A-3). `null` in every
- * other situation; reset on every open. It wins over the prop, so after a create the modal is an edit of the
- * new row (title, "Save" button, PATCH body, post section) without the page having to re-open it.
+ * The row the form works on. Every accepted save closes the modal (human decision 2026-10-16), so this is
+ * simply the prop — nothing switches a create into an edit while the modal is open any more.
  */
-const savedTemplate = ref<AdTemplate | null>(null)
-
-/** the row the form works on: the prop, or the answer of the save that kept the modal open */
-const editing = computed<AdTemplate | null>(() => savedTemplate.value ?? props.template)
+const editing = computed<AdTemplate | null>(() => props.template)
 
 const isEdit = computed(() => editing.value !== null)
 
@@ -468,8 +470,8 @@ const SECTIONS = [
     keys: ['destination', 'allowOnTiktokPlatforms'] as const
   },
   { id: 'cta' as const, heading: 'Call to action', keys: ['cta'] as const },
-  { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const },
   { id: 'addon' as const, heading: 'Add-On เชิงโต้ตอบ', keys: ['addOn'] as const },
+  { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const },
   { id: 'utm' as const, heading: 'UTM', keys: ['utm'] as const }
 ] satisfies readonly { id: SectionId, heading: string, keys: readonly (keyof AdConfig)[] }[]
 
@@ -629,7 +631,7 @@ async function readPostInfo() {
   }
 }
 
-/** on open (and after a save that kept the modal open): render what we have, then read the full view */
+/** on open: render what the row carried, then read the full view */
 function initPostInfo() {
   postSession++
   postGaveUp.value = false
@@ -685,6 +687,23 @@ watch(postIsVerifying, (running) => {
 })
 
 onUnmounted(stopPostPolling)
+
+// ── the call-to-action list ──────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * One button toggles the whole list: it selects every option `/options` offers, and a second press clears the
+ * selection again. "Every option" means the options list, not what is stored — a key the list no longer knows
+ * (an older template) counts as nothing here, just as `configFromState()` drops it on save.
+ */
+const ctaAllSelected = computed(() => {
+  const all = props.options.ctaValue.map(item => item.value)
+  if (all.length === 0) return false
+  const picked = new Set(state.config.cta.values)
+  return all.every(value => picked.has(value))
+})
+
+function toggleCtaAll() {
+  state.config.cta.values = ctaAllSelected.value ? [] : props.options.ctaValue.map(item => item.value)
+}
 
 // ── the UTM section (FEAT-038 · spec U1) ─────────────────────────────────────────────────────────────────────────────
 /**
@@ -887,8 +906,6 @@ function resetForm() {
 
 watch(open, (isOpen) => {
   if (isOpen) {
-    // a previous save must not leak into the next open (FEAT-042 stay-open rule)
-    savedTemplate.value = null
     resetForm()
     initPostInfo()
     return
@@ -1498,38 +1515,12 @@ function onFormError(event: FormErrorEvent) {
 
 // ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
- * FEAT-042 — the save really started a lookup, so the modal has something to wait for (api-contract §2.1):
- * a create always verifies, a PATCH only when the body carries a code that **differs** from the stored one.
- * Keeping the saved code — whether through the hint (`{ selection: 'authCode' }` without `code`) or by not
- * touching the prefilled input (FEAT-017 serves the code, so the body repeats it) — changes nothing about the
- * post, and such a save closes the modal exactly as it did before this feature.
+ * Every save that the API accepted closes the modal — a new Spark code included (human decision 2026-10-16,
+ * which replaces FEAT-042 spec A-3: such a save used to stay open and poll the lookup for up to 2 min).
+ * The lookup still runs on the API side; its result is read in the table, and the post section of a later edit
+ * offers "ตรวจอีกครั้ง" for a fresh look. A save the API refused keeps the modal open with the values intact,
+ * exactly as before.
  */
-function startsLookup(config: Partial<AdConfigRequest> | undefined, original: AdTemplate | null): boolean {
-  const post = config?.identity?.post
-  if (post?.selection !== POST_AUTH_CODE) return false
-  if (!('code' in post) || typeof post.code !== 'string' || post.code === '') return false
-  if (!original) return true
-  return post.code !== storedSparkCode(original.config).trim()
-}
-
-/**
- * FEAT-042 spec A-3 — the save that started a lookup keeps the modal open on the API's answer: edit mode on
- * the saved row (title, "Save", PATCH on the next submit), the post section on its fresh `postInfo`, and the
- * poll while that is `verifying`. The form is re-seeded from the answer so a following save diffs against it.
- */
-function stayOpenOn(saved: AdTemplate) {
-  savedTemplate.value = saved
-  Object.assign(state, stateFrom(saved))
-  resetCodeMode()
-  submitError.value = null
-  clearServerErrors()
-  formRef.value?.clear()
-  postSession++
-  postGaveUp.value = false
-  postInfo.value = saved.postInfo ?? null
-  if (isPostInfoVerifying(postInfo.value)) startPostPolling()
-}
-
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   submitError.value = null
@@ -1555,12 +1546,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         body,
         retry: 0
       })
-      // a new code started a lookup → stay open and watch it; anything else closes as it always did
-      const keepOpen = startsLookup(body.config, original)
-      if (!keepOpen) open.value = false
+      open.value = false
       toast.add({ title: 'Template updated', description: updated.name, color: 'success' })
       emit('updated', updated)
-      if (keepOpen) stayOpenOn(updated)
     } catch (e) {
       showApiError(e, 'Could not update the template')
     } finally {
@@ -1575,12 +1563,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   try {
     // retry: 0 — exactly one POST per submit
     const created = await api<AdTemplate>('/ad-templates', { method: 'POST', body, retry: 0 })
-    // a create always carries the code, so the modal normally stays open on the new row (FEAT-042 A-3)
-    const keepOpen = startsLookup(body.config, null)
-    if (!keepOpen) open.value = false
+    open.value = false
     toast.add({ title: 'Template created', description: created.name, color: 'success' })
     emit('created', created)
-    if (keepOpen) stayOpenOn(created)
   } catch (e) {
     showApiError(e, 'Could not create the template')
   } finally {
@@ -2365,82 +2350,25 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 :disabled="submitting"
                 data-testid="adt-form-cta"
               />
-            </UFormField>
-          </div>
-        </section>
-
-        <!-- 6. third-party tracking -->
-        <section class="border-t border-default pt-4">
-          <h3 class="text-sm font-semibold text-highlighted">
-            <button
-              type="button"
-              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
-              :aria-expanded="expanded.tracking"
-              aria-controls="adt-sec-tracking"
-              data-testid="adt-sec-tracking-toggle"
-              @click="toggleSection('tracking')"
-            >
-              <UIcon
-                :name="expanded.tracking ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
-                class="size-4 shrink-0 text-muted"
-              />
-              <span>การตั้งค่าการติดตามของบริษัทอื่น</span>
-              <UBadge
-                v-if="sectionIsDefault.tracking"
-                color="neutral"
-                variant="subtle"
-                size="sm"
-                data-testid="adt-sec-tracking-default"
-              >
-                Default
-              </UBadge>
-            </button>
-          </h3>
-
-          <div
-            v-show="expanded.tracking"
-            id="adt-sec-tracking"
-            class="mt-4 space-y-4"
-            data-testid="adt-sec-tracking"
-          >
-            <UFormField
-              label="Impression tracking URL"
-              name="config.tracking.impressionUrl"
-              hint="Optional"
-              :error="serverErrors['config.tracking.impressionUrl']"
-            >
-              <UInput
-                v-model="state.config.tracking.impressionUrl"
-                type="text"
-                inputmode="url"
-                placeholder="https://tracker.example/impression"
-                class="w-full"
-                :disabled="submitting"
-                data-testid="adt-form-impression-url"
-              />
-            </UFormField>
-
-            <UFormField
-              label="Click tracking URL"
-              name="config.tracking.clickUrl"
-              hint="Optional"
-              :error="serverErrors['config.tracking.clickUrl']"
-            >
-              <UInput
-                v-model="state.config.tracking.clickUrl"
-                type="text"
-                inputmode="url"
-                placeholder="https://tracker.example/click"
-                class="w-full"
-                :disabled="submitting"
-                data-testid="adt-form-click-url"
-              />
+              <template #hint>
+                <UButton
+                  :label="ctaAllSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'"
+                  color="neutral"
+                  variant="link"
+                  size="xs"
+                  class="p-0"
+                  :disabled="submitting || options.ctaValue.length === 0"
+                  :aria-pressed="ctaAllSelected"
+                  data-testid="adt-form-cta-all"
+                  @click="toggleCtaAll"
+                />
+              </template>
             </UFormField>
           </div>
         </section>
 
         <!--
-          7. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
+          6. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
           with the `Default` badge while there is no add-on, auto-expanded by `expandSectionsOf` on a 400.
         -->
         <section class="border-t border-default pt-4">
@@ -2585,6 +2513,76 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             >
               {{ addOnSectionError }}
             </p>
+          </div>
+        </section>
+
+        <!-- 7. third-party tracking -->
+        <section class="border-t border-default pt-4">
+          <h3 class="text-sm font-semibold text-highlighted">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
+              :aria-expanded="expanded.tracking"
+              aria-controls="adt-sec-tracking"
+              data-testid="adt-sec-tracking-toggle"
+              @click="toggleSection('tracking')"
+            >
+              <UIcon
+                :name="expanded.tracking ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+                class="size-4 shrink-0 text-muted"
+              />
+              <span>การตั้งค่าการติดตามของบริษัทอื่น</span>
+              <UBadge
+                v-if="sectionIsDefault.tracking"
+                color="neutral"
+                variant="subtle"
+                size="sm"
+                data-testid="adt-sec-tracking-default"
+              >
+                Default
+              </UBadge>
+            </button>
+          </h3>
+
+          <div
+            v-show="expanded.tracking"
+            id="adt-sec-tracking"
+            class="mt-4 space-y-4"
+            data-testid="adt-sec-tracking"
+          >
+            <UFormField
+              label="Impression tracking URL"
+              name="config.tracking.impressionUrl"
+              hint="Optional"
+              :error="serverErrors['config.tracking.impressionUrl']"
+            >
+              <UInput
+                v-model="state.config.tracking.impressionUrl"
+                type="text"
+                inputmode="url"
+                placeholder="https://tracker.example/impression"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="adt-form-impression-url"
+              />
+            </UFormField>
+
+            <UFormField
+              label="Click tracking URL"
+              name="config.tracking.clickUrl"
+              hint="Optional"
+              :error="serverErrors['config.tracking.clickUrl']"
+            >
+              <UInput
+                v-model="state.config.tracking.clickUrl"
+                type="text"
+                inputmode="url"
+                placeholder="https://tracker.example/click"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="adt-form-click-url"
+              />
+            </UFormField>
           </div>
         </section>
 

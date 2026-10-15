@@ -110,27 +110,30 @@ function selectChannel(next: TopupChannel) {
   serverError.value = null
 }
 
+/** TASK-topup-min-currency — the QR minimum of **this account's currency** (USD → 10, same as the card channel) */
+const qrMin = computed(() => topupQrMinAmount(topupOptions.value, props.balanceCurrency))
+
 const localError = computed(() =>
   isCard.value
     ? topupAmountError(amount.value, { channel: 'card', currency: props.balanceCurrency, limit: cardLimit.value })
-    : topupAmountError(amount.value, { qrMin: topupQrMinAmount(topupOptions.value) })
+    : topupAmountError(amount.value, { qrMin: qrMin.value, currency: props.balanceCurrency })
 )
 const errorText = computed(() => serverError.value ?? (touched.value ? localError.value : null))
 const canSubmit = computed(() => !submitting.value && !props.disabled && localError.value === null)
 
-/** the amount label says which currency is being typed (QR keeps the words it always had) */
+/** the amount label says which currency is being typed — for both channels once the account's currency is known */
 const amountLabel = computed(() =>
-  isCard.value && props.balanceCurrency
-    ? `จำนวนเงิน (${props.balanceCurrency})`
+  props.balanceCurrency && props.balanceCurrency.toUpperCase() !== 'THB'
+    ? `จำนวนเงิน (${props.balanceCurrency.toUpperCase()})`
     : 'จำนวนเงิน (บาท)'
 )
 
 /**
- * `min` of the number input is also the browser's own constraint: with the QR minimum left in place a valid card
- * amount (10 USD) would be refused by the browser before the handler ever runs. QR keeps `TOPUP_MIN_AMOUNT`.
+ * `min` of the number input is also the browser's own constraint: with a THB minimum left in place a valid USD
+ * amount (10) would be refused by the browser before the handler ever runs — for QR and card alike.
  */
 const amountMin = computed(() => {
-  if (!isCard.value) return topupQrMinAmount(topupOptions.value)
+  if (!isCard.value) return qrMin.value
   return cardLimit.value?.min ?? 1
 })
 

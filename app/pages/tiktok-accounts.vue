@@ -2,10 +2,12 @@
 /**
  * FEAT-003 — TikTok accounts (functions 3.1 create, 3.3 list, delete from 3.2; api-contract.md v1).
  * One `GET /backend/tiktok-accounts` per load / Refresh / after create / after delete via `useApi()`; search is
- * client-side (label / loginEmail / profile name / profile id), rows sorted by createdAt desc, no pagination.
- * Password: the table renders the literal mask until the row toggle is on (value never in the DOM while masked);
- * Copy reads it from the row data. Delete confirms in a modal (BUG-029: with an "Also delete the browser profile"
- * checkbox, on by default, that sends `?deleteProfile=1` → `provider/delete` job).
+ * client-side (label / loginEmail / profile name / profile id — the name still matches although it is not
+ * rendered, see below), rows sorted by createdAt desc, no pagination.
+ * The passwords used to be columns with a per-row reveal toggle and a Copy button; they are gone since
+ * 2026-10-11 (see below) and the table renders no secret at all any more. Delete confirms in a modal (BUG-029:
+ * with an "Also delete the browser profile" checkbox, on by default, that sends `?deleteProfile=1` →
+ * `provider/delete` job).
  * FEAT-004: Login → `POST /backend/tiktok-accounts/:id/login` (202 / 409 → `TiktokAccountsLoginModal`, other →
  * toast). BUG-028: the button is **always enabled** — every click POSTs again and the API queues a new login job
  * whatever the account state; the job decides on its own whether it is already logged in (the page guards nothing,
@@ -23,7 +25,8 @@
  * opens `TiktokAccountsBatchModal` (parses the CSV in the browser, one `POST /backend/tiktok-accounts/batch`,
  * refresh on `imported`). The Password column became **Email password** (`ta-email-password`) + **TikTok password**
  * (`ta-password`), each with its own reveal set, and a **First login** column (`ta-first-login`) shows
- * `email_fail 2/3` / "Pending" / `—`. The flag's field name is never printed as a label.
+ * `email_fail 2/3` / "Pending" / `—` (2026-10-16: no column and no `—` any more — see below). The flag's field
+ * name is never printed as a label.
  * Account-level (Business Center) top-up: column **Balance** (`ta-balance`, the BC's shared cash balance read from
  * `query_payment_summary`) with **Reload balance** (`ta-balance-reload` → `POST /backend/topups/accounts/:id/balance`
  * 202 `{ jobId }`, then the same 2 s account poll until that job is no longer the running one), and column **Top up**
@@ -50,28 +53,59 @@
  * 2026-10-12 (human request) — row action **Edit** (`ta-edit`, first in the Actions cell) opens
  * `TiktokAccountsEditModal` with the row; only login email, email password, recovery email and TikTok password
  * are editable (`PATCH /backend/tiktok-accounts/:id`, changed keys only). `updated` → one refresh.
- * FEAT-051 (AC-35, api-contract §7) — column **บัตร** (`ta-cards`) with one button (`ta-cards-open`) opening
- * `TiktokAccountsCardsModal` (the account's saved cards, set-default and delete). The whole column exists for
- * **GOD / Payment only** — every payment-card route answers 403 for an Admin (AS-4), so the BO does not even
- * offer it. The Top up cell passes the account's `balanceCurrency` and name down to `TopupsRowActions`, which is
- * what decides whether the card channel of the pay popover is offered or disabled with a reason (AC-32).
- * FEAT-053 (AC-19/AC-20, api-contract §2/§3) — column **ช่องทาง auto** (`ta-auto-channel`) with the two-value
- * switch `ta-auto-channel-qr` / `ta-auto-channel-card`: which channel the system uses when it opens an auto
- * top-up round for this account. Changing it is **one** `PATCH /tiktok-accounts/:id` with
- * `{ autoTopupChannel }` and nothing else; 200 replaces the row with the returned view, 400 (no usable card) /
- * 403 (role) / 503 (no card key) leave the old value in place and toast the API's own text. Like the **บัตร**
- * column the whole column exists for **GOD / Payment only** — for an Admin it is not rendered at all and the
- * page issues no request for it (the key is 403 for them).
+ * FEAT-051 (AC-35, api-contract §7) — the account's saved cards (`TiktokAccountsCardsModal`: set-default and
+ * delete) are opened by `ta-cards-open`, **GOD / Payment only** — every payment-card route answers 403 for an
+ * Admin (AS-4), so the BO does not even offer it. That used to be its own column **บัตร** (`ta-cards`); since
+ * 2026-10-16 it is an item of the row's "⋯" menu (see below) and the `ta-cards` cell no longer exists. The Top
+ * up cell passes the account's `balanceCurrency` and name down to `TopupsRowActions`, which is what decides
+ * whether the card channel of the pay popover is offered or disabled with a reason (AC-32).
+ * FEAT-053 (AC-19/AC-20, api-contract §2/§3) — the account's auto top-up channel: which channel the system uses
+ * when it opens an auto top-up round for this account. It was a column **ช่องทาง auto** (`ta-auto-channel`) with
+ * the two-value switch `ta-auto-channel-qr` / `ta-auto-channel-card`; since 2026-10-16 the column is gone, the
+ * table only *shows* the value (read-only chip `ta-auto-channel` in the Balance cell) and the switch lives in the
+ * Edit modal (`ta-edit-auto-channel*`). What the API sees is unchanged: the key still travels in a
+ * `PATCH /tiktok-accounts/:id` (now inside the modal's one diff PATCH, AC-19), 400 (no usable card) / 403 (role) /
+ * 503 (no card key) still leave the old value in place and still show the API's own text. Like the cards the
+ * chip exists for **GOD / Payment only** — for an Admin nothing is rendered and the page issues no request for
+ * it (the key is 403 for them, AC-20).
+ * 2026-10-16 (human request) — **declutter**: the table went from 13 to 10 columns. Three columns that rendered
+ * the same controls on every row are gone and their content moved:
+ *   · **ช่องทาง auto** (2 buttons per row) → a read-only `UBadge` `ta-auto-channel` (`data-channel`) appended to
+ *     the `ta-autotopup-last` line of the **Balance** cell, GOD/Payment only; changing the channel is now a
+ *     field of the Edit modal and is saved by that modal's single diff PATCH (atomic, no separate request), so
+ *     `setAutoChannel()` / `autoChannelBusy` and `ta-auto-channel-qr` / `ta-auto-channel-card` are gone here.
+ *   · **บัตร** (1 button per row) and **Delete** → items of a new "⋯" `UDropdownMenu` (`ta-more`) at the end of
+ *     the **Actions** cell: `ta-cards-open` (GOD/Payment only) and `ta-delete`. A Nuxt UI menu item object is
+ *     not bound to the DOM, so both ids are stamped onto the rendered item element from the `item-label` slot
+ *     (`stampMenuItem`), and the menu itself is teleported out of the `<tr>`.
+ *   · **First login** (`—` on almost every row) → appended to the **Session status** cell, same badges, same
+ *     `ta-first-login` / `data-pending` / `data-fail` attributes and the same tooltips — but the column's `—`
+ *     placeholder is **dropped**: a row with neither a fail nor a pending flag renders no element at all, so
+ *     `ta-first-login` simply does not exist in that row's cell (it was pure noise next to the status badge).
+ * 2026-10-16 (human request) — **Login email** and **Browser profile** merged into one column **Account**
+ * (`id: 'account'`), in the Login email's old place right after Label, so the table is down to 9 columns. The
+ * cell (`ta-account`) is two lines: the login email on top (`ta-account-email`, `text-highlighted` — the
+ * foreground colour, not the muted one a `<td>` inherits, so the address reads as the row's identity; it stays
+ * unbolded, Label is the only bold column) and the AdsPower **provider profile id** below (`ta-account-profile-id`, `font-mono
+ * text-xs text-muted`, `title` = the full id, and `data-profile-id` = the id or `''` so a spec can read it
+ * without parsing text). The browser-profile **name** (`faro-01`) is not displayed anywhere any more — the
+ * Label column already carries the human-readable name — but the client-side search still matches it, so a row
+ * can match for a reason that is not visible in the result. The id line is `—` in both null cases:
+ * `browserProfile === null` (orphan account, bound to nothing) and `providerProfileId === null` (FEAT-024: the
+ * profile row is only reserved while the create job runs, or the create failed); `data-profile-id` is `''` for
+ * both. No copy button — this pass removes per-row buttons, it does not add them. Specs used to address these
+ * two cells by column index; they address `ta-account*` now.
+ * `ta-edit`, `ta-sync`, `ta-login`, `ta-balance*`, `ta-topup*`, `ta-adv-*` and `ta-bc-org*` are untouched.
  */
 import type { VNode } from 'vue'
-import type { TableColumn } from '@nuxt/ui'
+import type { DropdownMenuItem, TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
 import type { UseTimeAgoMessages } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { DiscoverJobResponse } from '#shared/types/advertisers'
-import type { AccountsResponse, LoginConflictBody, LoginJobResponse, PatchAccountBody, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
-import type { AccountBalanceResponse, TopupChannel, TopupView } from '#shared/types/topups'
+import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
+import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
 
 useSeoMeta({ title: 'TikTok accounts' })
@@ -80,6 +114,7 @@ const UButton = resolveComponent('UButton')
 const UBadge = resolveComponent('UBadge')
 const UTooltip = resolveComponent('UTooltip')
 const UIcon = resolveComponent('UIcon')
+const UDropdownMenu = resolveComponent('UDropdownMenu')
 const TopupsStatusBadge = resolveComponent('TopupsStatusBadge')
 const TopupsRowActions = resolveComponent('TopupsRowActions')
 
@@ -117,6 +152,9 @@ const searchDebounced = refDebounced(search, 250)
 const filtered = computed<TikTokAccount[]>(() => {
   const needle = searchDebounced.value.trim().toLowerCase()
   if (!needle) return accounts.value
+  // 2026-10-16: the browser-profile **name** is no longer rendered anywhere in the table, but it is still
+  // searchable on purpose (people know their profiles as `faro-01`). A row can therefore match for a reason the
+  // eye cannot see in the result — intended, do not "fix" by dropping the name here.
   return accounts.value.filter(a =>
     (a.label ?? '').toLowerCase().includes(needle)
     || a.loginEmail.toLowerCase().includes(needle)
@@ -189,6 +227,47 @@ function sessionBadge(s: SessionStatus) {
   return SESSION_BADGE[s] ?? { label: s, color: 'neutral', variant: 'subtle' }
 }
 
+/**
+ * FEAT-023 "Auto first login" — `email_fail 2/3` or "Pending". The flag's field name is never printed as a
+ * label. 2026-10-16: this used to be the **First login** column; it is rendered inside the Session status cell
+ * now (byte-identical badges, so `ta-first-login` + `data-pending` + `data-fail` keep working row-scoped).
+ * A row with nothing to say renders **nothing at all** — the column's `—` placeholder made sense in a column of
+ * its own, next to the session badge it is exactly the noise this task removes, so `ta-first-login` does not
+ * exist in the cell of a clean row.
+ */
+function firstLoginNode(a: TikTokAccount): VNode | null {
+  const fail = a.firstLoginFail
+  if (fail) {
+    // spec.md "UI behaviour": the badge reads `email_fail 2/3`; the tooltip explains the code
+    const count = firstLoginTryCount(fail, a.firstLoginTries)
+    const text = firstLoginFailText(fail)
+    return h(UTooltip, { text }, () => h(UBadge, {
+      'color': 'error',
+      'variant': 'subtle',
+      'size': 'sm',
+      'icon': 'i-lucide-triangle-alert',
+      'class': 'whitespace-nowrap font-mono',
+      'title': text,
+      'data-testid': 'ta-first-login',
+      'data-pending': a.pendingFirstLogin ? 'true' : 'false',
+      'data-fail': fail
+    }, () => count ? `${fail} ${count}` : fail))
+  }
+  if (a.pendingFirstLogin) {
+    return h(UTooltip, { text: AUTO_FIRST_LOGIN_HELP }, () => h(UBadge, {
+      'color': 'info',
+      'variant': 'subtle',
+      'size': 'sm',
+      'icon': 'i-lucide-clock',
+      'class': 'whitespace-nowrap',
+      'title': AUTO_FIRST_LOGIN_HELP,
+      'data-testid': 'ta-first-login',
+      'data-pending': 'true'
+    }, () => 'Pending'))
+  }
+  return null
+}
+
 // ── launching ads (FEAT-029) ─────────────────────────────────────────────────────────────────────────────────────────
 /**
  * UTable renders the `<tr>` itself and only lets a column add classes to it, so the row-level flag lives on
@@ -259,6 +338,47 @@ async function onLogin(account: TikTokAccount) {
 function askDelete(account: TikTokAccount) {
   deleteTarget.value = account
   deleteOpen.value = true
+}
+
+/** a "⋯" menu item plus the `data-testid` QA clicks (item objects are not bound to the DOM) */
+type RowAction = DropdownMenuItem & { label: string, testid: string }
+
+/**
+ * 2026-10-16 — the row's overflow menu: **บัตรที่จำไว้** (FEAT-051, GOD/Payment only — every payment-card route
+ * answers 403 for an Admin, so the item is not even offered) and **Delete**. Both used to be a button per row.
+ */
+function moreActions(account: TikTokAccount): RowAction[] {
+  const items: RowAction[] = []
+  if (canPay.value) {
+    items.push({
+      label: 'บัตรที่จำไว้',
+      icon: 'i-lucide-credit-card',
+      testid: 'ta-cards-open',
+      onSelect: () => openCards(account)
+    })
+  }
+  items.push({
+    label: 'Delete',
+    icon: 'i-lucide-trash-2',
+    color: 'error',
+    testid: 'ta-delete',
+    onSelect: () => askDelete(account)
+  })
+  return items
+}
+
+/**
+ * Nuxt UI 4 forwards only `class` / `ui` from an item object to the DOM, so a `data-testid` written on the item
+ * would land nowhere. The `item-label` slot stamps it onto the rendered menu item element itself
+ * (`[data-slot="item"]`, the element that owns the click and the disabled state) — and onto the label span if
+ * that ancestor ever disappears, so the id can never vanish from the DOM.
+ */
+function stampMenuItem(testid: string) {
+  return (vnode: VNode) => {
+    const el = vnode.el as HTMLElement | null
+    const target = el?.closest('[data-slot="item"]') ?? el
+    target?.setAttribute('data-testid', testid)
+  }
 }
 
 // ── discover / sync advertisers (FEAT-005) ───────────────────────────────────────────────────────────────────────────
@@ -525,49 +645,8 @@ function openCards(account: TikTokAccount) {
   cardsOpen.value = true
 }
 
-// ── FEAT-053 · auto top-up channel of the account (GOD/Payment only) ────────────────────────────────────────────────
-/** the account whose PATCH is in flight — the whole switch of that row is disabled while it is set */
-const autoChannelBusy = ref<string | null>(null)
-
-/**
- * One `PATCH /tiktok-accounts/:id` per **change** (AC-19). Clicking the value the account already has sends
- * nothing. There is no optimistic write: `data-channel` only ever shows what the API confirmed, so a 400 / 403 /
- * 503 leaves the old value standing by construction and the toast carries the API's own text as-is.
- */
-async function setAutoChannel(account: TikTokAccount, next: TopupChannel) {
-  if (autoChannelBusy.value) return
-  if (accountAutoTopupChannel(account) === next) return
-  const label = account.label ?? account.loginEmail
-  autoChannelBusy.value = account.id
-  try {
-    // retry: 0 — exactly one PATCH per click (ofetch would otherwise re-issue it on 5xx)
-    const updated = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(account.id)}`, {
-      method: 'PATCH',
-      retry: 0,
-      body: { autoTopupChannel: next } satisfies PatchAccountBody
-    })
-    // the row is replaced by the view the API returned (never by what was clicked)
-    polledById.value = new Map(polledById.value).set(updated.id, updated)
-    toast.add({
-      'title': `ช่องทางเติมอัตโนมัติ: ${TOPUP_CHANNEL_LABEL[accountAutoTopupChannel(updated)]}`,
-      'description': label,
-      'color': 'success',
-      'data-testid': 'ta-toast'
-    } as Parameters<typeof toast.add>[0])
-  } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
-    const status = err.response?.status ?? err.statusCode
-    toast.add({
-      // the API's own text, whatever the status (400 no card / 403 role / 503 no key) — never rewritten here
-      'title': 'ตั้งช่องทางเติมอัตโนมัติไม่สำเร็จ',
-      'description': err.data?.error ?? err.message ?? 'ทำรายการไม่สำเร็จ',
-      'color': status === 403 || status === 409 ? 'warning' : 'error',
-      'data-testid': 'ta-toast'
-    } as Parameters<typeof toast.add>[0])
-  } finally {
-    autoChannelBusy.value = null
-  }
-}
+// 2026-10-16 — FEAT-053's `setAutoChannel()` / `autoChannelBusy` left this page with the column: the channel is
+// now one of the fields of the Edit modal and is written by that modal's single diff PATCH.
 
 const advOpen = ref(false)
 const advTargetId = ref<string | null>(null)
@@ -585,8 +664,9 @@ function openAdvertisers(account: TikTokAccount) {
 
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
- * FEAT-053 — the list is a computed because the **ช่องทาง auto** column must not exist at all for an Admin
- * (AC-20); every other column is exactly the one it was before.
+ * The list is a computed because two cells read `canPay`: the Balance cell's auto-channel chip and the "⋯"
+ * menu's cards item must not exist at all for an Admin (FEAT-053 AC-20 / FEAT-051 AC-35). Nine columns since
+ * the 2026-10-16 declutter and the Login email + Browser profile merge.
  */
 const columns = computed<TableColumn<TikTokAccount>[]>(() => [
   {
@@ -609,23 +689,26 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       ])
     }
   },
-  {
-    accessorKey: 'loginEmail',
-    header: 'Login email',
-    cell: ({ row }) => h('span', { class: 'whitespace-nowrap' }, row.original.loginEmail)
-  },
   // 2026-10-11 (human request): the "Email password", "Recovery email" and "TikTok password" columns are no
   // longer rendered in the table — the values stay in the row data and in the edit/add modals.
+  // 2026-10-16 (human request): "Login email" + "Browser profile" merged into this one two-line cell.
   {
-    id: 'browserProfile',
-    header: 'Browser profile',
+    id: 'account',
+    header: 'Account',
     cell: ({ row }) => {
-      const p = row.original.browserProfile
-      if (!p) return h('span', { class: 'text-muted' }, '—')
-      return h('div', { class: 'flex flex-col whitespace-nowrap' }, [
-        h('span', { class: 'font-medium text-highlighted' }, p.name),
-        // FEAT-024: null while the profile row is only reserved (create job running) or the create failed
-        h('span', { class: 'font-mono text-xs text-muted' }, p.providerProfileId ?? '—')
+      // `providerProfileId` is null in two cases, both rendered as `—` with `data-profile-id=""`: no profile at
+      // all (orphan account) and FEAT-024 (the profile row is only reserved while the create job runs, or the
+      // create failed). The profile *name* is deliberately not rendered — the Label column carries the
+      // human-readable name.
+      const pid = row.original.browserProfile?.providerProfileId ?? null
+      return h('div', { 'class': 'flex min-w-0 flex-col', 'data-testid': 'ta-account' }, [
+        h('span', { 'class': 'whitespace-nowrap text-highlighted', 'data-testid': 'ta-account-email' }, row.original.loginEmail),
+        h('span', {
+          'class': 'font-mono text-xs text-muted',
+          'data-testid': 'ta-account-profile-id',
+          'data-profile-id': pid ?? '',
+          'title': pid ?? undefined
+        }, pid ?? '—')
       ])
     }
   },
@@ -633,10 +716,11 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
     accessorKey: 'sessionStatus',
     header: 'Session status',
     cell: ({ row }) => {
-      const b = sessionBadge(row.original.sessionStatus)
-      const err = row.original.lastLoginError
+      const a = row.original
+      const b = sessionBadge(a.sessionStatus)
+      const err = a.lastLoginError
       const children = [h(UBadge, { color: b.color, variant: b.variant, class: 'whitespace-nowrap' }, () => b.label)]
-      if (row.original.sessionStatus === 'loggedOut' && err) {
+      if (a.sessionStatus === 'loggedOut' && err) {
         children.push(h(UBadge, {
           'color': 'neutral',
           'variant': 'outline',
@@ -648,45 +732,11 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
           'data-error': err
         }, () => loginErrorShort(err)))
       }
+      // 2026-10-16 — the former **First login** column (FEAT-023); same badges, same ids, same tooltips, next
+      // to the status badge now. Nothing to say → nothing is appended (no `—`, no `ta-first-login`).
+      const firstLogin = firstLoginNode(a)
+      if (firstLogin) children.push(firstLogin)
       return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
-    }
-  },
-  {
-    id: 'firstLogin',
-    // FEAT-023: the UI name of `pendingFirstLogin` is "Auto first login" / this column — never the field name
-    header: 'First login',
-    cell: ({ row }) => {
-      const a = row.original
-      const fail = a.firstLoginFail
-      if (fail) {
-        // spec.md "UI behaviour": the cell reads `email_fail 2/3`; the tooltip explains the code
-        const count = firstLoginTryCount(fail, a.firstLoginTries)
-        const text = firstLoginFailText(fail)
-        return h(UTooltip, { text }, () => h(UBadge, {
-          'color': 'error',
-          'variant': 'subtle',
-          'size': 'sm',
-          'icon': 'i-lucide-triangle-alert',
-          'class': 'whitespace-nowrap font-mono',
-          'title': text,
-          'data-testid': 'ta-first-login',
-          'data-pending': a.pendingFirstLogin ? 'true' : 'false',
-          'data-fail': fail
-        }, () => count ? `${fail} ${count}` : fail))
-      }
-      if (a.pendingFirstLogin) {
-        return h(UTooltip, { text: AUTO_FIRST_LOGIN_HELP }, () => h(UBadge, {
-          'color': 'info',
-          'variant': 'subtle',
-          'size': 'sm',
-          'icon': 'i-lucide-clock',
-          'class': 'whitespace-nowrap',
-          'title': AUTO_FIRST_LOGIN_HELP,
-          'data-testid': 'ta-first-login',
-          'data-pending': 'true'
-        }, () => 'Pending'))
-      }
-      return h('span', { 'class': 'text-muted', 'data-testid': 'ta-first-login', 'data-pending': 'false' }, '—')
     }
   },
   {
@@ -825,6 +875,21 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
         'data-testid': 'ta-autotopup-last',
         'data-at': autoAt ?? ''
       }, autoAt ? `เติมอัตโนมัติล่าสุด ${formatDateTime(autoAt)}` : 'ยังไม่เคยเติมอัตโนมัติ'))
+      // 2026-10-16 — FEAT-053's auto channel, read-only (the switch moved into the Edit modal). GOD/Payment
+      // only: an Admin gets no element at all and the page still issues no request for the key (AC-20).
+      if (canPay.value) {
+        const channel = accountAutoTopupChannel(a)
+        children.push(h(UBadge, {
+          'color': 'neutral',
+          'variant': 'subtle',
+          'size': 'sm',
+          'icon': channel === 'card' ? 'i-lucide-credit-card' : 'i-lucide-qr-code',
+          'class': 'whitespace-nowrap',
+          'title': 'ช่องทางที่ระบบใช้เมื่อเติมเงินอัตโนมัติ — แก้ได้ที่ปุ่ม Edit',
+          'data-testid': 'ta-auto-channel',
+          'data-channel': channel
+        }, () => `auto: ${TOPUP_CHANNEL_LABEL[channel]}`))
+      }
       return h('div', { class: 'flex flex-col items-start gap-0.5' }, children)
     }
   },
@@ -861,64 +926,8 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       return h('div', { 'class': 'flex flex-wrap items-center gap-1', 'data-testid': 'ta-topup', 'data-status': topup?.status ?? '' }, children)
     }
   },
-  // FEAT-051 (AC-35) — saved cards of the account; GOD/Payment only (every card route 403s for an Admin)
-  {
-    id: 'cards',
-    header: 'บัตร',
-    cell: ({ row }) => {
-      const a = row.original
-      if (!canPay.value) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-cards' }, '—')
-      return h('div', { 'class': 'flex items-center gap-1', 'data-testid': 'ta-cards' }, [
-        h(UButton, {
-          'label': 'บัตร',
-          'icon': 'i-lucide-credit-card',
-          'color': 'neutral',
-          'variant': 'outline',
-          'size': 'xs',
-          'aria-label': 'บัตรที่จำไว้',
-          'ui': ACTION_LABEL_UI,
-          'data-testid': 'ta-cards-open',
-          'onClick': () => openCards(a)
-        })
-      ])
-    }
-  },
-  // FEAT-053 (AC-19/AC-20) — which channel the system uses for an auto round of this account; GOD/Payment only
-  ...(canPay.value
-    ? [{
-      id: 'autoChannel',
-      header: 'ช่องทาง auto',
-      cell: ({ row }: { row: { original: TikTokAccount } }) => {
-        const a = row.original
-        const current = accountAutoTopupChannel(a)
-        const busy = autoChannelBusy.value === a.id
-        const option = (value: TopupChannel, icon: string) => h(UButton, {
-          'label': TOPUP_CHANNEL_LABEL[value],
-          icon,
-          'color': current === value ? 'primary' : 'neutral',
-          'variant': current === value ? 'solid' : 'outline',
-          'size': 'xs',
-          'role': 'radio',
-          'aria-checked': current === value,
-          'disabled': busy,
-          'data-testid': `ta-auto-channel-${value}`,
-          // clicking the current value sends nothing (`setAutoChannel` returns early)
-          'onClick': () => setAutoChannel(a, value)
-        })
-        return h('div', {
-          'class': 'flex items-center gap-1 whitespace-nowrap',
-          'role': 'radiogroup',
-          'aria-label': 'ช่องทางเติมเงินอัตโนมัติ',
-          'data-testid': 'ta-auto-channel',
-          'data-channel': current,
-          'data-busy': busy ? '1' : '0'
-        }, [
-          option('qr', 'i-lucide-qr-code'),
-          option('card', 'i-lucide-credit-card')
-        ])
-      }
-    } satisfies TableColumn<TikTokAccount>]
-    : []),
+  // 2026-10-16 — the FEAT-051 **บัตร** column and the FEAT-053 **ช่องทาง auto** column are gone: the cards
+  // button is an item of the row's "⋯" menu and the channel is the read-only chip of the Balance cell.
   {
     accessorKey: 'createdAt',
     header: 'Created',
@@ -980,19 +989,26 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
             'onClick': () => onLogin(row.original)
           })
         ])),
-        h(UTooltip, { text: 'Delete', disabled: wide }, () => h('span', { class: 'inline-flex' }, [
-          h(UButton, {
-            'label': 'Delete',
-            'icon': 'i-lucide-trash-2',
-            'color': 'error',
-            'variant': 'subtle',
+        // 2026-10-16 — everything that is not an everyday action lives behind "⋯" (saved cards + Delete)
+        h(UDropdownMenu, {
+          items: moreActions(row.original),
+          content: { align: 'end' }
+        }, {
+          'default': () => h(UButton, {
+            'icon': 'i-lucide-ellipsis-vertical',
+            'color': 'neutral',
+            'variant': 'outline',
             'size': 'xs',
-            'ui': ACTION_LABEL_UI,
-            'aria-label': 'Delete',
-            'data-testid': 'ta-delete',
-            'onClick': () => askDelete(row.original)
-          })
-        ]))
+            'aria-label': 'More actions',
+            'data-testid': 'ta-more'
+          }),
+          // the item object itself is not bound to the DOM — stamp the id onto the rendered item element
+          'item-label': ({ item }: { item: RowAction }) => h('span', {
+            class: 'truncate',
+            onVnodeMounted: stampMenuItem(item.testid),
+            onVnodeUpdated: stampMenuItem(item.testid)
+          }, item.label)
+        })
       ])
     }
   }
@@ -1181,6 +1197,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
       <TiktokAccountsEditModal
         v-model:open="editOpen"
         :account="editTarget"
+        :can-pay="canPay"
         @updated="refresh()"
       />
       <TiktokAccountsDeleteModal
