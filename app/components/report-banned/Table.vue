@@ -4,6 +4,9 @@
  * nesting, unlike `ReportSummaryGroupTable`'s account→advertiser groups) and **no sortable headers** — the
  * API fixes the order (`bannedAt` desc, null last, tie by advertiser id). The footer always comes from the
  * response's top-level counts and `totals`, never from summing the visible rows (pagination makes that wrong).
+ *
+ * FEAT-047 — adds the "Launched" column (`rb-row-launched`) between Advertiser and Banned at, mirroring
+ * `rb-row-banned`'s `formatDateTime`/`data-iso` handling; footer first cell `colspan` 3 → 4.
  */
 import type { BannedRow } from '#shared/types/report-banned'
 import type { KpiMetrics } from '#shared/types/reports'
@@ -67,6 +70,12 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
             scope="col"
             class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
           >
+            วันที่ยิงแอด
+          </th>
+          <th
+            scope="col"
+            class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+          >
             วันที่โดนแบน
           </th>
           <th
@@ -109,6 +118,13 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
           </td>
           <td
             class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
+            data-testid="rb-row-launched"
+            :data-iso="row.launchedAt ?? ''"
+          >
+            {{ formatDateTime(row.launchedAt) }}
+          </td>
+          <td
+            class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
             data-testid="rb-row-banned"
             :data-iso="row.bannedAt ?? ''"
           >
@@ -132,7 +148,7 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
           :data-accounts="accountCount"
           class="bg-elevated font-semibold"
         >
-          <td colspan="3" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
+          <td colspan="4" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
             รวมทั้งหมด · {{ formatInt(adCount) }} โฆษณา · {{ formatInt(advertiserCount) }} advertisers · {{ formatInt(accountCount) }} บัญชี
           </td>
           <td
