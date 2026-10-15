@@ -50,6 +50,11 @@
  * 2026-10-12 (human request) — row action **Edit** (`ta-edit`, first in the Actions cell) opens
  * `TiktokAccountsEditModal` with the row; only login email, email password, recovery email and TikTok password
  * are editable (`PATCH /backend/tiktok-accounts/:id`, changed keys only). `updated` → one refresh.
+ * FEAT-051 (AC-35, api-contract §7) — column **บัตร** (`ta-cards`) with one button (`ta-cards-open`) opening
+ * `TiktokAccountsCardsModal` (the account's saved cards, set-default and delete). The whole column exists for
+ * **GOD / Payment only** — every payment-card route answers 403 for an Admin (AS-4), so the BO does not even
+ * offer it. The Top up cell passes the account's `balanceCurrency` and name down to `TopupsRowActions`, which is
+ * what decides whether the card channel of the pay popover is offered or disabled with a reason (AC-32).
  */
 import type { VNode } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
@@ -504,6 +509,15 @@ async function onSync(account: TikTokAccount) {
 }
 
 // ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
+// FEAT-051 — saved cards of one account (GOD/Payment only; the column is not rendered for anybody else)
+const cardsOpen = ref(false)
+const cardsTarget = ref<TikTokAccount | null>(null)
+
+function openCards(account: TikTokAccount) {
+  cardsTarget.value = account
+  cardsOpen.value = true
+}
+
 const advOpen = ref(false)
 const advTargetId = ref<string | null>(null)
 // resolved from the live rows so the slideover sees the polled `runningJob` / `advertiserCount`
@@ -778,14 +792,40 @@ const columns: TableColumn<TikTokAccount>[] = [
           viewer: viewer.value,
           prefix: 'ta-topup',
           busy: !!topup && busyId.value === topup.id,
+          // FEAT-051 — the account's own currency and name decide the card option and fill the confirm dialog
+          balanceCurrency: a.balanceCurrency,
+          accountName: a.bcOrgName || a.label || a.loginEmail,
           onCreated: patchTopup,
           onOpen: onOpenTopup,
           onRecheck: recheckTopup,
-          onRelease: releaseTopup
+          onRelease: releaseTopup,
+          onChanged: patchTopup
         }))
       }
       if (!children.length) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-topup' }, '—')
       return h('div', { 'class': 'flex flex-wrap items-center gap-1', 'data-testid': 'ta-topup', 'data-status': topup?.status ?? '' }, children)
+    }
+  },
+  // FEAT-051 (AC-35) — saved cards of the account; GOD/Payment only (every card route 403s for an Admin)
+  {
+    id: 'cards',
+    header: 'บัตร',
+    cell: ({ row }) => {
+      const a = row.original
+      if (!canPay.value) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-cards' }, '—')
+      return h('div', { 'class': 'flex items-center gap-1', 'data-testid': 'ta-cards' }, [
+        h(UButton, {
+          'label': 'บัตร',
+          'icon': 'i-lucide-credit-card',
+          'color': 'neutral',
+          'variant': 'outline',
+          'size': 'xs',
+          'aria-label': 'บัตรที่จำไว้',
+          'ui': ACTION_LABEL_UI,
+          'data-testid': 'ta-cards-open',
+          'onClick': () => openCards(a)
+        })
+      ])
     }
   },
   {
@@ -1068,6 +1108,10 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         v-model:open="advOpen"
         :account="advTarget"
         @sync="onSync"
+      />
+      <TiktokAccountsCardsModal
+        v-model:open="cardsOpen"
+        :account="cardsTarget"
       />
       <TopupsPayModal
         v-model:open="modalOpen"
