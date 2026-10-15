@@ -19,6 +19,11 @@
  *
  * The client-side validation is a hint that saves a round trip; whatever the API answers (400 / 409 / 503) is
  * shown **with the API's own text** in `tp-card-error` and the modal stays open so the admin can fix it.
+ *
+ * FEAT-053 (AC-22) — opening the modal also fires **one** `GET /topups/options?tiktokAccountId=…`
+ * (`useTopupOptions`, next to the one `GET payment-cards`) so the per-day cap of this account can be shown under
+ * the amount (`tp-card-remaining-today`). A currency without `maxPerDay`, or an options request that did not
+ * answer 200, renders **no** such element and changes nothing else — the payment is never blocked by it.
  */
 import type { FetchError } from 'ofetch'
 import type { ModalProps } from '@nuxt/ui'
@@ -123,6 +128,10 @@ const amountText = computed(() => {
   return props.currency ? `${value} ${props.currency}` : value
 })
 
+// ── FEAT-053 · the account's per-day cap (one request per open, silent fallback) ─────────────────────────────────────
+const { options: topupOptions, load: loadOptions, reset: resetOptions } = useTopupOptions()
+const remainingToday = computed(() => topupRemainingToday(topupOptions.value))
+
 /** expiry typed as digits becomes `MM/YY` while typing — the value sent is always `MM/YY` */
 function onExpiryInput(value: string | number) {
   const digits = onlyDigits(String(value)).slice(0, 4)
@@ -138,12 +147,15 @@ watch(open, (isOpen) => {
     confirmOpen.value = false
     cards.value = []
     void loadCards()
+    // FEAT-053 — exactly one `GET /topups/options` per open
+    void loadOptions(props.tiktokAccountId)
   } else {
     // ★ nothing of the card survives a closed modal
     resetForm()
     cardsSession++
     serverError.value = null
     confirmOpen.value = false
+    resetOptions()
   }
 })
 
@@ -244,6 +256,14 @@ function succeed(topup: TopupView) {
             data-testid="tp-card-amount"
             :data-currency="currency ?? ''"
           >{{ amountText }}</span>
+          <!-- FEAT-053 (AC-22) — only when the server sent a `maxPerDay` for this currency -->
+          <span
+            v-if="remainingToday !== null"
+            class="w-full text-right text-xs tabular-nums text-muted"
+            data-testid="tp-card-remaining-today"
+            :data-remaining="remainingToday"
+            :data-currency="currency ?? ''"
+          >{{ remainingTodayText(remainingToday, currency) }}</span>
         </div>
 
         <USkeleton v-if="cardsPending" class="h-10 w-full" data-testid="tp-card-loading" />

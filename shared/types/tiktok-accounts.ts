@@ -28,10 +28,13 @@
  * `POST /tiktok-accounts` and a batch row (key present only when non-empty), and by the new `PATCH
  * /tiktok-accounts/:id` (type only — no BO caller this round, prompt §3.4). `LoginError` gains
  * `mailboxIdentityCheck` (the mailbox driver could not pass account.live.com/identity/confirm).
+ * FEAT-053 (api-contract.md v1 §2/§3) — the view gains `autoTopupChannel` (key 39, right after
+ * `autoTopupDisabled`) and `PatchAccountBody` gains the same key as its sixth and only non-credential field
+ * (GOD/Payment only: anybody else sending it gets 403, the whole request is refused).
  */
 
 import type { HumanTaskKind } from './human-tasks'
-import type { TopupView } from './topups'
+import type { TopupChannel, TopupView } from './topups'
 
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
 
@@ -170,6 +173,14 @@ export interface TikTokAccount {
    * for it. Optional for an API that predates the feature (missing ⇒ `false`).
    */
   autoTopupDisabled?: boolean
+  /**
+   * FEAT-053 (api-contract §3, key 39) — which channel the system uses when it opens an auto top-up round for
+   * this account: `qr` (the default, and what every row written before the feature reads as) or `card`
+   * (a `pendingApproval` round a human still has to pay). Only `PATCH /tiktok-accounts/:id` writes it, and only
+   * GOD/Payment may send that key. Optional here for an API that predates the feature — read it through
+   * `accountAutoTopupChannel()` (`app/utils/topup.ts`), never directly.
+   */
+  autoTopupChannel?: TopupChannel
   /** FEAT-034 — system bookkeeping of the last auto top-up round opened for this account; always present */
   autoTopup: AccountAutoTopup
   /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
@@ -277,8 +288,9 @@ export interface LoginConflictBody {
 
 /**
  * `PATCH /tiktok-accounts/:id` body (`.strict()`, every key optional, at least one required). Sent by the Edit
- * modal (`TiktokAccountsEditModal`, 2026-10-12 human request) with **only the keys the user changed**. Exactly
- * these five fields are editable; anything else (profile, flags) is 400 on the API.
+ * modal (`TiktokAccountsEditModal`, 2026-10-12 human request) with **only the keys the user changed**, and
+ * (FEAT-053) by the "ช่องทาง auto" column with `autoTopupChannel` alone. Exactly these six fields are
+ * editable; anything else (profile, flags) is 400 on the API.
  * FEAT-036 history: the body used to carry `recoveryEmail` alone (a string sets it, `null` clears it — unchanged).
  * TASK-account-label (2026-10-14): `label` joined the editable keys — trimmed ≤ 100, `''`/`null` clears it.
  */
@@ -291,4 +303,10 @@ export interface PatchAccountBody {
   recoveryEmail?: string | null
   /** TikTok Ads password */
   password?: string
+  /**
+   * FEAT-053 (api-contract §2) — the account's auto top-up channel. Sent **alone** by the "ช่องทาง auto" column
+   * of `/tiktok-accounts`; the API answers 403 (role), 503 (no card key) or 400 (no usable card) and the BO
+   * shows that text as-is. Setting `'qr'` always works.
+   */
+  autoTopupChannel?: TopupChannel
 }

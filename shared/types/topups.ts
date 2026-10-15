@@ -10,6 +10,9 @@
  * FEAT-029 (api-contract.md v1 §4): a round carries `trigger` (`manual` | `auto`) and `requestedBy` is
  * `null` for a round the system opened on its own (auto top-up) — every other key behaves as before.
  *
+ * FEAT-053 (api-contract.md v1 §1): `GET /topups/options` tells the BO the server's real per-currency card
+ * limits (`TopupOptionsResponse`), which replaces the table the BO used to mirror by hand.
+ *
  * FEAT-051 (api-contract.md v1 §1/§6): a round also carries a **channel** (`qr` | `card`). Everything the card
  * channel adds is optional here on purpose — a row written before the feature (and an API that predates it) has
  * none of the keys, and `topupChannel()` / `topupCard()` in `app/utils/topup.ts` read a missing `channel` as `qr`
@@ -207,6 +210,55 @@ export interface AccountTopupResult {
 
 export interface AccountTopupResponse {
   results: AccountTopupResult[]
+}
+
+/**
+ * FEAT-053 (api-contract §1) — one currency's card limits as `GET /topups/options` sends them.
+ * `maxPerDay` / `autoAmount` are `null` when the server's `TOPUP_CARD_LIMITS` does not set them (the default
+ * table in the API's code has neither), so the BO must treat both as "no rule" and never invent a number.
+ */
+export interface TopupCardLimit {
+  min: number
+  maxPerRound: number
+  /** rolling 24 h cap per account per currency; `null` = no cap at all */
+  maxPerDay: number | null
+  /** the amount of an **auto** card round of that currency; `null` = no auto card round is ever created */
+  autoAmount: number | null
+}
+
+/** FEAT-053 (api-contract §1) — `card.account`, present only when `tiktokAccountId` was sent */
+export interface TopupOptionsAccount {
+  tiktokAccountId: string
+  /** `balanceCurrency` of the account, uppercase; `null` = not known yet */
+  currency: string | null
+  /** `null` = that currency is not in the server's table, or the currency is unknown */
+  limit: TopupCardLimit | null
+  /** sum of the card rounds of the last 24 h (0 when the currency is unknown) */
+  usedToday: number
+  /** `max(0, maxPerDay − usedToday)`; `null` = that currency has no `maxPerDay` */
+  remainingToday: number | null
+  /** the account's current auto top-up channel (§2) */
+  autoTopupChannel: TopupChannel
+  /** is there a `bound`/`pending` card whose MM/YY is not past? (no secret) */
+  hasUsableCard: boolean
+}
+
+/**
+ * FEAT-053 (api-contract §1) — `GET /topups/options[?tiktokAccountId=]` 200.
+ * The endpoint answers **200 even without the encryption key** (`card.enabled: false`), so the BO can explain
+ * why the card channel is closed instead of guessing. Everything here is a *hint*: the API's own 400/409/503
+ * text stays the authority, and a non-200 means the BO silently falls back to `TOPUP_CARD_LIMITS` in
+ * `app/utils/topup.ts` (spec assumption 9).
+ */
+export interface TopupOptionsResponse {
+  qr: { minAmount: number }
+  card: {
+    enabled: boolean
+    approvalTtlHours: number
+    /** key = uppercase currency */
+    limits: Record<string, TopupCardLimit>
+    account: TopupOptionsAccount | null
+  }
 }
 
 /** `POST /topups/accounts/:id/balance` 202 — `reused` = a balance job of this account was already queued */
