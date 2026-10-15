@@ -104,6 +104,16 @@ const amountLabel = computed(() =>
     : 'จำนวนเงิน (บาท)'
 )
 
+/**
+ * `min` of the number input is also the browser's own constraint: with the QR minimum left in place a valid card
+ * amount (10 USD) would be refused by the browser before the handler ever runs. QR keeps `TOPUP_MIN_AMOUNT`.
+ */
+const amountMin = computed(() => {
+  if (!isCard.value) return TOPUP_MIN_AMOUNT
+  const limits = TOPUP_CARD_LIMITS[(props.balanceCurrency ?? '').toUpperCase()]
+  return limits?.min ?? 1
+})
+
 watch(open, (isOpen) => {
   if (!isOpen) return
   amount.value = props.defaultAmount
@@ -210,9 +220,9 @@ function failToast(message: string, status: number | undefined) {
           v-model.number="amount"
           type="number"
           inputmode="numeric"
-          :min="TOPUP_MIN_AMOUNT"
+          :min="amountMin"
           step="1"
-          :placeholder="String(TOPUP_MIN_AMOUNT)"
+          :placeholder="String(amountMin)"
           autofocus
           data-testid="ta-adv-topup-amount"
           @blur="touched = true"

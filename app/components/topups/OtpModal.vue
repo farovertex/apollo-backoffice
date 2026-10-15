@@ -158,7 +158,13 @@ async function submit() {
           data-testid="tp-otp-expired"
         />
 
-        <template v-else>
+        <!-- a `<form>` so Enter submits and Chromium does not warn about a password field outside one -->
+        <form
+          v-else
+          class="flex flex-col gap-2"
+          autocomplete="off"
+          @submit.prevent="submit"
+        >
           <UFormField label="รหัส OTP" :error="errorText ?? undefined">
             <UInput
               v-model="code"
@@ -170,13 +176,12 @@ async function submit() {
               class="w-full"
               :disabled="submitting"
               data-testid="tp-otp-input"
-              @keyup.enter="submit"
             />
           </UFormField>
           <p class="text-xs text-muted">
             ธนาคารส่งรหัสไปที่มือถือของเจ้าของบัตร · ใส่ได้ครั้งเดียวต่อรหัส
           </p>
-        </template>
+        </form>
 
         <div class="flex flex-wrap justify-end gap-2">
           <UButton
