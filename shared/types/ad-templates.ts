@@ -19,6 +19,12 @@
  * the post section of `FormModal.vue`, the "โพสต์" column of `pages/ad-templates.vue` and the ad-template
  * cards of `pages/launch-ads.vue`. The cover bytes come from `GET /ad-templates/:id/cover`
  * (`AdTemplateCover`), which the BO requests **only** while `postInfo.cover.ok === true`.
+ *
+ * **FEAT-054** (api-contract v1 §1, §2) — the instant page's own Call-to-Action button (`config.destination.
+ * page.buttonImageId`, not to be confused with `config.cta` — the ad's own call-to-action) can be an image
+ * from the media library instead of text. The view's 12th key `buttonImage` is the resolved image, the exact
+ * same 5-key shape as `addOnImage`. `FormModal.vue`'s instant-page part offers a ข้อความ/รูปภาพ radio; the list
+ * badge `adt-cta-image-badge` lives next to `adt-addon-badge` (`utils/ad-cta-image.ts`).
  */
 
 /** One entry of an option list served by `GET /ad-templates/options`. */
@@ -113,6 +119,14 @@ export type AdPageSelection
       tone: AdInstantPageTone
       language: AdInstantPageLanguage
       showHandCursor: boolean
+      /**
+       * FEAT-054 (api-contract v1 §1.1) — the instant page's Call-to-Action button: `null` = text
+       * (`buttonText`, unchanged), a 24-hex id = an image from the media library (`mediaAssets._id`,
+       * `assetType: 'call-action'`). Stored as the string it was sent as, never cast to `ObjectId`.
+       * **Optional**: a template saved before this feature has no such key at all (no migration) — every
+       * reader treats absence the same as `null`.
+       */
+      buttonImageId?: string | null
     }
 
 /** `config.identity` as served by the API — Spark Ads on the authorized-posts tab, plus which post to pick. */
@@ -375,6 +389,14 @@ export interface AdTemplate {
    * "this API does not know about add-ons" by the key's presence — both render as "no thumbnail".
    */
   addOnImage?: AdAddOnImage | null
+  /**
+   * FEAT-054 (api-contract §2) — the resolved image of `config.destination.page.buttonImageId`, **same
+   * 5-key shape as `addOnImage`**. `null` when the button is text, the media row is gone or its URL could
+   * not be signed — the line never fails. **Optional** for the same "older API" reason as `addOnImage` /
+   * `postInfo`: a reader must not tell "text button" from "this API does not know about button images" by
+   * the key's presence — both render as "no thumbnail" / text mode.
+   */
+  buttonImage?: AdAddOnImage | null
   /** `name` is null when the workspace row is gone */
   workspace: { id: string, name: string | null }
   /** `username` is null when the admin row is gone */
