@@ -63,6 +63,21 @@
  * shape FEAT-038 uses for UTM. A template saved before this feature has no `addOn` key: it opens with the switch
  * off and a save that does not touch it leaves `addOn` out of the PATCH entirely (BUG-008 class, spec AC-16).
  *
+ * **FEAT-054** (api-contract v1 §1, §2 · spec AC-15, AC-16) — inside `destination` (NOT a new section), the
+ * instant page's own Call-to-Action button: a ข้อความ/รูปภาพ radio (`adt-cta-image-mode`) decides whether
+ * `buttonImageId` travels as `null` (text — the existing `buttonText` field, `v-show`n while this mode is on)
+ * or as a picked id (`adt-cta-image-pick` mounts a **second** `MediaPicker`, `assetType="call-action"`).
+ * `buttonText` is **always** sent regardless of mode (kept, never cleared, for switching back — api-contract
+ * §1.1) so its `UFormField` stays mounted (`v-show`), exactly like the collapsible section bodies. The ratio
+ * warning (`adt-cta-image-ratio-warn`) and every size/mime/`accept` value come from the shared
+ * `GET /media/options` cache (`useMediaUpload()`, `utils/media.ts#mediaRecommendedFor/mediaRatioWarning`) —
+ * nothing is hard-coded. The id is not a `UFormField`, so its 400 lands at the picker (`adt-cta-image-error`);
+ * a path one level deeper (not expected by the contract, kept defensively) lands under the section
+ * (`adt-cta-image-section-error`) — the same two-level shape as `config.addOn.imageId` above. The list badge
+ * is `adt-cta-image-badge` (`utils/ad-cta-image.ts`), next to `adt-addon-badge`.
+ * ★ `config.destination.page.buttonImageId` (this feature) and `config.cta` (the ad's own call-to-action,
+ * section 5 below) are unrelated keys that happen to share the English word "CTA" — never conflated.
+ *
  * Layout: seven sections — `adname`, then **UTM**, then TikTok's four in the TikTok page order as an
  * **accordion**, then `addon`.
  * `adname` and `utm` are always open and have no toggle (human decision 2026-10-11: UTM is ours and is set on
@@ -92,7 +107,14 @@ import {
   AD_ADD_ON_ZOOM_MAX,
   AD_ADD_ON_ZOOM_MIN
 } from '~/utils/ad-add-on'
-import { formatMediaDimensions, mediaSrc } from '~/utils/media'
+import {
+  formatMediaDimensions,
+  isMediaRatioOff,
+  mediaRatioWarning,
+  mediaRecommendedFor,
+  mediaSrc
+} from '~/utils/media'
+import { BUTTON_IMAGE_MESSAGES } from '~/utils/ad-cta-image'
 import type { MediaPickerSelection } from '#shared/types/media'
 import type {
   AdAddOn,
@@ -182,7 +204,7 @@ interface ConfigState {
   adNamePrefix: string
   /** `post` is always `authCode`; `code` is empty unless the user typed one (create, or after "Change code") */
   identity: { mode: string, source: string, post: { selection: string, code: string } }
-  /** `page` is always `create` — the five values of the instant page the build makes */
+  /** `page` is always `create` — the values of the instant page the build makes */
   destination: {
     mode: string
     page: {
@@ -192,6 +214,16 @@ interface ConfigState {
       tone: string
       language: string
       showHandCursor: boolean
+      /**
+       * FEAT-054 — UI-only toggle, never sent itself: `'text'` → the body's `buttonImageId` is `null`
+       * (`buttonText` above is still sent, kept for switching back); `'image'` → the body's `buttonImageId`
+       * is `buttonImageId` below.
+       */
+      buttonMode: 'text' | 'image'
+      /** `''` while nothing is picked — the client validation then refuses the save (`adt-cta-image-error`) */
+      buttonImageId: string
+      /** display-only: the view's `buttonImage` on open, or the picker's selection after a pick */
+      buttonImage: AdAddOnImage | null
     }
   }
   /** UI-only encoding of the tri-state: `inherit` ↔ null, `on` ↔ true, `off` ↔ false */
@@ -304,10 +336,25 @@ function storedSparkCode(config: AdConfig | null | undefined): string {
   return post.code
 }
 
-function configStateFrom(config: AdConfig, addOnImage: AdAddOnImage | null = null): ConfigState {
+/**
+ * FEAT-054 — the stored `buttonImageId` of a `create` page (`undefined`/`null`/anything but a non-empty
+ * string all read as "no image", like `addOnStateFrom()`'s own defensive reads).
+ */
+function storedButtonImageId(page: AdPageSelection | null): string | null {
+  if (!page || page.selection !== PAGE_CREATE) return null
+  const row = page as Partial<{ buttonImageId: string | null }>
+  return typeof row.buttonImageId === 'string' && row.buttonImageId !== '' ? row.buttonImageId : null
+}
+
+function configStateFrom(
+  config: AdConfig,
+  addOnImage: AdAddOnImage | null = null,
+  buttonImage: AdAddOnImage | null = null
+): ConfigState {
   const page = config?.destination?.page
   const createPage = page?.selection === PAGE_CREATE ? page : null
   const cta = config?.cta
+  const buttonImageId = storedButtonImageId(page ?? null)
   return {
     adNamePrefix: config?.adNamePrefix ?? '',
     identity: {
@@ -326,7 +373,11 @@ function configStateFrom(config: AdConfig, addOnImage: AdAddOnImage | null = nul
         url: createPage?.url ?? '',
         tone: createPage?.tone ?? DEFAULT_TONE,
         language: createPage?.language ?? DEFAULT_LANGUAGE,
-        showHandCursor: createPage?.showHandCursor ?? DEFAULT_HAND_CURSOR
+        showHandCursor: createPage?.showHandCursor ?? DEFAULT_HAND_CURSOR,
+        buttonMode: buttonImageId ? 'image' : 'text',
+        buttonImageId: buttonImageId ?? '',
+        // the resolved image only belongs to the stored id — a different id means no thumbnail until picked
+        buttonImage: buttonImageId && buttonImage && buttonImage.id === buttonImageId ? buttonImage : null
       }
     },
     allowOnTiktokPlatforms: triToRadio(config?.allowOnTiktokPlatforms),
@@ -347,7 +398,7 @@ function stateFrom(template: AdTemplate | null): FormState {
   return {
     name: template?.name ?? '',
     description: template?.description ?? '',
-    config: configStateFrom(config, template?.addOnImage ?? null)
+    config: configStateFrom(config, template?.addOnImage ?? null, template?.buttonImage ?? null)
   }
 }
 
@@ -378,11 +429,21 @@ const utmSectionError = ref<string | null>(null)
 const addOnImageServerError = ref<string | null>(null)
 const addOnSectionError = ref<string | null>(null)
 
+/**
+ * FEAT-054 — the same two places for the instant-page button image: a 400 on
+ * `config.destination.page.buttonImageId` belongs to the picker (`adt-cta-image-error`), anything one level
+ * deeper (not expected by the contract, kept defensively) belongs to the section (`adt-cta-image-section-error`).
+ */
+const buttonImageServerError = ref<string | null>(null)
+const buttonImageSectionError = ref<string | null>(null)
+
 function clearServerErrors() {
   serverErrors.value = {}
   utmSectionError.value = null
   addOnImageServerError.value = null
   addOnSectionError.value = null
+  buttonImageServerError.value = null
+  buttonImageSectionError.value = null
 }
 
 // any edit invalidates what the server said about the form
@@ -705,6 +766,82 @@ function onAddOnImage(selection: MediaPickerSelection) {
   addOnSectionError.value = null
 }
 
+// ── the instant page's own CTA button as an image (FEAT-054 · spec "UI behaviour") ─────────────────────────────────
+// ★ unrelated to `config.cta` (section 5 below) — see the file doc comment.
+/** the ข้อความ/รูปภาพ radio — our own UI toggle, not a TikTok enum, so its two labels are plain Thai */
+const BUTTON_MODE_ITEMS: { value: 'text' | 'image', label: string }[] = [
+  { value: 'text', label: 'ข้อความ' },
+  { value: 'image', label: 'รูปภาพ' }
+]
+
+/** `v-model:open` of the second `MediaPicker` instance, opened by `adt-cta-image-pick` */
+const buttonImagePickerOpen = ref(false)
+
+/** the thumbnail of the picked / stored image, `null` while nothing is picked or the view resolved no image */
+const buttonImage = computed(() => state.config.destination.page.buttonImage)
+
+/** `<img src>` of that image — never a hand-built media URL (same rule as `addOnImageSrc`) */
+const buttonImageSrc = computed(() => {
+  const url = buttonImage.value?.url
+  return url ? mediaSrc(url) : null
+})
+
+const buttonImageSize = computed(() => {
+  const image = buttonImage.value
+  return image ? formatMediaDimensions(image.width, image.height) : ''
+})
+
+/**
+ * The shared `GET /media/options` cache (module-level in `useMediaUpload`, same instance the page's upload
+ * modal and the picker use) — loaded here too so the ratio warning is correct even before the picker is ever
+ * opened (e.g. an edit that opens straight onto an already-picked image).
+ */
+const buttonImageOptions = useMediaUpload()
+onMounted(() => {
+  void buttonImageOptions.loadOptions()
+})
+
+/** non-blocking — ±10 % off `recommended['call-action']`, never a hard-coded 686×88 (spec AC-16) */
+const buttonImageRatioWarning = computed(() => {
+  const image = buttonImage.value
+  if (!image) return null
+  const size = mediaRecommendedFor(buttonImageOptions.options.value?.recommended, 'call-action')
+  return isMediaRatioOff(image.width, image.height, size) ? mediaRatioWarning(size) : null
+})
+
+/**
+ * What is shown under the picker: the API's own refusal of the id if there is one, else the client issue of
+ * "รูปภาพ" mode without a picked image yet (the same message the submit is blocked with).
+ */
+const buttonImageError = computed(() => {
+  if (buttonImageServerError.value) return buttonImageServerError.value
+  const page = state.config.destination.page
+  if (page.buttonMode === 'image' && page.buttonImageId === '') return BUTTON_IMAGE_MESSAGES.imageRequired
+  return null
+})
+
+/** the picker emits `{ id, name, url, width, height }`; only the id is sent, the rest is the thumbnail */
+function onButtonImagePick(selection: MediaPickerSelection) {
+  state.config.destination.page.buttonImageId = selection.id
+  state.config.destination.page.buttonImage = {
+    id: selection.id,
+    name: selection.name,
+    width: selection.width,
+    height: selection.height,
+    url: selection.url
+  }
+  buttonImageServerError.value = null
+  buttonImageSectionError.value = null
+}
+
+/** "เอาออก" — clears the pick; the mode stays on "รูปภาพ" so the required check keeps the user on this field */
+function removeButtonImage() {
+  state.config.destination.page.buttonImageId = ''
+  state.config.destination.page.buttonImage = null
+  buttonImageServerError.value = null
+  buttonImageSectionError.value = null
+}
+
 // ── "Default" badges (live) ──────────────────────────────────────────────────────────────────────────────────────────
 /** the config the current state would send — the single source for the badges and for the POST/PATCH bodies */
 const currentConfig = computed(() => configFromState())
@@ -740,6 +877,7 @@ function resetForm() {
   resetCodeMode()
   utmPaste.value = ''
   addOnPickerOpen.value = false
+  buttonImagePickerOpen.value = false
   submitting.value = false
   submitError.value = null
   clearServerErrors()
@@ -759,8 +897,9 @@ watch(open, (isOpen) => {
   postSession++
   postInfo.value = null
   postGaveUp.value = false
-  // the picker is a modal inside this one — it must never outlive it
+  // the pickers are modals inside this one — they must never outlive it
   addOnPickerOpen.value = false
+  buttonImagePickerOpen.value = false
 })
 
 /**
@@ -831,7 +970,12 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
           ),
           tone: z.string().min(1, 'Tone is required'),
           language: z.string().min(1, 'Language is required'),
-          showHandCursor: z.boolean()
+          showHandCursor: z.boolean(),
+          // FEAT-054 — `buttonMode` is UI-only (never sent); `buttonImageId` is a real schema field but has
+          // no `UFormField`, exactly like `config.addOn.imageId` below — the required check only blocks submit,
+          // its message is rendered at the picker by `buttonImageError`.
+          buttonMode: z.enum(['text', 'image']),
+          buttonImageId: z.string()
         })
       }),
       allowOnTiktokPlatforms: z.string().min(1, 'Consent is required'),
@@ -890,6 +1034,17 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
         code: 'custom',
         path: ['config', 'destination', 'page', 'url'],
         message: 'URL must start with https://'
+      })
+    }
+
+    // FEAT-054 — the radio is on "รูปภาพ" but nothing was picked yet; `buttonImageId` is not a `UFormField`
+    // (same shape as `config.addOn.imageId` below), so this only blocks the submit — the message itself is
+    // rendered under the picker by `buttonImageError`.
+    if (data.config.destination.page.buttonMode === 'image' && data.config.destination.page.buttonImageId === '') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['config', 'destination', 'page', 'buttonImageId'],
+        message: BUTTON_IMAGE_MESSAGES.imageRequired
       })
     }
 
@@ -994,7 +1149,11 @@ function configFromState(): AdConfigRequest {
     url: c.destination.page.url.trim(),
     tone: c.destination.page.tone as AdInstantPageTone,
     language: c.destination.page.language as AdInstantPageLanguage,
-    showHandCursor: c.destination.page.showHandCursor
+    showHandCursor: c.destination.page.showHandCursor,
+    // FEAT-054 — `null` while the radio is on "ข้อความ"; the picked id while it is on "รูปภาพ"
+    buttonImageId: c.destination.page.buttonMode === 'image' && c.destination.page.buttonImageId !== ''
+      ? c.destination.page.buttonImageId
+      : null
   }
 
   // dropdown order, only keys the options list still knows
@@ -1082,12 +1241,24 @@ const CONFIG_KEYS = [
  * what `configFromState()` builds while the switch is off, so a template that predates the feature and is left
  * alone sends **no** `addOn` in the PATCH (spec AC-16; without this normalisation `deepEqual(null, undefined)`
  * would report a change and the body would carry `addOn: null` on every unrelated save — the BUG-008 class).
+ * FEAT-054: `destination.page.buttonImageId` follows the same precedent, one level deeper — unlike `utm`/`addOn`
+ * (whole optional top-level keys) this field sits inside `destination`, which is already always present, so the
+ * normalisation here is just that one leaf: a **missing** `buttonImageId` (a template saved before this
+ * feature) is read as `null`, exactly what `configFromState()` builds while the radio is on "ข้อความ" — without
+ * it an unrelated save of such a template would needlessly resend the whole `destination` key.
  */
 function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
   const config = original.config
   if (!config) return {}
+  const page = config.destination?.page
   const base = {
     ...config,
+    destination: {
+      ...config.destination,
+      page: page?.selection === PAGE_CREATE
+        ? { ...page, buttonImageId: (page as Partial<{ buttonImageId: string | null }>).buttonImageId ?? null }
+        : page
+    },
     utm: utmBodyOf(config.utm),
     addOn: config.addOn ?? null
   } as unknown as Partial<AdConfigRequest>
@@ -1185,6 +1356,18 @@ function isAddOnSectionPath(path: string): boolean {
   return path !== ADD_ON_IMAGE_PATH && !FIELD_NAMES.has(path)
 }
 
+/** FEAT-054 — the picked id (`notFound` / `wrongType` / `wrongMime` / the zod id message): under the picker */
+const BUTTON_IMAGE_PATH = 'config.destination.page.buttonImageId'
+
+/**
+ * FEAT-054 — defensive sibling of `isAddOnSectionPath`: the contract (§1.4) always answers at exactly
+ * `BUTTON_IMAGE_PATH`, so nothing today lands one level deeper — but if it ever did, it is folded onto the
+ * section (`adt-cta-image-section-error`) rather than silently dropped, the same two-level shape as `addOn`.
+ */
+function isButtonImageSectionPath(path: string): boolean {
+  return path !== BUTTON_IMAGE_PATH && path.startsWith(`${BUTTON_IMAGE_PATH}.`)
+}
+
 /**
  * Issue paths that are not a field themselves, folded onto the control that owns them
  * (api-contract.md "BO-side surfaces" → issue folding).
@@ -1249,6 +1432,8 @@ function showApiError(e: unknown, fallback: string) {
     let utmSection: string | null = null
     let addOnImage: string | null = null
     let addOnSection: string | null = null
+    let buttonImagePicker: string | null = null
+    let buttonImageSection: string | null = null
     for (const issue of issues) {
       // the UTM set as a whole ("ไม่พบ UTM นี้ในระบบปลายทาง …") — under the section, never on a field
       if (isUtmSectionPath(issue.path)) {
@@ -1267,6 +1452,17 @@ function showApiError(e: unknown, fallback: string) {
         matched.push('config.addOn')
         continue
       }
+      // FEAT-054 — the instant-page button image, same two-level shape
+      if (issue.path === BUTTON_IMAGE_PATH) {
+        buttonImagePicker = issue.message
+        matched.push('config.destination')
+        continue
+      }
+      if (isButtonImageSectionPath(issue.path)) {
+        buttonImageSection = issue.message
+        matched.push('config.destination')
+        continue
+      }
       const name = resolveFieldName(issue.path)
       if (name) {
         next[name] = issue.message
@@ -1277,6 +1473,8 @@ function showApiError(e: unknown, fallback: string) {
     utmSectionError.value = utmSection
     addOnImageServerError.value = addOnImage
     addOnSectionError.value = addOnSection
+    buttonImageServerError.value = buttonImagePicker
+    buttonImageSectionError.value = buttonImageSection
     // the field has to be on screen for its message to be read
     expandSectionsOf(matched)
     // the API refused the code (e.g. the stored post was not `authCode` after all) → the input has to come back
@@ -1907,7 +2105,22 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               </p>
             </UFormField>
 
+            <!--
+              FEAT-054 — the CTA button of the instant page: text (today's behaviour, unchanged) or an image
+              from the library. `buttonText` is always sent regardless of mode (kept for switching back), so
+              its field is `v-show`n rather than removed — exactly like the collapsible section bodies.
+            -->
+            <URadioGroup
+              v-model="state.config.destination.page.buttonMode"
+              :items="BUTTON_MODE_ITEMS"
+              value-key="value"
+              orientation="horizontal"
+              :disabled="submitting"
+              data-testid="adt-cta-image-mode"
+            />
+
             <UFormField
+              v-show="state.config.destination.page.buttonMode === 'text'"
               label="Button text"
               name="config.destination.page.buttonText"
               required
@@ -1923,6 +2136,97 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 data-testid="adt-page-button-text"
               />
             </UFormField>
+
+            <div v-show="state.config.destination.page.buttonMode === 'image'" class="space-y-2">
+              <div class="flex flex-wrap items-start gap-3">
+                <!-- the thumbnail of the picked / stored image -->
+                <img
+                  v-if="buttonImageSrc"
+                  :src="buttonImageSrc"
+                  :alt="buttonImage?.name ?? ''"
+                  class="max-h-24 w-auto max-w-32 rounded-md border border-default object-contain"
+                  data-testid="adt-cta-image"
+                >
+                <div
+                  v-else
+                  class="flex size-16 shrink-0 items-center justify-center rounded-md border border-dashed border-default text-muted"
+                  data-testid="adt-cta-image-empty"
+                >
+                  <UIcon name="i-lucide-image" class="size-5" />
+                </div>
+
+                <div class="flex min-w-0 flex-1 flex-col gap-1">
+                  <span
+                    v-if="buttonImage"
+                    class="truncate text-sm font-medium text-highlighted"
+                    data-testid="adt-cta-image-name"
+                  >{{ buttonImage.name }}</span>
+                  <span
+                    v-if="buttonImage"
+                    class="text-xs text-muted"
+                    data-testid="adt-cta-image-size"
+                  >{{ buttonImageSize }}</span>
+                  <div class="flex flex-wrap gap-2">
+                    <UButton
+                      :label="buttonImage ? 'เปลี่ยนรูป' : 'เลือกรูปจากคลัง'"
+                      icon="i-lucide-images"
+                      color="neutral"
+                      variant="outline"
+                      size="xs"
+                      class="w-fit"
+                      :disabled="submitting"
+                      data-testid="adt-cta-image-pick"
+                      @click="buttonImagePickerOpen = true"
+                    />
+                    <UButton
+                      v-if="buttonImage"
+                      label="เอาออก"
+                      icon="i-lucide-x"
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      class="w-fit"
+                      :disabled="submitting"
+                      data-testid="adt-cta-image-remove"
+                      @click="removeButtonImage"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <!-- non-blocking — ±10 % off `recommended['call-action']`, never a hard-coded 686×88 -->
+              <UBadge
+                v-if="buttonImageRatioWarning"
+                color="warning"
+                variant="subtle"
+                size="sm"
+                icon="i-lucide-triangle-alert"
+                class="w-fit"
+                data-testid="adt-cta-image-ratio-warn"
+              >
+                {{ buttonImageRatioWarning }}
+              </UBadge>
+
+              <!-- the id is not a `UFormField`: the client issue and the API's 400 on `buttonImageId` land here -->
+              <p
+                v-if="buttonImageError"
+                class="text-sm break-words text-error"
+                role="alert"
+                data-testid="adt-cta-image-error"
+              >
+                {{ buttonImageError }}
+              </p>
+            </div>
+
+            <!-- the blob as a whole was refused (a path one level deeper than `buttonImageId`, kept defensively) -->
+            <p
+              v-if="buttonImageSectionError"
+              class="text-sm break-words text-error"
+              role="alert"
+              data-testid="adt-cta-image-section-error"
+            >
+              {{ buttonImageSectionError }}
+            </p>
 
             <UFormField
               label="Landing page URL"
@@ -2304,6 +2608,14 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         v-model:open="addOnPickerOpen"
         :selected-id="state.config.addOn.imageId || null"
         @select="onAddOnImage"
+      />
+
+      <!-- FEAT-054 — a second instance, pinned to the `call-action` type; same modal-on-top-of-modal rule -->
+      <MediaPicker
+        v-model:open="buttonImagePickerOpen"
+        asset-type="call-action"
+        :selected-id="state.config.destination.page.buttonImageId || null"
+        @select="onButtonImagePick"
       />
     </template>
 

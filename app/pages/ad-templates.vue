@@ -39,6 +39,10 @@
  * **FEAT-050** (spec AC-18): the name cell carries the badge `adt-addon-badge` ("บัตรดิสเพลย์") for every row
  * whose `config.addOn` is not `null`. It is read from the list row the page already has — no new column, no
  * extra request, and the resolved `addOnImage` of the view is not used here (the list shows no thumbnail).
+ *
+ * **FEAT-054** (spec AC-15): a second badge `adt-cta-image-badge` ("ปุ่มรูปภาพ") next to `adt-addon-badge`, for
+ * every row whose instant page's CTA button is an image (`config.destination.page.buttonImageId`, via
+ * `utils/ad-cta-image.ts#hasButtonImage` — same "read from the row, no extra request" rule).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -50,6 +54,7 @@ import type {
   VerifyPostInfoResponse
 } from '#shared/types/ad-templates'
 import { AD_ADD_ON_LABEL } from '~/utils/ad-add-on'
+import { BUTTON_IMAGE_LABEL, hasButtonImage } from '~/utils/ad-cta-image'
 import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
 
 useSeoMeta({ title: 'Ad templates' })
@@ -597,6 +602,17 @@ function onDeleted() {
                       data-testid="adt-addon-badge"
                     >
                       {{ AD_ADD_ON_LABEL }}
+                    </UBadge>
+                    <!-- FEAT-054 — which templates use an image as the instant page's CTA button -->
+                    <UBadge
+                      v-if="hasButtonImage(template.config?.destination?.page)"
+                      color="neutral"
+                      variant="subtle"
+                      size="sm"
+                      class="mt-1 w-fit whitespace-nowrap"
+                      data-testid="adt-cta-image-badge"
+                    >
+                      {{ BUTTON_IMAGE_LABEL }}
                     </UBadge>
                   </div>
                 </td>
