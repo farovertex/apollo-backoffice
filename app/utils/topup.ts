@@ -63,10 +63,43 @@ export function topupCardLimit(
   return TOPUP_CARD_LIMITS[key] ?? null
 }
 
-/** FEAT-053 — `qr.minAmount` of the server, falling back to the hardcoded `TOPUP_MIN_AMOUNT` */
-export function topupQrMinAmount(options?: TopupOptionsResponse | null): number {
+/**
+ * FEAT-053 — `qr.minAmount` of the server, falling back to the hardcoded `TOPUP_MIN_AMOUNT`.
+ *
+ * TASK-topup-min-currency (2026-10-16): the QR minimum follows the **account's currency**, same rule as the card
+ * channel (`min` of that currency's limits row; USD → 10). Order of truth:
+ *   1. the server answered **for this account** (`card.account` present) → `qr.minAmount` is already per currency;
+ *   2. a currency is known → `min` of that currency's row (the server's table when it answered, else the fallback);
+ *   3. otherwise the server's global `qr.minAmount`, else `TOPUP_MIN_AMOUNT` (THB, the old behaviour).
+ * Mirrors `qrMinAmountFor()` in the API — change one, change the other.
+ */
+export function topupQrMinAmount(options?: TopupOptionsResponse | null, currency?: string | null): number {
+  const perAccount = options?.card?.account ? options.qr?.minAmount : undefined
+  if (Number.isInteger(perAccount)) return perAccount as number
+  const key = (currency ?? '').toUpperCase()
+  if (key) {
+    const row = options?.card?.limits ? options.card.limits[key] : TOPUP_CARD_LIMITS[key]
+    if (row && Number.isInteger(row.min)) return row.min
+  }
   const min = options?.qr?.minAmount
   return Number.isInteger(min) ? (min as number) : TOPUP_MIN_AMOUNT
+}
+
+/**
+ * TASK-topup-min-currency — the lowest QR minimum over every currency (10 with the default table): the floor of a
+ * number input that serves accounts of **mixed or unknown** currencies (the bulk modal). The API's per-row 400 is
+ * the real check; this only stops the browser from refusing a valid 10 USD before the handler runs.
+ */
+export function topupQrMinFloor(options?: TopupOptionsResponse | null): number {
+  const table = options?.card?.limits ?? TOPUP_CARD_LIMITS
+  const mins = Object.values(table).map(row => row.min).filter(Number.isInteger)
+  return Math.min(topupQrMinAmount(options), ...mins)
+}
+
+/** unit word of the QR-minimum message: THB and "unknown" keep the historical `บาท`, any other currency its ISO code */
+export function topupQrUnit(currency?: string | null): string {
+  const key = (currency ?? '').toUpperCase()
+  return key && key !== 'THB' ? key : 'บาท'
 }
 
 /** FEAT-053 — the whole limit row of the account's currency (incl. `maxPerDay`/`autoAmount`), API only */
@@ -471,9 +504,11 @@ export function topupAmountError(
     return null
   }
 
+  // TASK-topup-min-currency: the QR minimum and its unit follow the account's currency (`qrMin` is computed by the
+  // caller via `topupQrMinAmount(options, currency)`); THB and "unknown" keep the historical message byte for byte
   const qrMin = Number.isInteger(options?.qrMin) ? (options?.qrMin as number) : TOPUP_MIN_AMOUNT
   if (!Number.isInteger(amount) || amount < qrMin) {
-    return `amount ต้องเป็นจำนวนเต็มตั้งแต่ ${qrMin} บาท`
+    return `amount ต้องเป็นจำนวนเต็มตั้งแต่ ${qrMin} ${topupQrUnit(options?.currency)}`
   }
   return null
 }

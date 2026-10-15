@@ -59,7 +59,13 @@ const visible = computed(() => {
 const pickable = computed(() => visible.value.filter(a => !blockedReason(a)))
 const allPicked = computed(() => pickable.value.length > 0 && pickable.value.every(a => selected.value.has(a.id)))
 
-const localError = computed(() => topupAmountError(amount.value))
+/**
+ * TASK-topup-min-currency — many accounts, possibly mixed currencies: validate locally against the **lowest** QR
+ * minimum of any currency (10) so a USD-only selection can type 10; the API answers per row with the exact minimum
+ * of each account's currency.
+ */
+const qrFloor = computed(() => topupQrMinFloor())
+const localError = computed(() => topupAmountError(amount.value, { qrMin: qrFloor.value }))
 const amountError = computed(() => serverError.value ?? (touched.value ? localError.value : null))
 const canSubmit = computed(() => !submitting.value && selected.value.size > 0 && localError.value === null)
 
@@ -158,9 +164,9 @@ const failureById = computed(() => new Map(failures.value.map(f => [f.tiktokAcco
               v-model.number="amount"
               type="number"
               inputmode="numeric"
-              :min="TOPUP_MIN_AMOUNT"
+              :min="qrFloor"
               step="1"
-              :placeholder="String(TOPUP_MIN_AMOUNT)"
+              :placeholder="String(qrFloor)"
               data-testid="tp-bulk-amount"
               @blur="touched = true"
             />
