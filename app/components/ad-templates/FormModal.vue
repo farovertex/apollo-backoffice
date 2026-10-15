@@ -39,11 +39,12 @@
  * **FEAT-042** (api-contract v1 §1.1, §2.2, §2.3 · spec §Behaviour — BO 1, AC-13): the section
  * "โพสต์ที่ผูกไว้" (`adt-post-info`) under the code field shows what TikTok says that code points at — chip,
  * cover, owner, caption, kind, validity window — and offers "ตรวจ" / "ตรวจอีกครั้ง"
- * (`POST /ad-templates/:id/post-info/verify`). Because the result arrives seconds **after** the save, a save
- * that started a lookup (create, or an edit with a **new** code) no longer closes the modal (spec A-3): it
- * switches to edit mode on the API's answer, toasts and emits as before, and polls `GET /ad-templates/:id`
- * every 2 s for up to 2 min while the status is `verifying`. A save that kept the stored code closes the modal exactly
- * as it always did. The code is never part of the section, of a toast or of a log line.
+ * (`POST /ad-templates/:id/post-info/verify`), which polls `GET /ad-templates/:id` every 2 s for at most 2 min
+ * while the status is `verifying`.
+ * **Every save the API accepted closes the modal** (human decision 2026-10-16) — a new Spark code included,
+ * which drops the stay-open-and-poll of spec A-3. The lookup keeps running on the API side and its result is
+ * read in the table; a later edit shows it in the section and can ask again.
+ * The code is never part of the section, of a toast or of a log line.
  *
  * A `config.utm` issue is not a field — it is rendered under the section (`adt-utm-error`), and so is the
  * `{ error }` text of a **502** (which also raises a toast and keeps the modal open with the values intact).
@@ -148,14 +149,10 @@ const { admin } = useAuth()
 const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
 
 /**
- * FEAT-042 — the template a save answered with, while the modal stays open on it (spec A-3). `null` in every
- * other situation; reset on every open. It wins over the prop, so after a create the modal is an edit of the
- * new row (title, "Save" button, PATCH body, post section) without the page having to re-open it.
+ * The row the form works on. Every accepted save closes the modal (human decision 2026-10-16), so this is
+ * simply the prop — nothing switches a create into an edit while the modal is open any more.
  */
-const savedTemplate = ref<AdTemplate | null>(null)
-
-/** the row the form works on: the prop, or the answer of the save that kept the modal open */
-const editing = computed<AdTemplate | null>(() => savedTemplate.value ?? props.template)
+const editing = computed<AdTemplate | null>(() => props.template)
 
 const isEdit = computed(() => editing.value !== null)
 
@@ -573,7 +570,7 @@ async function readPostInfo() {
   }
 }
 
-/** on open (and after a save that kept the modal open): render what we have, then read the full view */
+/** on open: render what the row carried, then read the full view */
 function initPostInfo() {
   postSession++
   postGaveUp.value = false
@@ -771,8 +768,6 @@ function resetForm() {
 
 watch(open, (isOpen) => {
   if (isOpen) {
-    // a previous save must not leak into the next open (FEAT-042 stay-open rule)
-    savedTemplate.value = null
     resetForm()
     initPostInfo()
     return
@@ -1322,38 +1317,12 @@ function onFormError(event: FormErrorEvent) {
 
 // ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
- * FEAT-042 — the save really started a lookup, so the modal has something to wait for (api-contract §2.1):
- * a create always verifies, a PATCH only when the body carries a code that **differs** from the stored one.
- * Keeping the saved code — whether through the hint (`{ selection: 'authCode' }` without `code`) or by not
- * touching the prefilled input (FEAT-017 serves the code, so the body repeats it) — changes nothing about the
- * post, and such a save closes the modal exactly as it did before this feature.
+ * Every save that the API accepted closes the modal — a new Spark code included (human decision 2026-10-16,
+ * which replaces FEAT-042 spec A-3: such a save used to stay open and poll the lookup for up to 2 min).
+ * The lookup still runs on the API side; its result is read in the table, and the post section of a later edit
+ * offers "ตรวจอีกครั้ง" for a fresh look. A save the API refused keeps the modal open with the values intact,
+ * exactly as before.
  */
-function startsLookup(config: Partial<AdConfigRequest> | undefined, original: AdTemplate | null): boolean {
-  const post = config?.identity?.post
-  if (post?.selection !== POST_AUTH_CODE) return false
-  if (!('code' in post) || typeof post.code !== 'string' || post.code === '') return false
-  if (!original) return true
-  return post.code !== storedSparkCode(original.config).trim()
-}
-
-/**
- * FEAT-042 spec A-3 — the save that started a lookup keeps the modal open on the API's answer: edit mode on
- * the saved row (title, "Save", PATCH on the next submit), the post section on its fresh `postInfo`, and the
- * poll while that is `verifying`. The form is re-seeded from the answer so a following save diffs against it.
- */
-function stayOpenOn(saved: AdTemplate) {
-  savedTemplate.value = saved
-  Object.assign(state, stateFrom(saved))
-  resetCodeMode()
-  submitError.value = null
-  clearServerErrors()
-  formRef.value?.clear()
-  postSession++
-  postGaveUp.value = false
-  postInfo.value = saved.postInfo ?? null
-  if (isPostInfoVerifying(postInfo.value)) startPostPolling()
-}
-
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   submitError.value = null
@@ -1379,12 +1348,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         body,
         retry: 0
       })
-      // a new code started a lookup → stay open and watch it; anything else closes as it always did
-      const keepOpen = startsLookup(body.config, original)
-      if (!keepOpen) open.value = false
+      open.value = false
       toast.add({ title: 'Template updated', description: updated.name, color: 'success' })
       emit('updated', updated)
-      if (keepOpen) stayOpenOn(updated)
     } catch (e) {
       showApiError(e, 'Could not update the template')
     } finally {
@@ -1399,12 +1365,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   try {
     // retry: 0 — exactly one POST per submit
     const created = await api<AdTemplate>('/ad-templates', { method: 'POST', body, retry: 0 })
-    // a create always carries the code, so the modal normally stays open on the new row (FEAT-042 A-3)
-    const keepOpen = startsLookup(body.config, null)
-    if (!keepOpen) open.value = false
+    open.value = false
     toast.add({ title: 'Template created', description: created.name, color: 'success' })
     emit('created', created)
-    if (keepOpen) stayOpenOn(created)
   } catch (e) {
     showApiError(e, 'Could not create the template')
   } finally {
