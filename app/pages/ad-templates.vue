@@ -35,6 +35,10 @@
  * `prompted = true`, as soon as the form modal is closed: a FEAT-042 save that starts a post lookup keeps the form
  * open, so the prompt waits in `pendingPrompt` for `formOpen` to turn false. A sync never changes the row itself —
  * the single `reload()` afterwards only keeps the page honest.
+ *
+ * **FEAT-050** (spec AC-18): the name cell carries the badge `adt-addon-badge` ("บัตรดิสเพลย์") for every row
+ * whose `config.addOn` is not `null`. It is read from the list row the page already has — no new column, no
+ * extra request, and the resolved `addOnImage` of the view is not used here (the list shows no thumbnail).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -45,6 +49,7 @@ import type {
   AdTemplatesResponse,
   VerifyPostInfoResponse
 } from '#shared/types/ad-templates'
+import { AD_ADD_ON_LABEL } from '~/utils/ad-add-on'
 import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
 
 useSeoMeta({ title: 'Ad templates' })
@@ -582,6 +587,17 @@ function onDeleted() {
                       :title="template.description"
                       data-testid="adt-description"
                     >{{ template.description }}</span>
+                    <!-- FEAT-050 — which templates carry a display card; read from the row, no extra request -->
+                    <UBadge
+                      v-if="template.config?.addOn"
+                      color="neutral"
+                      variant="subtle"
+                      size="sm"
+                      class="mt-1 w-fit whitespace-nowrap"
+                      data-testid="adt-addon-badge"
+                    >
+                      {{ AD_ADD_ON_LABEL }}
+                    </UBadge>
                   </div>
                 </td>
                 <!-- FEAT-042 — cover (placeholder box when none is stored) + chip; reason as a tooltip; "ตรวจ" when unchecked -->

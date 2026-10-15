@@ -171,10 +171,45 @@ export interface UtmRef extends UtmRefBody {
 }
 
 /**
- * The 7 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
+ * FEAT-050 — the only interactive add-on v1 supports (`บัตรดิสเพลย์`, api-contract §1). The literal is part of
+ * the stored blob, so a later add-on type is additive on both sides.
+ */
+export type AdAddOnType = 'displayCard'
+
+/**
+ * FEAT-050 — `config.addOn` (api-contract §1): `null` = no add-on, else **exactly** these four keys (the API is
+ * strict and requires all four). `imageId` is an id of the FEAT-049 media library — never a URL — and is stored
+ * and served as the string it was sent as, so the BO can PATCH the same blob back.
+ * `zoomClicks`: int −5…5 (`+n` = press zoom-in n times, `−n` = zoom-out, `0` = do not press).
+ * `displaySeconds`: int 2…10.
+ */
+export interface AdAddOn {
+  type: AdAddOnType
+  imageId: string
+  zoomClicks: number
+  displaySeconds: number
+}
+
+/**
+ * FEAT-050 — `addOnImage` (api-contract §2): the resolved media row of `config.addOn.imageId`, **next to**
+ * `config` and never part of it (the BO must never send it back — the API is strict). `null` whenever there is
+ * no add-on, the media row is gone or the URL could not be signed; the endpoint still answers 200 in all three
+ * cases. `url` follows FEAT-049's rule, so the `src` of an `<img>` always goes through `utils/media.ts#mediaSrc`.
+ */
+export interface AdAddOnImage {
+  id: string
+  name: string
+  width: number
+  height: number
+  url: string
+}
+
+/**
+ * The 8 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
  * `identity.post` of an `authCode` template includes the stored Spark `code`.
  * FEAT-038: `utm` is the 7th key — optional in this type because a document saved before that feature has no
- * such key (F2); every reader treats a missing key as `null`.
+ * such key (F2); every reader treats a missing key as `null`. FEAT-050 adds `addOn` as the 8th key under the
+ * same rule (api-contract §1 rule 1).
  */
 export interface AdConfig {
   /** null = let TikTok auto-name the ad; the job appends the date to the prefix */
@@ -187,11 +222,13 @@ export interface AdConfig {
   tracking: AdTracking
   /** FEAT-038 — the UTM set the ad's sign-up link counts under; `null` / absent = not bound */
   utm?: UtmRef | null
+  /** FEAT-050 — the interactive add-on of the ad; `null` / absent = none */
+  addOn?: AdAddOn | null
 }
 
 /**
- * The same 7 keys **as sent to the API** (`identity.post` carries the code, never `hasCode`/`codeLast4`;
- * `utm` carries the four body strings, never the ids).
+ * The same 8 keys **as sent to the API** (`identity.post` carries the code, never `hasCode`/`codeLast4`;
+ * `utm` carries the four body strings, never the ids; `addOn` is the same four-key blob that is served).
  */
 export interface AdConfigRequest extends Omit<AdConfig, 'identity' | 'utm'> {
   identity: AdIdentityRequest
@@ -312,7 +349,7 @@ export interface VerifyPostInfoResponse {
   postInfo: AdTemplatePostInfo
 }
 
-/** Exact key set of the API's template view (10 keys; `postInfo` after `catalogVersion`). */
+/** Exact key set of the API's template view (11 keys; `postInfo` after `catalogVersion`, then `addOnImage`). */
 export interface AdTemplate {
   id: string
   name: string
@@ -331,6 +368,13 @@ export interface AdTemplate {
    * full view — readers of the shared keys accept the union, the post card narrows with `isFullPostInfo()`.
    */
   postInfo?: AdTemplatePostInfo | AdTemplatePostInfoSummary | null
+  /**
+   * FEAT-050 (api-contract §2) — the resolved image of `config.addOn.imageId`, or `null` when there is no
+   * add-on, the media row is gone or its URL could not be signed. **Optional** in this type for the same reason
+   * as `postInfo`: an older API does not serve the key at all, and a reader must not tell "no add-on image" from
+   * "this API does not know about add-ons" by the key's presence — both render as "no thumbnail".
+   */
+  addOnImage?: AdAddOnImage | null
   /** `name` is null when the workspace row is gone */
   workspace: { id: string, name: string | null }
   /** `username` is null when the admin row is gone */

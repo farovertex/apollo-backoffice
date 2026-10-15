@@ -50,7 +50,21 @@
  * A template saved before FEAT-038 has no `utm` key at all: it opens with the toggle off and a save leaves
  * `utm` out of the PATCH entirely.
  *
- * Layout: six sections — `adname`, then **UTM**, then TikTok's four in the TikTok page order as an **accordion**.
+ * **FEAT-050** (api-contract v1 §1, §2, §7 · spec AC-15…AC-17, AC-20): a 7th section "Add-On เชิงโต้ตอบ"
+ * (`addon`, after `tracking`) carries the 8th config key `addOn` — the display card the build puts on the ad.
+ * The switch `adt-addon-enabled` decides the whole block exactly like `adt-utm-enabled` does: off → the body
+ * sends `config.addOn: null`, on → the picked image (`adt-addon-pick` mounts FEAT-049's `MediaPicker`, which
+ * lists, searches and uploads into the public library) plus `zoomClicks` (−5…5) and `displaySeconds` (2…10),
+ * all four keys always sent together. Only the **id** is stored: the thumbnail comes from the view's
+ * `addOnImage` on open and from what the picker emitted after a pick, and its `src` always goes through
+ * `mediaSrc()` — a media URL is never built here. `config.addOn.imageId` is not a `UFormField`, so that issue
+ * (and the client "pick an image first") lands under the picker as `adt-addon-image-error`, while
+ * `config.addOn` itself and any other deeper path land under the section as `adt-addon-error` — the same two-level
+ * shape FEAT-038 uses for UTM. A template saved before this feature has no `addOn` key: it opens with the switch
+ * off and a save that does not touch it leaves `addOn` out of the PATCH entirely (BUG-008 class, spec AC-16).
+ *
+ * Layout: seven sections — `adname`, then **UTM**, then TikTok's four in the TikTok page order as an
+ * **accordion**, then `addon`.
  * `adname` and `utm` are always open and have no toggle (human decision 2026-10-11: UTM is ours and is set on
  * every template, so its "ผูก UTM" switch is visible at once and the section sits before ตัวตน; its live badge
  * `adt-sec-utm-default` still reads `ไม่ผูก` while the switch is off, AS-8). `identity` / `destination` / `cta` /
@@ -68,7 +82,21 @@ import type { Form, FormErrorEvent, FormSubmitEvent, ModalProps } from '@nuxt/ui
 import type { ApiErrorBody } from '#shared/types/auth'
 import { ctaValuesFrom } from '~/utils/ad-cta'
 import { UTM_NAME_MAX_LENGTH, UTM_PREFIX_MAX_LENGTH, parseUtm } from '~/utils/utm'
+import {
+  AD_ADD_ON_MESSAGES,
+  AD_ADD_ON_SECONDS_DEFAULT,
+  AD_ADD_ON_SECONDS_MAX,
+  AD_ADD_ON_SECONDS_MIN,
+  AD_ADD_ON_TYPE,
+  AD_ADD_ON_ZOOM_DEFAULT,
+  AD_ADD_ON_ZOOM_MAX,
+  AD_ADD_ON_ZOOM_MIN
+} from '~/utils/ad-add-on'
+import { formatMediaDimensions, mediaSrc } from '~/utils/media'
+import type { MediaPickerSelection } from '#shared/types/media'
 import type {
+  AdAddOn,
+  AdAddOnImage,
   AdConfig,
   AdConfigRequest,
   AdCta,
@@ -173,6 +201,8 @@ interface ConfigState {
   tracking: { impressionUrl: string, clickUrl: string }
   /** FEAT-038 — `enabled` is the UI encoding of `utm !== null`; the ids are never part of the form state */
   utm: UtmState
+  /** FEAT-050 — `enabled` is the UI encoding of `addOn !== null`; `image` is display-only */
+  addOn: AddOnState
 }
 
 interface UtmState {
@@ -181,6 +211,20 @@ interface UtmState {
   source: string
   medium: string
   campaign: string
+}
+
+/**
+ * FEAT-050 — `config.addOn` as the form holds it. Only `imageId` is ever sent; `image` is the thumbnail /
+ * name / size of that id (the view's `addOnImage` on open, the picker's selection after a pick) and is never
+ * part of a request body. The two numbers can be `null` while the input is empty — the client validation then
+ * refuses the save with the API's own range text.
+ */
+interface AddOnState {
+  enabled: boolean
+  imageId: string
+  zoomClicks: number | null
+  displaySeconds: number | null
+  image: AdAddOnImage | null
 }
 
 interface FormState {
@@ -232,13 +276,35 @@ function utmBodyOf(utm: UtmRef | null | undefined): UtmRefBody | null {
   return { prefix: utm.prefix, source: utm.source, medium: utm.medium, campaign: utm.campaign }
 }
 
+/**
+ * FEAT-050 — the stored `config.addOn` as the form holds it. A missing key (a template saved before the
+ * feature) and an explicit `null` are the same thing: the switch starts off with the form defaults (`0` / `2`).
+ * A stored blob is read **permissively** — an out-of-range number from a direct insert still shows up in its
+ * field, so the admin can see and fix it instead of silently losing the add-on; the client validation refuses
+ * the save until it is inside the range.
+ */
+function addOnStateFrom(
+  addOn: AdAddOn | null | undefined,
+  image: AdAddOnImage | null | undefined
+): AddOnState {
+  const row = addOn && typeof addOn === 'object' ? (addOn as Partial<AdAddOn>) : null
+  return {
+    enabled: row !== null,
+    imageId: typeof row?.imageId === 'string' ? row.imageId : '',
+    zoomClicks: typeof row?.zoomClicks === 'number' ? row.zoomClicks : AD_ADD_ON_ZOOM_DEFAULT,
+    displaySeconds: typeof row?.displaySeconds === 'number' ? row.displaySeconds : AD_ADD_ON_SECONDS_DEFAULT,
+    // the resolved image only belongs to the stored id — a different id means no thumbnail until one is picked
+    image: image && image.id === row?.imageId ? image : null
+  }
+}
+
 function storedSparkCode(config: AdConfig | null | undefined): string {
   const post = config?.identity?.post
   if (post?.selection !== POST_AUTH_CODE || !('code' in post) || typeof post.code !== 'string') return ''
   return post.code
 }
 
-function configStateFrom(config: AdConfig): ConfigState {
+function configStateFrom(config: AdConfig, addOnImage: AdAddOnImage | null = null): ConfigState {
   const page = config?.destination?.page
   const createPage = page?.selection === PAGE_CREATE ? page : null
   const cta = config?.cta
@@ -271,7 +337,8 @@ function configStateFrom(config: AdConfig): ConfigState {
       impressionUrl: config?.tracking?.impressionUrl ?? '',
       clickUrl: config?.tracking?.clickUrl ?? ''
     },
-    utm: utmStateFrom(config?.utm)
+    utm: utmStateFrom(config?.utm),
+    addOn: addOnStateFrom(config?.addOn, addOnImage)
   }
 }
 
@@ -280,7 +347,7 @@ function stateFrom(template: AdTemplate | null): FormState {
   return {
     name: template?.name ?? '',
     description: template?.description ?? '',
-    config: configStateFrom(config)
+    config: configStateFrom(config, template?.addOnImage ?? null)
   }
 }
 
@@ -303,9 +370,19 @@ const serverErrors = ref<Record<string, string>>({})
  */
 const utmSectionError = ref<string | null>(null)
 
+/**
+ * FEAT-050 — the same two places for the add-on: a 400 on `config.addOn.imageId` ("ไม่พบรูปนี้ในคลังรูป …")
+ * belongs to the picker, not to a `UFormField` (`adt-addon-image-error`), and `config.addOn` itself (or any
+ * deeper path that is not one of the two numbers) belongs to the whole section (`adt-addon-error`).
+ */
+const addOnImageServerError = ref<string | null>(null)
+const addOnSectionError = ref<string | null>(null)
+
 function clearServerErrors() {
   serverErrors.value = {}
   utmSectionError.value = null
+  addOnImageServerError.value = null
+  addOnSectionError.value = null
 }
 
 // any edit invalidates what the server said about the form
@@ -315,7 +392,7 @@ watch(state, clearServerErrors, { deep: true })
 const formRef = useTemplateRef<Form<Schema>>('formRef')
 
 // ── accordion (TikTok's four sections collapse; adname and UTM are always open) ──────────────────────────────────────
-type SectionId = 'adname' | 'identity' | 'destination' | 'cta' | 'tracking' | 'utm'
+type SectionId = 'adname' | 'identity' | 'destination' | 'cta' | 'tracking' | 'addon' | 'utm'
 
 /**
  * The sections that own `config` keys (for `SECTION_OF_KEY` and the live badges) — every one but `utm` is
@@ -331,6 +408,7 @@ const SECTIONS = [
   },
   { id: 'cta' as const, heading: 'Call to action', keys: ['cta'] as const },
   { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const },
+  { id: 'addon' as const, heading: 'Add-On เชิงโต้ตอบ', keys: ['addOn'] as const },
   { id: 'utm' as const, heading: 'UTM', keys: ['utm'] as const }
 ] satisfies readonly { id: SectionId, heading: string, keys: readonly (keyof AdConfig)[] }[]
 
@@ -581,6 +659,52 @@ function onUtmPaste(text: string) {
   if (found.utm_campaign !== undefined) state.config.utm.campaign = found.utm_campaign
 }
 
+// ── the Add-On section (FEAT-050 · spec "UI behaviour") ─────────────────────────────────────────────────────────────
+/** `v-model:open` of FEAT-049's `MediaPicker` — a modal inside this modal, opened by `adt-addon-pick` */
+const addOnPickerOpen = ref(false)
+
+/** the thumbnail of the picked / stored image, `null` while nothing is picked or the view resolved no image */
+const addOnImage = computed(() => state.config.addOn.image)
+
+/** `<img src>` of that image — FEAT-049's consumer rule, never a hand-built media URL (api-contract §7) */
+const addOnImageSrc = computed(() => {
+  const url = addOnImage.value?.url
+  return url ? mediaSrc(url) : null
+})
+
+/** `750×421` — the byte size is not part of `addOnImage` / the picker's selection (see bo.md "Deviations") */
+const addOnImageSize = computed(() => {
+  const image = addOnImage.value
+  return image ? formatMediaDimensions(image.width, image.height) : ''
+})
+
+/**
+ * What is shown under the picker: the API's own refusal of the id if there is one, else the client issue of a
+ * switch that is on without an image (`adt-addon-image-error`, the same message the submit is blocked with).
+ */
+const addOnImageError = computed(() => {
+  if (addOnImageServerError.value) return addOnImageServerError.value
+  if (state.config.addOn.enabled && state.config.addOn.imageId === '') return AD_ADD_ON_MESSAGES.imageRequired
+  return null
+})
+
+/**
+ * The picker emits `{ id, name, url, width, height }` (an existing image or one it just uploaded). Only the id
+ * is form state; the rest is kept for the thumbnail / name / size and is never sent back to the API.
+ */
+function onAddOnImage(selection: MediaPickerSelection) {
+  state.config.addOn.imageId = selection.id
+  state.config.addOn.image = {
+    id: selection.id,
+    name: selection.name,
+    width: selection.width,
+    height: selection.height,
+    url: selection.url
+  }
+  addOnImageServerError.value = null
+  addOnSectionError.value = null
+}
+
 // ── "Default" badges (live) ──────────────────────────────────────────────────────────────────────────────────────────
 /** the config the current state would send — the single source for the badges and for the POST/PATCH bodies */
 const currentConfig = computed(() => configFromState())
@@ -595,7 +719,11 @@ const sectionIsDefault = computed<Record<string, boolean>>(() => {
         // UTM is not a TikTok setting: "unbound" is its default, whatever `systemDefault` says (badge "ไม่ผูก")
         section.id === 'utm'
           ? !state.config.utm.enabled
-          : section.keys.every(key => deepEqual(next[key], base?.[key]))
+          // FEAT-050: the default of `addOn` is `null`, and an older `/options` has no such key at all —
+          // "switch off" is the default either way (comparing `null` with an absent key never matches)
+          : section.id === 'addon'
+            ? !state.config.addOn.enabled
+            : section.keys.every(key => deepEqual(next[key], base?.[key]))
       ] as [string, boolean]
     )
   )
@@ -611,6 +739,7 @@ function resetForm() {
   Object.assign(state, stateFrom(editing.value))
   resetCodeMode()
   utmPaste.value = ''
+  addOnPickerOpen.value = false
   submitting.value = false
   submitError.value = null
   clearServerErrors()
@@ -630,6 +759,8 @@ watch(open, (isOpen) => {
   postSession++
   postInfo.value = null
   postGaveUp.value = false
+  // the picker is a modal inside this one — it must never outlive it
+  addOnPickerOpen.value = false
 })
 
 /**
@@ -717,6 +848,15 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
         source: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('source')),
         medium: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('medium')),
         campaign: z.string().trim().max(UTM_NAME_MAX_LENGTH, UTM_MESSAGES.nameTooLong('campaign'))
+      }),
+      // FEAT-050 — `image` is display-only and is not part of the schema (zod drops it). `nullish`: clearing a
+      // `UInputNumber` emits `undefined`, and that must read as "out of range" (the text below), not as zod's
+      // own "expected number, received undefined".
+      addOn: z.object({
+        enabled: z.boolean(),
+        imageId: z.string(),
+        zoomClicks: z.number().nullish(),
+        displaySeconds: z.number().nullish()
       })
     })
   }).superRefine((data, ctx) => {
@@ -787,6 +927,45 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
         }
       }
     }
+
+    // FEAT-050 — everything the API would answer 400 for is refused here first (spec AC-17): an image has to be
+    // picked, and both numbers have to be integers inside their range. The switch off means `addOn: null` and
+    // no check at all. `config.addOn.imageId` is not a field, so its issue only blocks the submit — the message
+    // itself is rendered under the picker by `addOnImageError`.
+    if (data.config.addOn.enabled) {
+      if (data.config.addOn.imageId === '') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['config', 'addOn', 'imageId'],
+          message: AD_ADD_ON_MESSAGES.imageRequired
+        })
+      }
+      const numbers = [
+        {
+          key: 'zoomClicks',
+          value: data.config.addOn.zoomClicks,
+          min: AD_ADD_ON_ZOOM_MIN,
+          max: AD_ADD_ON_ZOOM_MAX,
+          message: AD_ADD_ON_MESSAGES.zoomRange
+        },
+        {
+          key: 'displaySeconds',
+          value: data.config.addOn.displaySeconds,
+          min: AD_ADD_ON_SECONDS_MIN,
+          max: AD_ADD_ON_SECONDS_MAX,
+          message: AD_ADD_ON_MESSAGES.secondsRange
+        }
+      ] as const
+      for (const field of numbers) {
+        const ok = field.value !== null && field.value !== undefined
+          && Number.isInteger(field.value)
+          && field.value >= field.min
+          && field.value <= field.max
+        if (!ok) {
+          ctx.addIssue({ code: 'custom', path: ['config', 'addOn', field.key], message: field.message })
+        }
+      }
+    }
   })
 }
 
@@ -839,6 +1018,17 @@ function configFromState(): AdConfigRequest {
       }
     : null
 
+  // FEAT-050 — all four keys travel together while the switch is on (the API requires every one of them),
+  // `null` while it is off; never `addOnImage` and never a URL (the API is strict, api-contract §7)
+  const addOn: AdAddOn | null = c.addOn.enabled
+    ? {
+        type: AD_ADD_ON_TYPE,
+        imageId: c.addOn.imageId,
+        zoomClicks: c.addOn.zoomClicks ?? AD_ADD_ON_ZOOM_DEFAULT,
+        displaySeconds: c.addOn.displaySeconds ?? AD_ADD_ON_SECONDS_DEFAULT
+      }
+    : null
+
   return {
     adNamePrefix: prefix === '' ? null : prefix,
     identity: {
@@ -856,7 +1046,8 @@ function configFromState(): AdConfigRequest {
       impressionUrl: impressionUrl === '' ? null : impressionUrl,
       clickUrl: clickUrl === '' ? null : clickUrl
     },
-    utm
+    utm,
+    addOn
   }
 }
 
@@ -876,9 +1067,9 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return true
 }
 
-/** the 7 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-038 api-contract.md v1 §2.1) */
+/** the 8 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-050 api-contract.md v1 §1 rule 5) */
 const CONFIG_KEYS = [
-  'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking', 'utm'
+  'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking', 'utm', 'addOn'
 ] as const satisfies readonly (keyof AdConfig)[]
 
 /**
@@ -887,13 +1078,18 @@ const CONFIG_KEYS = [
  * becomes `{ selection: 'authCode' }`, which is what `configFromState()` builds while the hint is shown.
  * FEAT-038: `utm` is compared **without** the ids (the form never holds them) and a **missing** key counts as
  * `null`, so an old template that is left unbound sends no `utm` in the PATCH at all (spec U1).
+ * FEAT-050: `addOn` follows that precedent — a **missing** key is normalised to `null` here, which is exactly
+ * what `configFromState()` builds while the switch is off, so a template that predates the feature and is left
+ * alone sends **no** `addOn` in the PATCH (spec AC-16; without this normalisation `deepEqual(null, undefined)`
+ * would report a change and the body would carry `addOn: null` on every unrelated save — the BUG-008 class).
  */
 function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
   const config = original.config
   if (!config) return {}
   const base = {
     ...config,
-    utm: utmBodyOf(config.utm)
+    utm: utmBodyOf(config.utm),
+    addOn: config.addOn ?? null
   } as unknown as Partial<AdConfigRequest>
   const post = config.identity?.post
   if (post?.selection !== POST_AUTH_CODE) return base
@@ -961,7 +1157,8 @@ const FIELD_NAMES: ReadonlySet<string> = new Set([
   'config.allowOnTiktokPlatforms',
   'config.cta.values',
   'config.tracking.impressionUrl', 'config.tracking.clickUrl',
-  'config.utm.prefix', 'config.utm.source', 'config.utm.medium', 'config.utm.campaign'
+  'config.utm.prefix', 'config.utm.source', 'config.utm.medium', 'config.utm.campaign',
+  'config.addOn.zoomClicks', 'config.addOn.displaySeconds'
 ])
 
 /**
@@ -972,6 +1169,20 @@ const FIELD_NAMES: ReadonlySet<string> = new Set([
 function isUtmSectionPath(path: string): boolean {
   if (path === 'config.utm') return true
   return path.startsWith('config.utm.') && !FIELD_NAMES.has(path)
+}
+
+/** FEAT-050 — the picked image (`ไม่พบรูปนี้ในคลังรูป — เลือกรูปใหม่`): under the picker, not on a field */
+const ADD_ON_IMAGE_PATH = 'config.addOn.imageId'
+
+/**
+ * FEAT-050 — `config.addOn` itself (not an object / not `null`) and every other deeper path that is neither one
+ * of the two numbers nor the image (`config.addOn.type`, the strict-key refusal `config.addOn.foo`, …) belong to
+ * the whole section: `adt-addon-error`, the same shape as `adt-utm-error`.
+ */
+function isAddOnSectionPath(path: string): boolean {
+  if (path === 'config.addOn') return true
+  if (!path.startsWith('config.addOn.')) return false
+  return path !== ADD_ON_IMAGE_PATH && !FIELD_NAMES.has(path)
 }
 
 /**
@@ -1036,11 +1247,24 @@ function showApiError(e: unknown, fallback: string) {
     const matched: string[] = []
     const next: Record<string, string> = {}
     let utmSection: string | null = null
+    let addOnImage: string | null = null
+    let addOnSection: string | null = null
     for (const issue of issues) {
       // the UTM set as a whole ("ไม่พบ UTM นี้ในระบบปลายทาง …") — under the section, never on a field
       if (isUtmSectionPath(issue.path)) {
         utmSection = issue.message
         matched.push('config.utm')
+        continue
+      }
+      // FEAT-050 — the two add-on places that are not `UFormField`s
+      if (issue.path === ADD_ON_IMAGE_PATH) {
+        addOnImage = issue.message
+        matched.push('config.addOn')
+        continue
+      }
+      if (isAddOnSectionPath(issue.path)) {
+        addOnSection = issue.message
+        matched.push('config.addOn')
         continue
       }
       const name = resolveFieldName(issue.path)
@@ -1051,6 +1275,8 @@ function showApiError(e: unknown, fallback: string) {
     }
     serverErrors.value = next
     utmSectionError.value = utmSection
+    addOnImageServerError.value = addOnImage
+    addOnSectionError.value = addOnSection
     // the field has to be on screen for its message to be read
     expandSectionsOf(matched)
     // the API refused the code (e.g. the stored post was not `authCode` after all) → the input has to come back
@@ -1909,6 +2135,155 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
+        <!--
+          7. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
+          with the `Default` badge while there is no add-on, auto-expanded by `expandSectionsOf` on a 400.
+        -->
+        <section class="border-t border-default pt-4">
+          <h3 class="text-sm font-semibold text-highlighted">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
+              :aria-expanded="expanded.addon"
+              aria-controls="adt-sec-addon"
+              data-testid="adt-sec-addon-toggle"
+              @click="toggleSection('addon')"
+            >
+              <UIcon
+                :name="expanded.addon ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+                class="size-4 shrink-0 text-muted"
+              />
+              <span>Add-On เชิงโต้ตอบ</span>
+              <UBadge
+                v-if="sectionIsDefault.addon"
+                color="neutral"
+                variant="subtle"
+                size="sm"
+                data-testid="adt-sec-addon-default"
+              >
+                Default
+              </UBadge>
+            </button>
+          </h3>
+
+          <div
+            v-show="expanded.addon"
+            id="adt-sec-addon"
+            class="mt-4 space-y-4"
+            data-testid="adt-sec-addon"
+          >
+            <USwitch
+              v-model="state.config.addOn.enabled"
+              label="เพิ่ม Add-On บัตรดิสเพลย์"
+              :disabled="submitting"
+              data-testid="adt-addon-enabled"
+            />
+
+            <!-- `v-show`, like every other section body: the values stay mounted while the switch is off -->
+            <div v-show="state.config.addOn.enabled" class="space-y-4">
+              <div class="flex flex-wrap items-start gap-3">
+                <!-- the thumbnail of the picked / stored image; `max-h-24` = the 96 px of the spec -->
+                <img
+                  v-if="addOnImageSrc"
+                  :src="addOnImageSrc"
+                  :alt="addOnImage?.name ?? ''"
+                  class="max-h-24 w-auto max-w-32 rounded-md border border-default object-contain"
+                  data-testid="adt-addon-image"
+                >
+                <div
+                  v-else
+                  class="flex size-16 shrink-0 items-center justify-center rounded-md border border-dashed border-default text-muted"
+                  data-testid="adt-addon-image-empty"
+                >
+                  <UIcon name="i-lucide-image" class="size-5" />
+                </div>
+
+                <div class="flex min-w-0 flex-1 flex-col gap-1">
+                  <span
+                    v-if="addOnImage"
+                    class="truncate text-sm font-medium text-highlighted"
+                    data-testid="adt-addon-image-name"
+                  >{{ addOnImage.name }}</span>
+                  <span
+                    v-if="addOnImage"
+                    class="text-xs text-muted"
+                    data-testid="adt-addon-image-size"
+                  >{{ addOnImageSize }}</span>
+                  <UButton
+                    label="เลือกรูปจากคลัง"
+                    icon="i-lucide-images"
+                    color="neutral"
+                    variant="outline"
+                    size="xs"
+                    class="w-fit"
+                    :disabled="submitting"
+                    data-testid="adt-addon-pick"
+                    @click="addOnPickerOpen = true"
+                  />
+                </div>
+              </div>
+
+              <!-- the id is not a `UFormField`: the client issue and the API's 400 on `imageId` land here -->
+              <p
+                v-if="addOnImageError"
+                class="text-sm break-words text-error"
+                role="alert"
+                data-testid="adt-addon-image-error"
+              >
+                {{ addOnImageError }}
+              </p>
+
+              <div class="grid gap-4 sm:grid-cols-2">
+                <UFormField
+                  label="จำนวนครั้งที่ซูม"
+                  name="config.addOn.zoomClicks"
+                  required
+                  :help="`+ ซูมเข้า · − ซูมออก · 0 ไม่ซูม (${AD_ADD_ON_ZOOM_MIN} ถึง ${AD_ADD_ON_ZOOM_MAX})`"
+                  :error="serverErrors['config.addOn.zoomClicks']"
+                >
+                  <UInputNumber
+                    v-model="state.config.addOn.zoomClicks"
+                    :min="AD_ADD_ON_ZOOM_MIN"
+                    :max="AD_ADD_ON_ZOOM_MAX"
+                    :step="1"
+                    class="w-full"
+                    :disabled="submitting"
+                    data-testid="adt-addon-zoom"
+                  />
+                </UFormField>
+
+                <UFormField
+                  label="แสดงนาน (วินาที)"
+                  name="config.addOn.displaySeconds"
+                  required
+                  :help="`${AD_ADD_ON_SECONDS_MIN} ถึง ${AD_ADD_ON_SECONDS_MAX} วินาที`"
+                  :error="serverErrors['config.addOn.displaySeconds']"
+                >
+                  <UInputNumber
+                    v-model="state.config.addOn.displaySeconds"
+                    :min="AD_ADD_ON_SECONDS_MIN"
+                    :max="AD_ADD_ON_SECONDS_MAX"
+                    :step="1"
+                    class="w-full"
+                    :disabled="submitting"
+                    data-testid="adt-addon-seconds"
+                  />
+                </UFormField>
+              </div>
+            </div>
+
+            <!-- the blob as a whole was refused (400 `config.addOn` or a path under it that is not a field) -->
+            <p
+              v-if="addOnSectionError"
+              class="text-sm break-words text-error"
+              role="alert"
+              data-testid="adt-addon-error"
+            >
+              {{ addOnSectionError }}
+            </p>
+          </div>
+        </section>
+
         <UAlert
           v-if="submitError"
           color="error"
@@ -1920,6 +2295,16 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           data-testid="adt-form-error"
         />
       </UForm>
+
+      <!--
+        FEAT-049's picker, reused as it is (list + search + upload): a modal on top of this one. It is mounted
+        outside the `<UForm>` so its own buttons can never submit this form, and it is closed together with it.
+      -->
+      <MediaPicker
+        v-model:open="addOnPickerOpen"
+        :selected-id="state.config.addOn.imageId || null"
+        @select="onAddOnImage"
+      />
     </template>
 
     <!-- actions in the footer so they stay reachable while the 6 sections scroll (390x844) -->

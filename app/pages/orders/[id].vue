@@ -32,11 +32,25 @@
  * this never produces an expected 404 of its own). `templateState` tracks the lookup: `gone` on 404 shows
  * `od-adt-gone`, any other failure shows `od-adt-cover-error` — both muted text under the name, no toast, no
  * retry loop. The order itself always renders from its own snapshot regardless of this lookup's outcome.
+ *
+ * FEAT-050 (spec "Order detail", AC-19): the summary gained the row `od-addon` — what the build will do about
+ * the interactive add-on. The **values** come from the order's own snapshot (`adConfig.addOn`), because that is
+ * what the build reads; an order saved **before** the feature has no such key at all and falls back to the
+ * **current** template (already loaded above for the cover, so no extra request) with the suffix
+ * `od-addon-from-template`. A snapshot that says `addOn: null`, a template that is gone or says `null`, and a
+ * half-written blob (`readAdAddOn()` refuses it, like the API's `planAd()`) all render **no row**.
+ * The **thumbnail** is one `GET /media/<imageId>` per resolved image id — triggered by the id, never by the 5 s
+ * build poll or an action POST (both only replace the order, and the same id re-reads nothing). 404/410 →
+ * placeholder + `od-addon-gone`, any other failure (including an `<img>` that will not load) → placeholder +
+ * `od-addon-error`; no toast, no retry loop, and the row's text stays readable in every case.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { AdTemplate } from '#shared/types/ad-templates'
+import type { MediaAssetView } from '#shared/types/media'
+import { adAddOnSummaryText, readAdAddOn } from '~/utils/ad-add-on'
+import { mediaSrc } from '~/utils/media'
 import {
   type BuildConflictBody,
   type BuildScreenshotResponse,
@@ -99,6 +113,74 @@ async function loadTemplate(id: string) {
     const status = err.response?.status ?? err.statusCode
     templateState.value = status === 404 ? 'gone' : 'error'
   }
+}
+
+// ── FEAT-050 — the add-on of this order (snapshot first, current template only for pre-feature orders) ───────────────
+/** `true` only when the snapshot really carries the key: that is how a pre-feature order is recognised */
+const snapshotHasAddOn = computed(() => {
+  const snapshot = order.value?.adConfig
+  return !!snapshot && typeof snapshot === 'object' && 'addOn' in snapshot
+})
+
+/** the add-on the build will fill, or `null` — the current template is consulted **only** for an old order */
+const addOn = computed(() => {
+  if (!order.value) return null
+  if (snapshotHasAddOn.value) return readAdAddOn(order.value.adConfig.addOn)
+  return readAdAddOn(template.value?.config?.addOn)
+})
+
+/** the row says where its values came from (spec: the suffix is only for the fallback) */
+const addOnFromTemplate = computed(() => addOn.value !== null && !snapshotHasAddOn.value)
+
+const addOnText = computed(() => (addOn.value ? adAddOnSummaryText(addOn.value) : ''))
+
+/** one `GET /media/:id` per image id, never repeated by the poll or an action POST */
+const addOnImage = ref<MediaAssetView | null>(null)
+const addOnImageState = ref<'idle' | 'loading' | 'ready' | 'gone' | 'error'>('idle')
+let loadedAddOnImageId: string | null = null
+// bumped on every image change / unmount so a late response of a superseded id is dropped
+let addOnImageSession = 0
+
+const addOnImageSrc = computed(() => {
+  const url = addOnImageState.value === 'ready' ? addOnImage.value?.url : null
+  return url ? mediaSrc(url) : null
+})
+
+async function loadAddOnImage(id: string) {
+  const s = ++addOnImageSession
+  addOnImage.value = null
+  addOnImageState.value = 'loading'
+  try {
+    // retry: 0 — exactly one request per image id
+    const res = await api<MediaAssetView>(`/media/${encodeURIComponent(id)}`, { retry: 0 })
+    if (s !== addOnImageSession) return
+    addOnImage.value = res
+    addOnImageState.value = 'ready'
+  } catch (e) {
+    if (s !== addOnImageSession) return
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    // the image was deleted from the library (the order keeps its snapshot) vs. anything else
+    addOnImageState.value = status === 404 || status === 410 ? 'gone' : 'error'
+  }
+}
+
+watch(() => addOn.value?.imageId ?? null, (id) => {
+  if (!id) {
+    addOnImageSession++
+    loadedAddOnImageId = null
+    addOnImage.value = null
+    addOnImageState.value = 'idle'
+    return
+  }
+  if (id === loadedAddOnImageId) return
+  loadedAddOnImageId = id
+  void loadAddOnImage(id)
+}, { immediate: true })
+
+/** an `<img>` that will not load (expired presigned URL) is "could not load", not "deleted"; no refetch loop */
+function onAddOnImgError() {
+  addOnImageState.value = 'error'
 }
 
 function apply(res: OrderDetailResponse) {
@@ -185,6 +267,7 @@ onMounted(() => {
 onUnmounted(() => {
   session++
   templateSession++
+  addOnImageSession++
   stopPolling()
 })
 
@@ -663,6 +746,49 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                   </dt>
                   <dd class="break-all font-mono text-highlighted" data-testid="od-spark-code">
                     {{ sparkPostCode }}
+                  </dd>
+                </template>
+                <!-- FEAT-050 — only rendered when an add-on was really found (snapshot, or the old-order fallback) -->
+                <template v-if="addOn">
+                  <dt class="text-muted">
+                    Add-On
+                  </dt>
+                  <dd class="flex items-start gap-3 text-highlighted" data-testid="od-addon">
+                    <img
+                      v-if="addOnImageSrc"
+                      :src="addOnImageSrc"
+                      :alt="addOnImage?.name ?? ''"
+                      class="h-12 w-auto max-w-20 rounded-md border border-default object-contain"
+                      data-testid="od-addon-image"
+                      @error="onAddOnImgError"
+                    >
+                    <div
+                      v-else
+                      class="flex h-12 w-20 shrink-0 items-center justify-center rounded-md border border-dashed border-default text-muted"
+                      data-testid="od-addon-image-placeholder"
+                    >
+                      <UIcon name="i-lucide-image" class="size-4" />
+                    </div>
+                    <div class="flex min-w-0 flex-col gap-0.5">
+                      <span class="flex flex-wrap items-baseline gap-1">
+                        <span data-testid="od-addon-text">{{ addOnText }}</span>
+                        <span
+                          v-if="addOnFromTemplate"
+                          class="text-xs text-muted"
+                          data-testid="od-addon-from-template"
+                        >(จาก template ปัจจุบัน)</span>
+                      </span>
+                      <span v-if="addOnImageState === 'gone'" class="text-xs text-muted" data-testid="od-addon-gone">
+                        รูปถูกลบแล้ว
+                      </span>
+                      <span
+                        v-else-if="addOnImageState === 'error'"
+                        class="text-xs text-muted"
+                        data-testid="od-addon-error"
+                      >
+                        โหลดรูปไม่ได้
+                      </span>
+                    </div>
                   </dd>
                 </template>
                 <dt class="text-muted">
