@@ -65,12 +65,15 @@
  * shape FEAT-038 uses for UTM. A template saved before this feature has no `addOn` key: it opens with the switch
  * off and a save that does not touch it leaves `addOn` out of the PATCH entirely (BUG-008 class, spec AC-16).
  *
- * **FEAT-054** (api-contract v1 §1, §2 · spec AC-15, AC-16) — inside `destination` (NOT a new section), the
+ * **FEAT-054** (api-contract v3 §7.4 · spec AC-15, AC-16, AC-21) — inside `destination` (NOT a new section), the
  * instant page's own Call-to-Action button: a ข้อความ/รูปภาพ radio (`adt-cta-image-mode`) decides whether
  * `buttonImageId` travels as `null` (text — the existing `buttonText` field, `v-show`n while this mode is on)
  * or as a picked id (`adt-cta-image-pick` mounts a **second** `MediaPicker`, `assetType="call-action"`).
- * `buttonText` is **always** sent regardless of mode (kept, never cleared, for switching back — api-contract
- * §1.1) so its `UFormField` stays mounted (`v-show`), exactly like the collapsible section bodies. The ratio
+ * `buttonText` is sent **exactly as the form holds it** regardless of mode — never injected, never cleared on a
+ * mode switch, so a value typed before switching to รูปภาพ survives for switching back. It is **required only
+ * in text mode** (v3 reverses v1's "always required": an image-mode button carries no text, so an empty value
+ * there is valid); its `UFormField` stays mounted (`v-show`), exactly like the collapsible section bodies, so
+ * the value is preserved either way. The ratio
  * warning (`adt-cta-image-ratio-warn`) and every size/mime/`accept` value come from the shared
  * `GET /media/options` cache (`useMediaUpload()`, `utils/media.ts#mediaRecommendedFor/mediaRatioWarning`) —
  * nothing is hard-coded. The id is not a `UFormField`, so its 400 lands at the picker (`adt-cta-image-error`);
@@ -217,9 +220,10 @@ interface ConfigState {
       language: string
       showHandCursor: boolean
       /**
-       * FEAT-054 — UI-only toggle, never sent itself: `'text'` → the body's `buttonImageId` is `null`
-       * (`buttonText` above is still sent, kept for switching back); `'image'` → the body's `buttonImageId`
-       * is `buttonImageId` below.
+       * FEAT-054 — UI-only toggle, never sent itself: `'text'` → the body's `buttonImageId` is `null` and
+       * `buttonText` above is required (unchanged); `'image'` → the body's `buttonImageId` is `buttonImageId`
+       * below and `buttonText` is sent as-is (may be `''`, not required — v3) but kept, never cleared, for
+       * switching back.
        */
       buttonMode: 'text' | 'image'
       /** `''` while nothing is picked — the client validation then refuses the save (`adt-cta-image-error`) */
@@ -1030,8 +1034,10 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
       })
     }
 
-    // the new instant page needs a button text and an https landing URL (api-contract §2.2)
-    if (data.config.destination.page.buttonText === '') {
+    // the new instant page needs a button text and an https landing URL (api-contract §2.2) — but only in text
+    // mode (api-contract v3 §7.4): the image mode's button carries no text, so an empty `buttonText` there is
+    // valid and must not block submit.
+    if (data.config.destination.page.buttonMode === 'text' && data.config.destination.page.buttonText === '') {
       ctx.addIssue({
         code: 'custom',
         path: ['config', 'destination', 'page', 'buttonText'],
@@ -2092,8 +2098,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
             <!--
               FEAT-054 — the CTA button of the instant page: text (today's behaviour, unchanged) or an image
-              from the library. `buttonText` is always sent regardless of mode (kept for switching back), so
-              its field is `v-show`n rather than removed — exactly like the collapsible section bodies.
+              from the library. `buttonText` is sent as the form holds it regardless of mode (kept for
+              switching back, never injected), so its field is `v-show`n rather than removed — exactly like the
+              collapsible section bodies. Required only in text mode (v3): an image-mode button carries no
+              text, so an empty value there is valid.
             -->
             <URadioGroup
               v-model="state.config.destination.page.buttonMode"
