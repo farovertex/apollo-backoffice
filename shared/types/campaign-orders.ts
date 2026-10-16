@@ -222,6 +222,12 @@ export interface BuildView {
   createdAt: string
   /** FEAT-031 — WORKER_INSTANCE of the process that ran this build's job; `null` before it starts or without a job */
   workerInstance: string | null
+  /** FEAT-055 — number of this attempt, starting at 1; `$inc`-ed on every retry (manual or auto) */
+  attempt: number
+  /** FEAT-055 — ISO; set at insert (`= createdAt`) and on every retry (`= now`); the worker's stale check reads this */
+  queuedAt: string
+  /** FEAT-055 — `jobId` of every earlier attempt, oldest first; never trimmed */
+  previousJobIds: string[]
 }
 
 /** `POST /campaign-orders` 201 body. */
@@ -261,8 +267,13 @@ export interface CreateOrderRejectedBody {
   rejected: RejectedTarget[]
 }
 
-/** 409 body of `POST /builds/:id/cancel` and `/stop-before-publish` (carries the current build status). */
+/**
+ * 409 body of `POST /builds/:id/cancel`, `/stop-before-publish` and `/retry` (carries the current build
+ * status). FEAT-055 — `/retry` adds `reason: 'buildInProgress'` when the account already has another
+ * `queued`/`running` build; absent for every other 409 shape.
+ */
 export interface BuildConflictBody {
   error: string
   status: BuildStatus
+  reason?: 'buildInProgress'
 }

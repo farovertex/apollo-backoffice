@@ -43,6 +43,14 @@
  * build poll or an action POST (both only replace the order, and the same id re-reads nothing). 404/410 →
  * placeholder + `od-addon-gone`, any other failure (including an `<img>` that will not load) → placeholder +
  * `od-addon-error`; no toast, no retry loop, and the row's text stays readable in every case.
+ *
+ * FEAT-055 (api-contract.md v1 §5; spec "UI behaviour", AC-16..20): a fourth `PendingAction` kind,
+ * `retryBuild`, is a `failed`/`cancelled` build row's **Retry** button (`od-build-retry`) → the same confirm
+ * modal, `POST /builds/:id/retry` through the existing `runAction()` → `apply(res)` path (one POST, same
+ * `OrderDetailResponse` shape, 409 handled exactly like Cancel/Stop). The confirm description warns that a
+ * draft from the earlier attempt may still be on TikTok, plus a publish-specific sentence for
+ * `publishMode === 'publish'` orders. `od-build-attempt` (`attempt N`) appears next to the status badge only
+ * when `attempt > 1`; `queuedAt` / `previousJobIds` are carried by `BuildView` but not rendered.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -276,6 +284,7 @@ type PendingAction
   = { kind: 'cancelOrder' }
     | { kind: 'cancelBuild', build: BuildView }
     | { kind: 'stopBuild', build: BuildView }
+    | { kind: 'retryBuild', build: BuildView }
 
 const action = ref<PendingAction | null>(null)
 const confirmOpen = ref(false)
@@ -286,6 +295,7 @@ const confirmTitle = computed(() => {
     case 'cancelOrder': return 'Cancel every queued build of this order?'
     case 'cancelBuild': return 'Cancel this build?'
     case 'stopBuild': return 'Stop this build before it publishes?'
+    case 'retryBuild': return 'Retry this build?'
     default: return 'Are you sure?'
   }
 })
@@ -299,12 +309,28 @@ const confirmDescription = computed(() => {
       return 'The build is cancelled and its job is removed from the queue.'
     case 'stopBuild':
       return 'The build finishes filling everything in but never presses publish; it ends as ready.'
+    case 'retryBuild': {
+      const n = action.value.build.attempt + 1
+      let text = `The same build runs again from the start (attempt ${n}). A draft from the earlier attempt may `
+        + 'already exist on TikTok — it is not deleted; check and delete it yourself.'
+      if (order.value?.publishMode === 'publish') {
+        text += ' This order publishes: if the earlier attempt reached publish, a campaign may already be '
+          + 'live — check Ads Manager before retrying.'
+      }
+      return text
+    }
     default:
       return ''
   }
 })
 
-const confirmLabel = computed(() => (action.value?.kind === 'stopBuild' ? 'Stop before publish' : 'Cancel build(s)'))
+const confirmLabel = computed(() => {
+  switch (action.value?.kind) {
+    case 'stopBuild': return 'Stop before publish'
+    case 'retryBuild': return 'Retry build'
+    default: return 'Cancel build(s)'
+  }
+})
 
 function ask(next: PendingAction) {
   action.value = next
@@ -324,16 +350,23 @@ function askStopBuild(build: BuildView) {
   ask({ kind: 'stopBuild', build })
 }
 
+function askRetryBuild(build: BuildView) {
+  ask({ kind: 'retryBuild', build })
+}
+
 function actionPath(current: PendingAction): string {
   if (current.kind === 'cancelOrder') return `/campaign-orders/${encodeURIComponent(orderId.value)}/cancel`
   const id = encodeURIComponent(current.build.id)
-  return current.kind === 'cancelBuild' ? `/builds/${id}/cancel` : `/builds/${id}/stop-before-publish`
+  if (current.kind === 'cancelBuild') return `/builds/${id}/cancel`
+  if (current.kind === 'retryBuild') return `/builds/${id}/retry`
+  return `/builds/${id}/stop-before-publish`
 }
 
 function successTitle(current: PendingAction): string {
   switch (current.kind) {
     case 'cancelOrder': return 'Order cancelled'
     case 'cancelBuild': return 'Build cancelled'
+    case 'retryBuild': return 'Build retried'
     default: return 'Stop before publish requested'
   }
 }
@@ -384,6 +417,10 @@ function canCancelBuild(build: BuildView): boolean {
 
 function canStopBuild(build: BuildView): boolean {
   return build.status === 'running' && order.value?.publishMode === 'publish' && !build.stopBeforePublish
+}
+
+function canRetryBuild(build: BuildView): boolean {
+  return build.status === 'failed' || build.status === 'cancelled'
 }
 
 // ── tabs (FEAT-020 api-contract §6.4) ────────────────────────────────────────────────────────────────────────────────
@@ -894,6 +931,16 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                           >
                             {{ build.stoppedBeforePublish ? 'Stopped before publish' : 'Stop requested' }}
                           </UBadge>
+                          <UBadge
+                            v-if="build.attempt > 1"
+                            color="neutral"
+                            variant="outline"
+                            size="sm"
+                            class="whitespace-nowrap"
+                            data-testid="od-build-attempt"
+                          >
+                            attempt {{ build.attempt }}
+                          </UBadge>
                         </div>
                       </td>
                       <td class="border-b border-default px-3 py-2">
@@ -950,6 +997,16 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                             size="xs"
                             data-testid="od-build-stop"
                             @click.stop="askStopBuild(build)"
+                          />
+                          <UButton
+                            v-if="canRetryBuild(build)"
+                            label="Retry"
+                            icon="i-lucide-rotate-cw"
+                            color="primary"
+                            variant="subtle"
+                            size="xs"
+                            data-testid="od-build-retry"
+                            @click.stop="askRetryBuild(build)"
                           />
                           <UButton
                             :icon="expanded.includes(build.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
@@ -1037,7 +1094,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
             />
             <UButton
               :label="confirmLabel"
-              :color="action?.kind === 'stopBuild' ? 'warning' : 'error'"
+              :color="action?.kind === 'stopBuild' ? 'warning' : action?.kind === 'retryBuild' ? 'primary' : 'error'"
               :loading="acting"
               data-testid="od-confirm-ok"
               @click="runAction"
