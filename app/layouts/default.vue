@@ -129,7 +129,15 @@ const links = computed(() => [[{
         open.value = false
       }
     }, {
-      // FEAT-040 — UTM report (register/deposit per UTM key vs. ad spend), directly after Report Banned accounts
+      // FEAT-056 — Ads monitor (3 tabs + On/off switch), directly after Report Banned accounts; GOD/Admin only
+      label: 'Ads monitor',
+      icon: 'i-lucide-toggle-left',
+      to: '/ads-monitor',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
+      // FEAT-040 — UTM report (register/deposit per UTM key vs. ad spend), directly after Ads monitor
       label: 'UTM',
       icon: 'i-lucide-link-2',
       to: '/reports/utm',
