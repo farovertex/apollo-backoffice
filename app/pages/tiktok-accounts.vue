@@ -825,15 +825,28 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
     header: 'Balance',
     cell: ({ row }) => {
       const a = row.original
-      const text = balanceText(a.balanceAmount, a.balanceCurrency)
+      // 2026-10-16 — the amount and the currency are two elements now: grouped digits (`6,091.06`) + a coloured
+      // badge, because "6091.06 THB" in one flat string made a USD row impossible to spot while scanning. The
+      // `ta-balance` span still carries the raw `data-amount` and still renders the muted dash on its own.
+      const text = balanceAmountText(a.balanceAmount)
       const blocked = balanceBlockedReason(a)
       const loading = balanceLoading.value.has(a.id)
-      const amountLine = h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [
+      const amountLine = h('div', { class: 'flex items-center gap-1 whitespace-nowrap' }, [
         h('span', {
           'class': text ? 'font-medium tabular-nums text-highlighted' : 'text-muted',
           'data-testid': 'ta-balance',
           'data-amount': a.balanceAmount ?? ''
         }, text || '—'),
+        text && a.balanceCurrency
+          ? h(UBadge, {
+              'color': balanceCurrencyColor(a.balanceCurrency),
+              'variant': 'subtle',
+              'size': 'sm',
+              'class': 'font-medium whitespace-nowrap',
+              'data-testid': 'ta-balance-currency',
+              'data-currency': a.balanceCurrency
+            }, () => a.balanceCurrency)
+          : null,
         canPay.value
           ? h(UTooltip, { text: blocked ?? 'Reload balance' }, () => h('span', { class: 'inline-flex' }, [
               h(UButton, {

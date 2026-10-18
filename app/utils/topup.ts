@@ -477,6 +477,32 @@ export function topupBalanceText(topup: TopupView | null | undefined): string {
 }
 
 /**
+ * 2026-10-16 — "6091.06" → "6,091.06": only the digits of the Balance cell, so a long number can be read at a
+ * glance. The stored string stays the authority (`data-amount` keeps it byte for byte); anything that does not
+ * parse as a number is rendered unchanged.
+ */
+export function balanceAmountText(amount: string | null | undefined): string {
+  const raw = (amount ?? '').trim()
+  if (!raw) return ''
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return raw
+  const decimals = raw.includes('.') ? (raw.split('.')[1]?.length ?? 0) : 0
+  return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+}
+
+/**
+ * 2026-10-16 — the badge colour of the currency next to that amount. THB is the common case and stays quiet
+ * (neutral); every other currency gets a colour so a USD/foreign account is spotted while scanning the column.
+ * A currency we have no rule for is `warning` on purpose — it is worth noticing.
+ */
+export function balanceCurrencyColor(currency: string | null | undefined): 'neutral' | 'info' | 'warning' {
+  const key = (currency ?? '').toUpperCase()
+  if (key === 'THB') return 'neutral'
+  if (key === 'USD') return 'info'
+  return 'warning'
+}
+
+/**
  * integer baht ≥ `TOPUP_MIN_AMOUNT`; the message mirrors the API's 400 text (api-contract §4).
  *
  * FEAT-051: called with **one argument it is the QR rule, byte for byte as before** (AC-1/AC-31). With
