@@ -7,6 +7,10 @@
  *
  * FEAT-047 — adds the "Launched" column (`rb-row-launched`) between Advertiser and Banned at, mirroring
  * `rb-row-banned`'s `formatDateTime`/`data-iso` handling; footer first cell `colspan` 3 → 4.
+ *
+ * TASK-banned-ad-covers — adds the "รูปโฆษณา" column (`rb-row-cover`) between Advertiser and Launched: the
+ * advertiser's first ad thumbnail (`ReportsAdThumb`, reused from FEAT-020) plus an eye button that asks the
+ * page to open the "all ad images" modal (`show-covers`). Footer first cell `colspan` 4 → 5.
  */
 import type { BannedRow } from '#shared/types/report-banned'
 import type { KpiMetrics } from '#shared/types/reports'
@@ -21,6 +25,10 @@ const props = withDefaults(defineProps<{
 }>(), {
   pending: false
 })
+
+const emit = defineEmits<{
+  'show-covers': [row: BannedRow]
+}>()
 
 const METRIC_COLUMNS: { field: keyof KpiMetrics | 'adCount', label: string, format: 'int' | 'dec' | 'pct' }[] = [
   { field: 'adCount', label: 'โฆษณา', format: 'int' },
@@ -65,6 +73,12 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
             class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
           >
             Advertiser
+          </th>
+          <th
+            scope="col"
+            class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+          >
+            รูปโฆษณา
           </th>
           <th
             scope="col"
@@ -116,6 +130,21 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
               </span>
             </div>
           </td>
+          <td class="border-b border-default px-2 py-2" data-testid="rb-row-cover">
+            <div class="flex items-center gap-1.5">
+              <ReportsAdThumb :url="row.cover.coverUrl" :is-video="row.cover.isVideo" size="sm" />
+              <UButton
+                icon="i-lucide-eye"
+                aria-label="ดูรูปโฆษณาทั้งหมด"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                data-testid="rb-row-covers-btn"
+                :data-id="row.advertiser.id"
+                @click="emit('show-covers', row)"
+              />
+            </div>
+          </td>
           <td
             class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
             data-testid="rb-row-launched"
@@ -148,7 +177,7 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
           :data-accounts="accountCount"
           class="bg-elevated font-semibold"
         >
-          <td colspan="4" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
+          <td colspan="5" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
             รวมทั้งหมด · {{ formatInt(adCount) }} โฆษณา · {{ formatInt(advertiserCount) }} advertisers · {{ formatInt(accountCount) }} บัญชี
           </td>
           <td
