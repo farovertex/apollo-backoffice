@@ -260,8 +260,11 @@ export function monitorReasonTexts(reasons: string[] | null | undefined): string
 
 /** Tooltip of `am-status`: the raw TikTok strings, never translated (spec "Status cell"). */
 export function monitorStatusTitle(status: { primary: string, detail: string, reasons: string[] }): string {
-  const parts = [status.primary, status.detail, ...(status.reasons ?? [])]
-    .filter(part => typeof part === 'string' && part !== '')
+  const parts: string[] = []
+  for (const part of [status.primary, status.detail, ...(status.reasons ?? [])]) {
+    if (typeof part !== 'string' || part === '' || parts.includes(part)) continue
+    parts.push(part)
+  }
   return parts.length > 0 ? parts.join(' · ') : REPORT_DASH
 }
 

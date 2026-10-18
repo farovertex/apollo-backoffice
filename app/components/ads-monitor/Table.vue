@@ -192,7 +192,7 @@ function scheduleText(row: MonitorRow): string {
                 />
               </span>
               <span class="flex min-w-0 flex-col" data-testid="am-row-name">
-                <span class="max-w-52 truncate" :title="row.name ?? ''">{{ row.name || REPORT_DASH }}</span>
+                <span class="max-w-40 truncate" :title="row.name ?? ''">{{ row.name || REPORT_DASH }}</span>
                 <span class="text-xs text-muted" :title="row.id">{{ row.id || REPORT_DASH }}</span>
               </span>
             </div>
@@ -201,7 +201,7 @@ function scheduleText(row: MonitorRow): string {
 
             <span
               v-else-if="column.key === 'campaign'"
-              class="block max-w-40 truncate"
+              class="block max-w-32 truncate"
               :title="row.campaign?.name ?? ''"
               data-testid="am-row-campaign"
             >{{ row.campaign?.name || REPORT_DASH }}</span>
@@ -211,7 +211,7 @@ function scheduleText(row: MonitorRow): string {
               class="flex min-w-0 flex-col"
               data-testid="am-row-adgroup"
             >
-              <span class="max-w-40 truncate" :title="row.adGroup?.name ?? ''">{{ row.adGroup?.name || REPORT_DASH }}</span>
+              <span class="max-w-32 truncate" :title="row.adGroup?.name ?? ''">{{ row.adGroup?.name || REPORT_DASH }}</span>
               <span class="text-xs text-muted">{{ row.adGroup?.id || REPORT_DASH }}</span>
             </span>
 
@@ -223,8 +223,8 @@ function scheduleText(row: MonitorRow): string {
             >{{ row.source || REPORT_DASH }}</span>
 
             <span v-else-if="column.key === 'account'" class="flex min-w-0 flex-col" data-testid="am-row-account">
-              <span class="max-w-40 truncate" :title="accountLabel(row)">{{ accountLabel(row) }}</span>
-              <span class="max-w-40 truncate text-xs text-muted" :title="row.advertiser.tiktokAdvertiserId">
+              <span class="max-w-32 truncate" :title="accountLabel(row)">{{ accountLabel(row) }}</span>
+              <span class="max-w-32 truncate text-xs text-muted" :title="row.advertiser.tiktokAdvertiserId">
                 {{ row.advertiser.name || REPORT_DASH }} {{ last4(row.advertiser.tiktokAdvertiserId) }}
               </span>
             </span>
@@ -253,7 +253,7 @@ function scheduleText(row: MonitorRow): string {
 
             <span
               v-else-if="column.key === 'schedule'"
-              class="block max-w-40 truncate"
+              class="block max-w-32 truncate"
               :title="scheduleText(row)"
               data-testid="am-row-schedule"
             >{{ scheduleText(row) }}</span>

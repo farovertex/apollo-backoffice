@@ -57,7 +57,7 @@ function formatField(value: number | null, format: 'int' | 'dec'): string {
 </script>
 
 <template>
-  <div class="sticky left-0 w-[calc(100vw-6rem)] max-w-full sm:static sm:w-auto">
+  <div class="sticky left-0 w-[calc(100vw-4rem)] max-w-full sm:static sm:w-auto">
     <div
       v-if="loading"
       class="flex flex-col gap-2 py-1"

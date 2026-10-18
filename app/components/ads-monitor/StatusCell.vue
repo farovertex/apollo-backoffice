@@ -31,7 +31,7 @@ const title = computed(() => monitorStatusTitle(props.status))
     </span>
     <span
       v-if="reasons.length > 0"
-      class="max-w-40 truncate text-xs text-muted"
+      class="max-w-32 truncate text-xs text-muted"
       data-testid="am-status-reasons"
     >{{ reasons.join(' · ') }}</span>
   </span>
