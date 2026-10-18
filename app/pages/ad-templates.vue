@@ -43,6 +43,17 @@
  * **FEAT-054** (spec AC-15): a second badge `adt-cta-image-badge` ("ปุ่มรูปภาพ") next to `adt-addon-badge`, for
  * every row whose instant page's CTA button is an image (`config.destination.page.buttonImageId`, via
  * `utils/ad-cta-image.ts#hasButtonImage` — same "read from the row, no extra request" rule).
+ *
+ * **FEAT-057** (api-contract v1 §1.2, §4, §5 · spec AC-13, AC-14, AC-15, AC-17): the list now shows **every**
+ * admin's templates, so the three writing row actions follow the view key `canEdit` (`createdBy` = caller, or
+ * GOD): `adt-edit`, `adt-utm-sync` and `adt-delete` are **rendered only** for a row with `canEdit: true` — not
+ * disabled, simply absent (A10; the `Created by` column says who owns the row). The new first action
+ * `adt-duplicate` is on **every** row: it opens the same form modal in duplicate mode (`duplicateFrom`,
+ * `template` still null), which POSTs a new template of the caller's own with `duplicateOf` (the API copies the
+ * source's secret Spark code when the body omits it) and reloads page 1 like any create — it emits `created`,
+ * so the FEAT-045 UTM-sync prompt above never fires for a duplicate. A stale page whose PATCH / DELETE /
+ * UTM-sync is refused with 403 `TEMPLATE_NOT_OWNER` shows the API text where that modal already shows its
+ * errors (`adt-form-error` / the delete toast / the sync modal's error) and the list is re-read afterwards.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -322,6 +333,8 @@ function sameUtmKey(a: string[] | null, b: string[] | null): boolean {
 // ── modals ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const formOpen = ref(false)
 const formTarget = ref<AdTemplate | null>(null)
+/** FEAT-057 — the row a Duplicate click starts from; `formTarget` stays null (the modal creates) */
+const duplicateTarget = ref<AdTemplate | null>(null)
 const deleteOpen = ref(false)
 const deleteTarget = ref<AdTemplate | null>(null)
 const syncOpen = ref(false)
@@ -335,12 +348,26 @@ const pendingPrompt = ref<AdTemplate | null>(null)
 function openCreate() {
   pendingPrompt.value = null
   formTarget.value = null
+  duplicateTarget.value = null
   formOpen.value = true
 }
 
 function openEdit(template: AdTemplate) {
   pendingPrompt.value = null
   formTarget.value = template
+  duplicateTarget.value = null
+  formOpen.value = true
+}
+
+/**
+ * FEAT-057 — the same modal in duplicate mode: create, pre-filled from this row, `duplicateOf` in the POST.
+ * It emits `created`, never `updated`, so the FEAT-045 "sync the UTM into older orders" prompt can never fire
+ * for a duplicate — a brand-new template has no older orders (spec "UI behaviour", 6.9 only).
+ */
+function openDuplicate(template: AdTemplate) {
+  pendingPrompt.value = null
+  formTarget.value = null
+  duplicateTarget.value = template
   formOpen.value = true
 }
 
@@ -691,7 +718,23 @@ function onDeleted() {
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <div class="flex items-center justify-end gap-1 whitespace-nowrap">
-                    <UTooltip text="Edit" :disabled="wideActions">
+                    <!-- FEAT-057 — every row can be copied into a template of the caller's own -->
+                    <UTooltip text="Duplicate" :disabled="wideActions">
+                      <UButton
+                        label="Duplicate"
+                        icon="i-lucide-copy"
+                        color="neutral"
+                        variant="outline"
+                        size="xs"
+                        :ui="ACTION_LABEL_UI"
+                        :disabled="!options"
+                        aria-label="Duplicate"
+                        data-testid="adt-duplicate"
+                        @click="openDuplicate(template)"
+                      />
+                    </UTooltip>
+                    <!-- FEAT-057 — only the creator (and GOD) may write: no disabled ghosts for anybody else (A10) -->
+                    <UTooltip v-if="template.canEdit" text="Edit" :disabled="wideActions">
                       <UButton
                         label="Edit"
                         icon="i-lucide-pencil"
@@ -706,7 +749,11 @@ function onDeleted() {
                       />
                     </UTooltip>
                     <!-- FEAT-045 — push this template's UTM into the orders / builds / ads it already produced -->
-                    <UTooltip :text="syncHint(template)" :disabled="wideActions && isUtmBound(template)">
+                    <UTooltip
+                      v-if="template.canEdit"
+                      :text="syncHint(template)"
+                      :disabled="wideActions && isUtmBound(template)"
+                    >
                       <UButton
                         label="Sync UTM"
                         icon="i-lucide-refresh-cw"
@@ -722,7 +769,7 @@ function onDeleted() {
                         @click="openUtmSync(template)"
                       />
                     </UTooltip>
-                    <UTooltip text="Delete" :disabled="wideActions">
+                    <UTooltip v-if="template.canEdit" text="Delete" :disabled="wideActions">
                       <UButton
                         label="Delete"
                         icon="i-lucide-trash-2"
@@ -763,6 +810,7 @@ function onDeleted() {
         v-if="options"
         v-model:open="formOpen"
         :template="formTarget"
+        :duplicate-from="duplicateTarget"
         :options="options"
         @created="onCreated"
         @updated="onUpdated"

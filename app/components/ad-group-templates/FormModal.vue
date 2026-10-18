@@ -1,11 +1,20 @@
 <script setup lang="ts">
 /**
- * FEAT-008 + FEAT-011 + FEAT-013 — Create / Edit ad group template (function 6.8; api-contract.md **v2.2**
- * `POST /ad-group-templates`, `PATCH /ad-group-templates/:id`).
+ * FEAT-008 + FEAT-011 + FEAT-013 + FEAT-057 — Create / Duplicate / Edit ad group template (function 6.8;
+ * api-contract.md **v2.2** `POST /ad-group-templates`, `PATCH /ad-group-templates/:id`).
  *
- * One component for both modes: `template === null` → create (`POST` with a **complete 19-key** config prefilled
- * from `options.systemDefault`, never `catalogVersion`), a row → edit (`PATCH` with **only the changed keys**; each
- * changed top-level `config` key is sent whole — assumption A3).
+ * One component for all three modes: `template === null` → create (`POST` with a **complete 19-key** config
+ * prefilled from `options.systemDefault`, never `catalogVersion`), a row → edit (`PATCH` with **only the changed
+ * keys**; each changed top-level `config` key is sent whole — assumption A3).
+ *
+ * **FEAT-057** (api-contract v1 §5 · spec AC-14) — `duplicateFrom` is the third mode: `template` stays `null`, so
+ * this is an ordinary **create** (one `POST`, the `Create` button, system defaults for keys the source lacks), but
+ * the whole state is pre-filled from that row through the same `stateFrom()` / `configStateFrom()` mapping edit
+ * mode uses, the name starts as `<source name> (copy)`, the title/description say where it came from, and the body
+ * carries one extra key `duplicateOf: <source id>` (the API's audit detail `duplicatedFrom`). A 201 toasts
+ * `Template duplicated`; a 409 on the name, a 404 on `duplicateOf` and every other refusal land exactly where the
+ * create path already puts them (name field / `agt-form-error`), with the modal open. Nothing is created until
+ * Create is pressed, so cancelling leaves no copy behind.
  *
  * Every select / radio / checkbox list is built from `options` (`{ value, label }`), so no enum label is
  * hard-coded in the BO (the five section headings, the advanced sub-heading and the min-budget wording are the only
@@ -55,12 +64,18 @@ import type {
   TriState
 } from '#shared/types/ad-group-templates'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** null = create, a row = edit */
   template: AdGroupTemplate | null
   /** fetched once per page lifetime and passed down — the modal never re-fetches it */
   options: AdGroupTemplateOptions
-}>()
+  /**
+   * FEAT-057 — **duplicate mode**: `template` stays `null` (so every create code path applies: `POST`, the
+   * `Create` button, the system defaults for keys the source lacks) while the form is pre-filled from this row
+   * and the POST carries `duplicateOf: <row.id>`. `null` = plain create / edit.
+   */
+  duplicateFrom?: AdGroupTemplate | null
+}>(), { duplicateFrom: null })
 
 const emit = defineEmits<{
   created: [template: AdGroupTemplate]
@@ -76,6 +91,21 @@ const api = useApi()
 const toast = useToast()
 
 const isEdit = computed(() => props.template !== null)
+/** FEAT-057 — create, pre-filled from another row (`duplicateOf` travels in the POST) */
+const isDuplicate = computed(() => props.template === null && props.duplicateFrom !== null)
+/** the row the form reads its values from: the edited one, or the duplicate source (null for a plain create) */
+const sourceRow = computed<AdGroupTemplate | null>(() => props.template ?? props.duplicateFrom)
+
+const modalTitle = computed(() => {
+  if (isEdit.value) return 'Edit ad group template'
+  return isDuplicate.value ? 'Duplicate ad group template' : 'Create ad group template'
+})
+
+const modalDescription = computed(() => {
+  if (isEdit.value) return 'Changes apply to future orders only.'
+  if (isDuplicate.value) return `Starts from “${props.duplicateFrom?.name ?? ''}”. Saved as a new template of yours.`
+  return 'Starts from the TikTok system defaults.'
+})
 
 // ── form state (mirrors the API body; every enum is a plain string so an unknown option value still renders) ─────────
 interface ScheduleState {
@@ -234,12 +264,20 @@ function configStateFrom(config: AdGroupConfig): ConfigState {
   }
 }
 
+/**
+ * The whole form state from a row: the edited one, or — FEAT-057 — the duplicate source, which goes through
+ * exactly the same `configStateFrom()` mapping (so every key the source carries is pre-filled and the keys it
+ * lacks fall back to the system defaults, as in a plain create). A duplicate starts with `<source> (copy)` as
+ * its name; nothing else is renamed.
+ */
 function stateFrom(template: AdGroupTemplate | null): FormState {
-  const config = template ? template.config : props.options.systemDefault
+  const source = template ?? props.duplicateFrom
+  const config = source ? source.config : props.options.systemDefault
   rememberTimes(config)
+  const duplicate = template === null && source !== null
   return {
-    name: template?.name ?? '',
-    description: template?.description ?? '',
+    name: source ? (duplicate ? `${source.name} (copy)` : source.name) : '',
+    description: source?.description ?? '',
     config: configStateFrom(config)
   }
 }
@@ -383,8 +421,9 @@ function resetForm() {
   tagErrors.value = {}
   formRef.value?.clear()
   syncExpanded()
-  // a pre-FEAT-011 row cannot be saved key-by-key — say it before the user tries
-  const missing = missingConfigKeys(props.template?.config)
+  // a pre-FEAT-011 row cannot be saved key-by-key — say it before the user tries (FEAT-057: a duplicate of
+  // such a row is just as incomplete, so the same line is shown for the source)
+  const missing = missingConfigKeys(sourceRow.value?.config)
   if (missing.length) {
     submitError.value = { title: LEGACY_CONFIG_HINT, description: missing.map(key => `config.${key}`).join(' · ') }
   }
@@ -897,15 +936,23 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
   // create always sends the complete 19-key config and never `catalogVersion` (the API stamps it)
   const body: CreateAdGroupTemplateBody = { name, description, config: configFromState() }
+  // FEAT-057 — one single POST for a duplicate too; `duplicateOf` is the only extra key (api-contract §5)
+  const duplicate = isDuplicate.value
+  const source = props.duplicateFrom
+  if (duplicate && source) body.duplicateOf = source.id
   submitting.value = true
   try {
     // retry: 0 — exactly one POST per submit
     const created = await api<AdGroupTemplate>('/ad-group-templates', { method: 'POST', body, retry: 0 })
     open.value = false
-    toast.add({ title: 'Template created', description: created.name, color: 'success' })
+    toast.add({
+      title: duplicate ? 'Template duplicated' : 'Template created',
+      description: created.name,
+      color: 'success'
+    })
     emit('created', created)
   } catch (e) {
-    showApiError(e, 'Could not create the template')
+    showApiError(e, duplicate ? 'Could not duplicate the template' : 'Could not create the template')
   } finally {
     submitting.value = false
   }
@@ -915,8 +962,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 <template>
   <UModal
     v-model:open="open"
-    :title="isEdit ? 'Edit ad group template' : 'Create ad group template'"
-    :description="isEdit ? 'Changes apply to future orders only.' : 'Starts from the TikTok system defaults.'"
+    :title="modalTitle"
+    :description="modalDescription"
     :dismissible="!submitting"
     :ui="{ content: 'max-w-3xl' }"
     :content="modalContent"

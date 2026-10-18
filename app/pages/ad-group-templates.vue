@@ -15,6 +15,15 @@
  * A 403 on the list (a Payment-only admin that typed the URL) renders `agt-forbidden` with the API text; no
  * redirect, the sidebar item is hidden for that admin anyway (display-only, the API is the authority).
  * The table is plain markup (not `UTable`) so every `<tr>` can carry `data-id`.
+ *
+ * **FEAT-057** (api-contract v1 §1.1, §4, §5 · spec AC-13, AC-14, AC-17): the list now shows **every** admin's
+ * templates, so the row actions follow the view key `canEdit` (`createdBy` = caller, or GOD): `agt-edit` and
+ * `agt-delete` are **rendered only** for a row with `canEdit: true` — not disabled, simply absent (A10; the
+ * `Created by` column says who owns the row). The new first action `agt-duplicate` is on **every** row: it opens
+ * the same form modal in duplicate mode (`duplicateFrom`, `template` still null), which POSTs a new template of
+ * the caller's own with `duplicateOf` and reloads page 1 like any create. A stale page whose PATCH / DELETE is
+ * refused with 403 `TEMPLATE_NOT_OWNER` shows the API text where that modal already shows its errors
+ * (`agt-form-error` / the delete toast) and the list is re-read afterwards.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -202,16 +211,27 @@ const ACTION_LABEL_UI = { label: 'hidden 2xl:inline' }
 // ── modals ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const formOpen = ref(false)
 const formTarget = ref<AdGroupTemplate | null>(null)
+/** FEAT-057 — the row a Duplicate click starts from; `formTarget` stays null (the modal creates) */
+const duplicateTarget = ref<AdGroupTemplate | null>(null)
 const deleteOpen = ref(false)
 const deleteTarget = ref<AdGroupTemplate | null>(null)
 
 function openCreate() {
   formTarget.value = null
+  duplicateTarget.value = null
   formOpen.value = true
 }
 
 function openEdit(template: AdGroupTemplate) {
   formTarget.value = template
+  duplicateTarget.value = null
+  formOpen.value = true
+}
+
+/** FEAT-057 — the same modal in duplicate mode: create, pre-filled from this row, `duplicateOf` in the POST */
+function openDuplicate(template: AdGroupTemplate) {
+  formTarget.value = null
+  duplicateTarget.value = template
   formOpen.value = true
 }
 
@@ -476,7 +496,23 @@ function onDeleted() {
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <div class="flex items-center justify-end gap-1 whitespace-nowrap">
-                    <UTooltip text="Edit" :disabled="wideActions">
+                    <!-- FEAT-057 — every row can be copied into a template of the caller's own -->
+                    <UTooltip text="Duplicate" :disabled="wideActions">
+                      <UButton
+                        label="Duplicate"
+                        icon="i-lucide-copy"
+                        color="neutral"
+                        variant="outline"
+                        size="xs"
+                        :ui="ACTION_LABEL_UI"
+                        :disabled="!options"
+                        aria-label="Duplicate"
+                        data-testid="agt-duplicate"
+                        @click="openDuplicate(template)"
+                      />
+                    </UTooltip>
+                    <!-- FEAT-057 — only the creator (and GOD) may write: no disabled ghosts for anybody else (A10) -->
+                    <UTooltip v-if="template.canEdit" text="Edit" :disabled="wideActions">
                       <UButton
                         label="Edit"
                         icon="i-lucide-pencil"
@@ -490,7 +526,7 @@ function onDeleted() {
                         @click="openEdit(template)"
                       />
                     </UTooltip>
-                    <UTooltip text="Delete" :disabled="wideActions">
+                    <UTooltip v-if="template.canEdit" text="Delete" :disabled="wideActions">
                       <UButton
                         label="Delete"
                         icon="i-lucide-trash-2"
@@ -531,6 +567,7 @@ function onDeleted() {
         v-if="options"
         v-model:open="formOpen"
         :template="formTarget"
+        :duplicate-from="duplicateTarget"
         :options="options"
         @created="onCreated"
         @updated="onUpdated"
