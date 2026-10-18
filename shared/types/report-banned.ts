@@ -5,8 +5,12 @@
  *
  * `ReportRangeInfo.from`/`to` are typed `string` in `./reports.ts` while `range=all` delivers `null` for both —
  * widened here to `string | null` rather than editing the shared file (contract §3 note).
+ *
+ * TASK-banned-ad-covers — `cover` on each row (the advertiser's first ad, API contract v1 §1) and the
+ * `GET /reports/banned/:advertiserId/ads` shapes (`BannedAd` / `BannedAdsResponse`, contract v1 §2) behind the
+ * row's "view all ad images" modal.
  */
-import type { KpiMetrics, ReportRangeInfo } from './reports'
+import type { AdState, KpiMetrics, ReportRangeInfo } from './reports'
 
 export interface BannedRow {
   account: { id: string, label: string | null, loginEmail: string | null }
@@ -17,6 +21,26 @@ export interface BannedRow {
   launchedAt: string | null
   adCount: number
   metrics: KpiMetrics
+  /** TASK-banned-ad-covers — the advertiser's first ad (contract v1 §1); never null, every row has ≥ 1 ad. */
+  cover: { adId: string, coverUrl: string | null, isVideo: boolean }
+}
+
+/** One ad of `GET /reports/banned/:advertiserId/ads` (contract v1 §2). */
+export interface BannedAd {
+  id: string
+  creativeName: string
+  adGroupName: string
+  campaignName: string
+  state: AdState
+  tiktokCreatedAt: string | null
+  missingSince: string | null
+  media: { isVideo: boolean, coverUrl: string | null, videoId: string | null }
+}
+
+export interface BannedAdsResponse {
+  advertiser: { id: string, name: string, tiktokAdvertiserId: string }
+  total: number
+  ads: BannedAd[]
 }
 
 export interface BannedReportResponse {
