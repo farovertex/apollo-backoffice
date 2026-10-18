@@ -78,3 +78,10 @@ export interface BannedCampaignsResponse {
   adCount: number
   totals: KpiMetrics
 }
+
+/** Per-row state of the expandable campaign table (one entry per expanded advertiser, reset on a range change). */
+export interface BannedCampaignsState {
+  pending: boolean
+  error: string | null
+  data: BannedCampaignsResponse | null
+}
