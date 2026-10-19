@@ -10,9 +10,14 @@
  *
  * FEAT-056 — per-advertiser campaign expansion (spec "UI behaviour", AC-25). The chevron `rb-expand` is put
  * **inside** the existing account cell instead of a new leading column on purpose: a new column would change
- * `rb-foot`'s `colspan` (4) and the FEAT-043 spec asserts it. An icon-only `UButton` adds no text, so the
+ * `rb-foot`'s `colspan` and the FEAT-043 spec asserts it. An icon-only `UButton` adds no text, so the
  * account cell's exact-text assertions keep passing. The expansion is one extra `<tr>` per open row; the
  * request and its state belong to the page, this component only renders and emits.
+ *
+ * TASK-banned-ad-covers — adds the "รูปโฆษณา" column (`rb-row-cover`) between Advertiser and Launched: the
+ * advertiser's first ad thumbnail (`ReportsAdThumb`, reused from FEAT-020) plus an eye button that asks the
+ * page to open the "all ad images" modal (`show-covers`). Footer first cell `colspan` 4 → 5 (the FEAT-043
+ * spec was updated with it), and the FEAT-056 expansion row spans 5 + metric columns.
  */
 import type { BannedCampaignsState, BannedRow } from '#shared/types/report-banned'
 import type { KpiMetrics } from '#shared/types/reports'
@@ -34,7 +39,11 @@ const props = withDefaults(defineProps<{
   campaigns: () => ({})
 })
 
-const emit = defineEmits<{ 'toggle-expand': [id: string], 'retry-campaigns': [id: string] }>()
+const emit = defineEmits<{
+  'toggle-expand': [id: string]
+  'retry-campaigns': [id: string]
+  'show-covers': [row: BannedRow]
+}>()
 
 function isExpanded(id: string): boolean {
   return props.expanded.includes(id)
@@ -51,8 +60,8 @@ const METRIC_COLUMNS: { field: keyof KpiMetrics | 'adCount', label: string, form
   { field: 'conversionCost', label: 'CPA', format: 'dec' }
 ]
 
-/** account + advertiser + launched + banned (4) plus every metric column */
-const expansionSpan = 4 + METRIC_COLUMNS.length
+/** account + advertiser + cover + launched + banned (5) plus every metric column */
+const expansionSpan = 5 + METRIC_COLUMNS.length
 
 /** `adCount` lives on the row itself, every other column reads the row's `metrics`. */
 function cellValue(row: BannedRow, field: string): number | null {
@@ -86,6 +95,12 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
             class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
           >
             Advertiser
+          </th>
+          <th
+            scope="col"
+            class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted"
+          >
+            รูปโฆษณา
           </th>
           <th
             scope="col"
@@ -151,6 +166,21 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
                 </span>
               </div>
             </td>
+            <td class="border-b border-default px-2 py-2" data-testid="rb-row-cover">
+              <div class="flex items-center gap-1.5">
+                <ReportsAdThumb :url="row.cover.coverUrl" :is-video="row.cover.isVideo" size="sm" />
+                <UButton
+                  icon="i-lucide-eye"
+                  aria-label="ดูรูปโฆษณาทั้งหมด"
+                  color="neutral"
+                  variant="ghost"
+                  size="xs"
+                  data-testid="rb-row-covers-btn"
+                  :data-id="row.advertiser.id"
+                  @click="emit('show-covers', row)"
+                />
+              </div>
+            </td>
             <td
               class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
               data-testid="rb-row-launched"
@@ -198,7 +228,7 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
           :data-accounts="accountCount"
           class="bg-elevated font-semibold"
         >
-          <td colspan="4" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
+          <td colspan="5" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
             รวมทั้งหมด · {{ formatInt(adCount) }} โฆษณา · {{ formatInt(advertiserCount) }} advertisers · {{ formatInt(accountCount) }} บัญชี
           </td>
           <td

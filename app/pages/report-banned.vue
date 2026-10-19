@@ -365,6 +365,15 @@ function setPage(value: number) {
 
 const rangeFrom = computed(() => (total.value === 0 ? 0 : (page.value - 1) * LIMIT + 1))
 const rangeTo = computed(() => Math.min(page.value * LIMIT, total.value))
+
+// ── "view all ad images" modal (TASK-banned-ad-covers) ──────────────────────────────────────────────────────────────
+const coversOpen = ref(false)
+const coversRow = ref<BannedRow | null>(null)
+
+function showCovers(row: BannedRow) {
+  coversRow.value = row
+  coversOpen.value = true
+}
 </script>
 
 <template>
@@ -565,6 +574,7 @@ const rangeTo = computed(() => Math.min(page.value * LIMIT, total.value))
               :campaigns="campaigns"
               @toggle-expand="toggleExpand"
               @retry-campaigns="loadCampaigns"
+              @show-covers="showCovers"
             />
 
             <div class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted">
@@ -584,4 +594,6 @@ const rangeTo = computed(() => Math.min(page.value * LIMIT, total.value))
       </div>
     </template>
   </UDashboardPanel>
+
+  <ReportBannedCoversModal v-model:open="coversOpen" :row="coversRow" />
 </template>

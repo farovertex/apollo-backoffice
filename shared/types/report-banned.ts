@@ -7,8 +7,12 @@
  * widened here (`BannedRangeInfo`) to `string | null` rather than editing the shared file (contract §3 note).
  *
  * FEAT-056 adds the `custom` range key and `GET /reports/banned/:advertiserId/campaigns` (contract §6).
+ *
+ * TASK-banned-ad-covers — `cover` on each row (the advertiser's first ad, API contract v1 §1) and the
+ * `GET /reports/banned/:advertiserId/ads` shapes (`BannedAd` / `BannedAdsResponse`, contract v1 §2) behind the
+ * row's "view all ad images" modal.
  */
-import type { KpiMetrics, ReportRange } from './reports'
+import type { AdState, KpiMetrics, ReportRange } from './reports'
 
 /**
  * FEAT-056 — `/reports/banned` (and only it, spec A12) also accepts `range=custom` with `from`/`to`
@@ -32,6 +36,26 @@ export interface BannedRow {
   launchedAt: string | null
   adCount: number
   metrics: KpiMetrics
+  /** TASK-banned-ad-covers — the advertiser's first ad (contract v1 §1); never null, every row has ≥ 1 ad. */
+  cover: { adId: string, coverUrl: string | null, isVideo: boolean }
+}
+
+/** One ad of `GET /reports/banned/:advertiserId/ads` (contract v1 §2). */
+export interface BannedAd {
+  id: string
+  creativeName: string
+  adGroupName: string
+  campaignName: string
+  state: AdState
+  tiktokCreatedAt: string | null
+  missingSince: string | null
+  media: { isVideo: boolean, coverUrl: string | null, videoId: string | null }
+}
+
+export interface BannedAdsResponse {
+  advertiser: { id: string, name: string, tiktokAdvertiserId: string }
+  total: number
+  ads: BannedAd[]
 }
 
 export interface BannedReportResponse {
