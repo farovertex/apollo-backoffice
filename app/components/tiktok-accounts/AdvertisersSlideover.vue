@@ -38,17 +38,31 @@
  * account (`/tiktok-accounts` `ta-balance` / `ta-autotopup-last`). A row keeps its badges, the report link,
  * `ta-adv-topup-qr-remain` / `ta-adv-topup-lease-remain` / `ta-adv-topup-check-info` and the per-advertiser
  * top-up actions unchanged — the manual top-up button is a different entry point to the same wallet.
+ *
+ * FEAT-059 (api-contract v1 §5/§8, spec "UI behaviour", AC-16) — two optional props, both `null` for the
+ * account-level count button so that entry point keeps its exact FEAT-005 request and title: `bcOrgId` adds
+ * `bcOrgId=<orgId>` to the list query and ` · <org name>` to the title, `orgName` is that name. Independently
+ * of them, a row shows the muted chip `ta-adv-row-org` (the org that listed the advertiser) whenever the
+ * account has `organizationCount > 1` — `ta-adv-org` is the header's own description element since FEAT-010,
+ * so the row chip had to take a different id (bo.md "Deviations").
  */
 import type { FetchError } from 'ofetch'
 import type { SlideoverProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { Advertiser, AdvertiserMissingFilter, AdvertisersResponse, AdvertiserStatus } from '#shared/types/advertisers'
+import type { Advertiser, AdvertiserMissingFilter, AdvertisersQuery, AdvertisersResponse, AdvertiserStatus } from '#shared/types/advertisers'
 import type { TikTokAccount } from '#shared/types/tiktok-accounts'
 import type { TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
 
 const props = defineProps<{
   account: TikTokAccount | null
+  /**
+   * FEAT-059 — set when the slideover was opened from one Business Center org row of `/tiktok-accounts`
+   * (`ta-org-adv-count`): the list request carries `bcOrgId=<orgId>` and the title ends with ` · <org name>`.
+   * `null` (the account-level count button) lists every org of the login, exactly as before.
+   */
+  bcOrgId?: string | null
+  orgName?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -126,8 +140,11 @@ async function load(nextPage: number, append = false, quiet = false) {
         sort: 'bcOrder',
         missing,
         q: q || undefined,
-        status: statusFilter.value === 'all' ? undefined : statusFilter.value
-      }
+        status: statusFilter.value === 'all' ? undefined : statusFilter.value,
+        // FEAT-059 — only when opened from an org row; the key is absent otherwise (the account-level request
+        // must stay the FEAT-005 one)
+        bcOrgId: props.bcOrgId || undefined
+      } satisfies AdvertisersQuery
     })
     if (s !== session) return
     items.value = append ? [...items.value, ...res.advertisers] : res.advertisers
@@ -174,7 +191,15 @@ function reset() {
 // so a sync that finishes while the slideover is open (empty-state button / row action) reloads the list once.
 const queryKey = computed<string | null>(() =>
   open.value && props.account
-    ? JSON.stringify([props.account.id, props.account.lastDiscoverAt, searchDebounced.value.trim(), statusFilter.value, showMissing.value])
+    ? JSON.stringify([
+        props.account.id,
+        // FEAT-059 — re-opening the same account for another org is a different list
+        props.bcOrgId ?? null,
+        props.account.lastDiscoverAt,
+        searchDebounced.value.trim(),
+        statusFilter.value,
+        showMissing.value
+      ])
     : null
 )
 watch(queryKey, (key) => {
@@ -311,7 +336,22 @@ const state = computed<ListState>(() => {
 // `ta-adv-slideover[data-state]` (same trick as the LoginModal).
 const slideoverContent = computed(() => ({ 'data-testid': 'ta-adv-slideover', 'data-state': state.value }) as SlideoverProps['content'])
 
-const title = computed(() => `Advertisers — ${props.account?.label ?? props.account?.loginEmail ?? ''}`)
+// FEAT-059 — opened from an org row the title names the org it is filtered by (AC-16)
+const title = computed(() => {
+  const base = `Advertisers — ${props.account?.label ?? props.account?.loginEmail ?? ''}`
+  return props.bcOrgId ? `${base} · ${props.orgName ?? props.bcOrgId}` : base
+})
+
+/**
+ * FEAT-059 — which Business Center org listed this advertiser. Only shown when the login really has several
+ * orgs (`organizationCount > 1`): on a one-org account the chip would repeat the slideover's own header.
+ * `ta-adv-org` is already the header's description element, so the row chip is `ta-adv-row-org` (see bo.md).
+ */
+const showOrgChip = computed(() => (props.account?.organizationCount ?? 0) > 1)
+
+function advOrgText(adv: Advertiser): string {
+  return adv.bcOrgName || last4(adv.bcOrgId)
+}
 const canSync = computed(() => {
   const a = props.account
   return !!a && a.advertiserCount === 0 && a.runningJob === null && a.sessionStatus !== 'needsHuman' && a.isActive
@@ -574,6 +614,17 @@ function onSync() {
                   type {{ adv.adAccountType ?? '—' }}
                 </span>
               </UTooltip>
+              <!-- FEAT-059 — the org that listed this advertiser; only on a login with more than one org -->
+              <span
+                v-if="showOrgChip"
+                class="inline-flex min-w-0 items-center gap-1"
+                :title="adv.bcOrgId"
+                data-testid="ta-adv-row-org"
+                :data-org-id="adv.bcOrgId"
+              >
+                <UIcon name="i-lucide-building-2" class="size-3.5 shrink-0" />
+                <span class="truncate">{{ advOrgText(adv) }}</span>
+              </span>
             </div>
 
             <NuxtLink

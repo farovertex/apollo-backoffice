@@ -31,6 +31,11 @@
  * FEAT-053 (api-contract.md v1 §2/§3) — the view gains `autoTopupChannel` (key 39, right after
  * `autoTopupDisabled`) and `PatchAccountBody` gains the same key as its sixth and only non-credential field
  * (GOD/Payment only: anybody else sending it gets 403, the whole request is refused).
+ * FEAT-059 (api-contract.md v1 §7/§8) — one login may be admin of several Business Center orgs: the view gains
+ * `organizationCount` (key 40, orgs with `missingSince null`), `runningJob` gains `bcOrgId` (key 8, the org a
+ * discover job was scoped to — `null` = the whole login, and `null` for every non-discover job), and the new
+ * `BcOrganization` / `OrganizationsResponse` mirror `GET /tiktok-accounts/:id/organizations`.
+ * `PATCH /tiktok-accounts/:id/organizations/:orgId` takes `PatchOrganizationBody`.
  */
 
 import type { HumanTaskKind } from './human-tasks'
@@ -119,6 +124,11 @@ export interface RunningJob {
   startedAt: string | null
   /** FEAT-031 — WORKER_INSTANCE of the process running this job; `null` while `waiting` */
   workerInstance: string | null
+  /**
+   * FEAT-059 — `jobs.payload.bcOrgId` of a `discover` job: the single Business Center org this run fetches the
+   * advertisers of. `null` = the whole login (today's behaviour) and `null` for every other job type.
+   */
+  bcOrgId: string | null
 }
 
 export interface TikTokAccount {
@@ -185,6 +195,12 @@ export interface TikTokAccount {
   autoTopup: AccountAutoTopup
   /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
   advertiserCount: number
+  /**
+   * FEAT-059 — Business Center orgs of this login with `missingSince === null` (`bc_organizations`); `0` for an
+   * account that was never discovered. `> 1` is what turns the BC org cell of `/tiktok-accounts` into a
+   * drill-down; `<= 1` renders exactly as before the feature.
+   */
+  organizationCount: number
   /** ISO | null — time of the last discover attempt (success or failure) */
   lastDiscoverAt: string | null
   lastDiscoverError: DiscoverError | null
@@ -193,6 +209,88 @@ export interface TikTokAccount {
   createdBy: string
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * FEAT-059 — who wrote `BcOrganization.parentOrgId`: `auto` = the discover rule (one `multiTierType 1` root and
+ * the same `creatorId`), `human` = a `PATCH …/organizations/:orgId` (never overwritten by a later discover),
+ * `null` = nobody could decide yet (the row is a root, or its parent is unknown).
+ */
+export type BcOrgParentSource = 'auto' | 'human'
+
+/**
+ * FEAT-059 (api-contract.md v1 §7 "OrganizationView", 24 keys in this order) — one Business Center org of one
+ * login, as returned by `GET /tiktok-accounts/:id/organizations`. Raw TikTok ints/strings are kept as-is;
+ * `isRoot` is computed by the API (`orgId === account.bcOrgId`) and never stored.
+ */
+export interface BcOrganization {
+  id: string
+  tiktokAccountId: string
+  workspaceId: string
+  /** TikTok `organizations[].id` (= `org_id`), unique per login */
+  orgId: string
+  name: string | null
+  /** `null` = root **or** unknown parent — read it together with `parentSource` and `isRoot` */
+  parentOrgId: string | null
+  parentSource: BcOrgParentSource | null
+  /** `orgId === tiktokAccounts.bcOrgId` — the org the balance and every other account-level flow uses */
+  isRoot: boolean
+  /** raw `multi_tier_type` (1 = root of a multi-tier BC) */
+  multiTierType: number | null
+  organizationType: number | null
+  status: number | null
+  currency: string | null
+  creatorId: string | null
+  verified: boolean | null
+  /** raw `pass_two_step_verify` */
+  passTwoStepVerify: boolean | null
+  role: number | null
+  timezone: string | null
+  /** 0-based position in the last `organizations` response */
+  bcOrder: number
+  /** advertisers of this org with `missingSince === null` */
+  advertiserCount: number
+  /** ISO | null — per org: when this org's advertisers were last fetched (success or failure) */
+  lastDiscoverAt: string | null
+  lastDiscoverError: DiscoverError | null
+  /** ISO | null — the org was not in the last successful `organizations` response (never deleted) */
+  missingSince: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** FEAT-059 — `GET /tiktok-accounts/:id/organizations` 200 body (not paginated; root first, see the contract). */
+export interface OrganizationsResponse {
+  count: number
+  organizations: BcOrganization[]
+}
+
+/**
+ * FEAT-059 (BO) — the org drill-down state of **one** account row: the page owns the request and the cache
+ * (one GET per account per page lifetime), `TiktokAccountsOrganizationRows` only renders it. Same shape as
+ * `BannedCampaignsState` of `/reports/banned`. `data` survives a reload so a re-read never blanks the rows.
+ */
+export interface OrganizationsState {
+  pending: boolean
+  error: string | null
+  data: BcOrganization[] | null
+}
+
+/**
+ * FEAT-059 — `PATCH /tiktok-accounts/:id/organizations/:orgId` body: the human sets (or clears) the parent of an
+ * org the rule could not decide. The write always stamps `parentSource: 'human'`. 200 answers the org view;
+ * 404 `ไม่พบ org`, 409 `root ตั้งแม่ไม่ได้` / `org แม่ต้องเป็น root` are shown inline as the API sends them.
+ */
+export interface PatchOrganizationBody {
+  parentOrgId: string | null
+}
+
+/**
+ * FEAT-059 — optional body of `POST /tiktok-accounts/:id/discover`: sync the advertisers of **one** org.
+ * The account-level Sync keeps sending **no body at all** (not `{}`).
+ */
+export interface DiscoverOrgBody {
+  bcOrgId: string
 }
 
 /**
