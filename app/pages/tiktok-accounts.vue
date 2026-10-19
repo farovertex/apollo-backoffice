@@ -133,6 +133,7 @@ import type {
   BcSubCreateLatestResponse,
   BcSubCreateSuggest,
   DiscoverOrgBody,
+  JobType,
   LoginConflictBody,
   LoginJobResponse,
   OrganizationsResponse,
@@ -640,8 +641,23 @@ function onLeaseExpired() {
   notify('หมดเวลาจอง', 'รอบนี้ถูกคืนให้คนอื่นจ่ายต่อแล้ว')
 }
 
+/**
+ * What the row says while a job of that account runs. `runningJob.type` is the API's raw `JobType` (every
+ * type can appear since the BO itself starts a `bcSubCreate`), so the three the row has an opinion about are
+ * named — `login` / `discover` with exactly the wording they always had — and everything else (build, kpi,
+ * top-up, provider, budget, …) gets one honest generic sentence instead of being called a login.
+ */
+const RUNNING_JOB_REASON: Partial<Record<JobType, string>> = {
+  discover: 'Sync in progress',
+  login: 'Login in progress',
+  bcSubCreate: 'กำลังสร้าง Sub BC'
+}
+function runningJobReason(type: JobType): string {
+  return RUNNING_JOB_REASON[type] ?? 'Job in progress'
+}
+
 function syncBlockedReason(account: TikTokAccount): string | null {
-  if (account.runningJob) return account.runningJob.type === 'discover' ? 'Sync in progress' : 'Login in progress'
+  if (account.runningJob) return runningJobReason(account.runningJob.type)
   if (account.sessionStatus === 'needsHuman') return 'Needs OTP — finish the login first'
   if (!account.isActive) return 'Account is disabled'
   return null
@@ -795,18 +811,14 @@ function setSubCreateFailed(id: string, text: string | null) {
 
 /**
  * Why the row action is disabled (the tooltip text), `null` = enabled. The brief's rule is "a `bcOrgId` and no
- * running job"; `isActive` is checked too because the API answers 409 `inactive` for a disabled account, and a
- * job type that is neither discover nor login (top-up, or the sub-create job of another tab) gets a generic
- * sentence instead of the wrong one.
+ * running job"; `isActive` is checked too because the API answers 409 `inactive` for a disabled account, and
+ * the running job is named by `runningJobReason()` (the sub-create job of another tab says so, anything else
+ * gets the generic sentence instead of the wrong one).
  */
 function subCreateBlockedReason(account: TikTokAccount): string | null {
   if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
   if (!account.bcOrgId) return 'Sync first'
-  if (account.runningJob) {
-    if (account.runningJob.type === 'discover') return 'Sync in progress'
-    if (account.runningJob.type === 'login') return 'Login in progress'
-    return 'Job in progress'
-  }
+  if (account.runningJob) return runningJobReason(account.runningJob.type)
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -1321,8 +1333,9 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       const running = !!job
       const syncBlocked = syncBlockedReason(row.original)
       const subCreateBlocked = subCreateBlockedReason(row.original)
-      // BUG-028: never disabled — a running job only annotates the tooltip
-      const loginHint = running ? (job.type === 'discover' ? 'Sync in progress — login again anyway' : 'Login in progress — login again anyway') : null
+      // BUG-028: never disabled — a running job only annotates the tooltip (named by `runningJobReason`, so a
+      // build / top-up / sub-create job is no longer announced as a login)
+      const loginHint = running ? `${runningJobReason(job.type)} — login again anyway` : null
       const wide = wideActions.value
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
         // 2026-10-12 — Edit credentials (never disabled: the modal only writes the four credential fields)

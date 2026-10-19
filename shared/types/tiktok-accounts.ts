@@ -119,10 +119,21 @@ export interface OpenHumanTask {
   expiresAt: string
 }
 
+/**
+ * Every `jobs.type` the API knows (`JobType` of `apollo-api/src/jobs/job.schema.ts`, same order). The account
+ * view's `runningJob.type` is the **raw** job type (`toRunningJobView` passes `j.type` through), so any of
+ * these can reach the BO — not only the three the view used to carry. Widened on the lead's decision
+ * (TASK-bc-sub-create round 2) when the BO started a `bcSubCreate` job itself; a page that only reacts to
+ * `login` / `discover` keeps working, it just has to name the other types instead of guessing.
+ */
+export type JobType
+  = 'sessionCheck' | 'login' | 'discover' | 'build' | 'kpiFetch' | 'statusCheck' | 'topup' | 'provider'
+    | 'utmFetch' | 'postInfoWarmup' | 'optToggle' | 'budget' | 'campaignDelete' | 'bcSubCreate'
+
 /** Job of the account that is `waiting` or `active`, as embedded in the account view. */
 export interface RunningJob {
   id: string
-  type: 'login' | 'discover' | 'topup'
+  type: JobType
   status: 'waiting' | 'active'
   step: JobStep | null
   trigger: JobTrigger
