@@ -8,6 +8,7 @@
  * Currency is unknown system-wide (spec A8) — numbers are printed bare and the spend tile carries the caption
  * "สกุลเงินของบัญชี".
  */
+import type { MonitorStatusKey } from '#shared/types/ads-monitor'
 import type { AdState, AdvertiserReportState, KpiMetrics, ReportError, ReportRange } from '#shared/types/reports'
 
 export const REPORT_DASH = '—'
@@ -187,6 +188,84 @@ export const ADVERTISER_REPORT_LABEL: Record<AdvertiserReportState, string> = {
   off: 'ปิด',
   error: 'ผิดพลาด',
   never: 'ยังไม่เริ่ม'
+}
+
+// ── FEAT-056 · Ads monitor status presentation (api-contract.md v1 §2; spec "UI behaviour" → Status cell) ────────────
+// One place for both maps, so the page, the table and any future screen print the same Thai text.
+
+const MONITOR_PENDING_RE = /audit|review|pending|not_start/i
+
+/**
+ * Thai label of a classified status. `other` is the only key that looks at the raw `primary`:
+ * "รอตรวจ" while TikTok is still auditing, "ไม่ทราบ" for everything else (contract §2 row 5).
+ */
+export function monitorStatusLabel(key: MonitorStatusKey, primary?: string | null): string {
+  switch (key) {
+    case 'delivering': return 'ใช้งานอยู่'
+    case 'notDelivering': return 'ไม่ส่ง'
+    case 'paused': return 'หยุดชั่วคราว'
+    case 'rejected': return 'ไม่ผ่าน'
+    default: return MONITOR_PENDING_RE.test(primary ?? '') ? 'รอตรวจ' : 'ไม่ทราบ'
+  }
+}
+
+/** Dot colour per status key; `other` is amber while auditing, grey otherwise. */
+export function monitorStatusDot(key: MonitorStatusKey, primary?: string | null): string {
+  switch (key) {
+    case 'delivering': return 'bg-success'
+    case 'notDelivering': return 'bg-warning'
+    case 'paused': return 'bg-muted'
+    case 'rejected': return 'bg-error'
+    default: return MONITOR_PENDING_RE.test(primary ?? '') ? 'bg-warning' : 'bg-muted'
+  }
+}
+
+/** Text colour of the label, matching the dot. */
+export function monitorStatusText(key: MonitorStatusKey): string {
+  switch (key) {
+    case 'delivering': return 'text-success'
+    case 'rejected': return 'text-error'
+    case 'notDelivering': return 'text-warning'
+    default: return 'text-default'
+  }
+}
+
+/**
+ * The one reason map (spec "Status cell"). A code mapped to `''` is **omitted** from the secondary line
+ * (the `*_delivery_ok` codes repeat what the label already says); an unknown code is shown raw.
+ */
+export const MONITOR_REASON_TEXT: Record<string, string> = {
+  campaign_offline_budget: 'งบแคมเปญหมด',
+  ad_offline_balance: 'ยอดเงินไม่พอ',
+  creative_disable: 'ปิดสวิตช์',
+  ad_disable: 'ปิดสวิตช์',
+  campaign_disable: 'ปิดสวิตช์',
+  campaign_delivery_ok: '',
+  ad_delivery_ok: '',
+  creative_delivery_ok: ''
+}
+
+/** Translated, de-duplicated, omission-aware reason list for the secondary line of `am-status`. */
+export function monitorReasonTexts(reasons: string[] | null | undefined): string[] {
+  const out: string[] = []
+  for (const raw of reasons ?? []) {
+    if (typeof raw !== 'string' || raw === '') continue
+    const mapped = MONITOR_REASON_TEXT[raw.toLowerCase()]
+    if (mapped === '') continue
+    const text = mapped ?? raw
+    if (!out.includes(text)) out.push(text)
+  }
+  return out
+}
+
+/** Tooltip of `am-status`: the raw TikTok strings, never translated (spec "Status cell"). */
+export function monitorStatusTitle(status: { primary: string, detail: string, reasons: string[] }): string {
+  const parts: string[] = []
+  for (const part of [status.primary, status.detail, ...(status.reasons ?? [])]) {
+    if (typeof part !== 'string' || part === '' || parts.includes(part)) continue
+    parts.push(part)
+  }
+  return parts.length > 0 ? parts.join(' · ') : REPORT_DASH
 }
 
 export const RANGE_LABEL: Record<ReportRange, string> = {
