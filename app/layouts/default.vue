@@ -113,6 +113,14 @@ const links = computed(() => [[{
         open.value = false
       }
     }, {
+      // FEAT-056 — Ads monitor (3 tabs + On/off switch), directly after Report Banned accounts; GOD/Admin only
+      label: 'Ads monitor',
+      icon: 'i-lucide-toggle-left',
+      to: '/ads-monitor',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
       // FEAT-035 — report summary grouped by TikTok account / advertiser / ads, directly after Reports
       label: 'Report summary',
       icon: 'i-lucide-sigma',
@@ -125,14 +133,6 @@ const links = computed(() => [[{
       label: 'Report Banned accounts',
       icon: 'i-lucide-ban',
       to: '/reports/banned',
-      onSelect: () => {
-        open.value = false
-      }
-    }, {
-      // FEAT-056 — Ads monitor (3 tabs + On/off switch), directly after Report Banned accounts; GOD/Admin only
-      label: 'Ads monitor',
-      icon: 'i-lucide-toggle-left',
-      to: '/ads-monitor',
       onSelect: () => {
         open.value = false
       }
