@@ -12,6 +12,10 @@
  * exactly one request per state change and a superseded answer is dropped. **No polling** (spec A13): a
  * pending switch clears on the next reload / tab switch / Refresh.
  *
+ * TASK-campaign-delete-ui — the campaign tab can also **delete** a campaign on TikTok
+ * (`POST /ads-monitor/delete-campaign`, confirm modal `am-delete-modal`); the `ads` rows are never deleted, so
+ * a deleted campaign keeps showing up with `status.key = 'deleted'` and is filterable through `status=deleted`.
+ *
  * Filter options come from the same two side endpoints `/reports/banned` uses (`GET /tiktok-accounts` once,
  * `GET /advertisers?limit=100[&tiktokAccountId]` on mount and per account change, failures swallowed — they
  * must never block the table); order options can only come from the rows, the contract has no order lookup.
@@ -20,6 +24,7 @@ import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
 import type {
   AdsMonitorResponse,
+  DeleteAccepted,
   MonitorLevel,
   MonitorLinkedFilter,
   MonitorRange,
@@ -49,7 +54,9 @@ const STATUS_ITEMS: { label: string, value: MonitorStatusFilter }[] = [
   { label: 'ไม่ส่ง', value: 'notDelivering' },
   { label: 'หยุดชั่วคราว', value: 'paused' },
   { label: 'ไม่ผ่าน/ถูกลงโทษ', value: 'rejected' },
-  { label: 'อื่น ๆ', value: 'other' }
+  { label: 'อื่น ๆ', value: 'other' },
+  // TASK-campaign-delete-ui — the API's new top-priority key; filterable like the other five
+  { label: 'ลบแล้ว', value: 'deleted' }
 ]
 
 const RANGES: MonitorRange[] = ['today', '7d', 'all']
@@ -127,10 +134,12 @@ const forbidden = ref<string | null>(null)
 let session = 0
 
 /**
- * Switch state the client knows but the server has not told us yet (our own accepted 202). Dropped on every
- * load, because the response is then the truth again.
+ * Switch / delete state the client knows but the server has not told us yet (our own accepted 202). Dropped
+ * on every load, because the response is then the truth again — so the optimistic "กำลังลบ…" survives a
+ * re-render but never outlives a reload, where the API's own `deletePending` takes over (TASK-campaign-delete-ui).
  */
-const overrides = ref<Record<string, Pick<MonitorRow, 'optPending' | 'optError'>>>({})
+type RowOverride = Partial<Pick<MonitorRow, 'optPending' | 'optError' | 'deletePending' | 'deleteError'>>
+const overrides = ref<Record<string, RowOverride>>({})
 /** guards a double click from sending a second POST before the first one answered */
 const inFlight = new Set<string>()
 
@@ -316,6 +325,52 @@ async function toggle(row: MonitorRow, target: ToggleTarget) {
       toast.add({ title: 'เปลี่ยนสวิตช์ไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
     }
   } finally {
+    inFlight.delete(key)
+  }
+}
+
+// ── delete campaign (TASK-campaign-delete-ui · `POST /ads-monitor/delete-campaign`) ─────────────────────────────────
+/**
+ * Campaign tab only, always behind the `am-delete-modal` confirm step. 202 → the row renders
+ * `am-delete-pending-<id>` from the returned `deletePending` through the same `overrides` mechanism as the
+ * toggle (reload-safe: after a reload the API's own `deletePending` says the same); 409 → the API's Thai
+ * sentence in a "ทำไม่ได้" toast plus one re-read of this tab, exactly like `toggle()`; anything else → a
+ * generic error toast. No polling — the row clears on the next reload / tab switch / Refresh (spec A13).
+ */
+const deleteOpen = ref(false)
+const deleteRow = ref<MonitorRow | null>(null)
+const deleting = ref(false)
+
+function askDelete(row: MonitorRow) {
+  deleteRow.value = row
+  deleteOpen.value = true
+}
+
+async function confirmDelete(row: MonitorRow) {
+  const key = rowKey(row)
+  if (inFlight.has(key)) return
+  inFlight.add(key)
+  deleting.value = true
+  try {
+    const res = await api<DeleteAccepted>('/ads-monitor/delete-campaign', {
+      retry: 0,
+      method: 'POST',
+      body: { advertiserId: row.advertiser.id, tiktokCampaignId: row.id }
+    })
+    overrides.value = { ...overrides.value, [key]: { deletePending: res.deletePending, deleteError: null } }
+    deleteOpen.value = false
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const message = err.data?.error ?? err.message ?? 'ลบแคมเปญไม่สำเร็จ'
+    deleteOpen.value = false
+    if ((err.response?.status ?? err.statusCode) === 409) {
+      toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+      await load()
+    } else {
+      toast.add({ title: 'ลบแคมเปญไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
+    }
+  } finally {
+    deleting.value = false
     inFlight.delete(key)
   }
 }
@@ -637,6 +692,7 @@ const intervalText = computed(() => {
               :pending="pending"
               @toggle="toggle"
               @show-covers="showCovers"
+              @delete="askDelete"
             />
 
             <div class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted">
@@ -658,4 +714,11 @@ const intervalText = computed(() => {
   </UDashboardPanel>
 
   <AdsMonitorCoversModal v-model:open="coversOpen" :row="coversRow" />
+
+  <AdsMonitorDeleteModal
+    v-model:open="deleteOpen"
+    :row="deleteRow"
+    :deleting="deleting"
+    @confirm="confirmDelete"
+  />
 </template>
