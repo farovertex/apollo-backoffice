@@ -419,6 +419,23 @@ export interface AdTemplatesResponse {
   total: number
 }
 
+/**
+ * FEAT-058 — one row of `GET /ad-templates/creators` (api-contract.md v1 §1, §3), the option list of
+ * the BO's **Created by** select. `me` is `workspaceId === ctx.homeWorkspaceId`; exactly one row carries it.
+ */
+export interface Creator {
+  workspaceId: string
+  workspaceName: string | null
+  adminId: string | null
+  username: string | null
+  me: boolean
+}
+
+/** `GET /ad-templates/creators` 200 body — exactly one top-level key. */
+export interface CreatorsResponse {
+  creators: Creator[]
+}
+
 /** `options.limits` — the API's own numbers, so the BO validates with the same maxima (spec A2). */
 export interface AdTemplateLimits {
   /** `identity.post.text`, `destination.page.name` and `destination.page.buttonText` */
