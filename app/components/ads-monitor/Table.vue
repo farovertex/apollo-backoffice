@@ -95,7 +95,14 @@ function formatMetric(value: number | null, format: Format | undefined): string 
 }
 
 function accountLabel(row: MonitorRow): string {
-  return row.account.label || `บัญชี ${last4(row.account.id)}`
+  return row.account.label || row.account.loginEmail || REPORT_DASH
+}
+
+/** Tooltip for the account cell — keeps the full label/email and the advertiser id's last4 as text,
+ * since v1.2 removed `…last4` from the visible second line (spec "UI behaviour"). */
+function accountTitle(row: MonitorRow): string {
+  const parts = [accountLabel(row), row.advertiser.name, last4(row.advertiser.tiktokAdvertiserId)].filter(Boolean)
+  return parts.join(' · ')
 }
 
 function budgetText(row: MonitorRow): string {
@@ -222,11 +229,14 @@ function scheduleText(row: MonitorRow): string {
               data-testid="am-row-source"
             >{{ row.source || REPORT_DASH }}</span>
 
-            <span v-else-if="column.key === 'account'" class="flex min-w-0 flex-col" data-testid="am-row-account">
-              <span class="max-w-32 truncate" :title="accountLabel(row)">{{ accountLabel(row) }}</span>
-              <span class="max-w-32 truncate text-xs text-muted" :title="row.advertiser.tiktokAdvertiserId">
-                {{ row.advertiser.name || REPORT_DASH }} {{ last4(row.advertiser.tiktokAdvertiserId) }}
-              </span>
+            <span
+              v-else-if="column.key === 'account'"
+              class="flex min-w-0 flex-col"
+              data-testid="am-row-account"
+              :title="accountTitle(row)"
+            >
+              <span>{{ accountLabel(row) }}</span>
+              <span class="text-xs text-muted">{{ row.advertiser.name || REPORT_DASH }}</span>
             </span>
 
             <span v-else-if="column.key === 'order'" class="whitespace-nowrap" data-testid="am-row-order">

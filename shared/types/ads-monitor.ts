@@ -1,6 +1,6 @@
 /**
  * FEAT-056 — Ads monitor (`/ads-monitor`). Mirrors
- * `mission-control/.ai/features/FEAT-056-…/api-contract.md` **v1** §2 (status keys), §3 (the three list
+ * `mission-control/.ai/features/FEAT-056-…/api-contract.md` **v1.2** §2 (status keys), §3 (the three list
  * envelopes `GET /ads-monitor/campaigns | ad-groups | ads`) and §4 (`POST /ads-monitor/toggle`).
  *
  * The three tabs share one envelope and one row type: every key that only one level carries is optional
@@ -76,6 +76,8 @@ export interface MonitorAdvertiserRef {
 export interface MonitorAccountRef {
   id: string
   label: string | null
+  /** v1.2 — full, unmasked, the fallback text when `label` is null */
+  loginEmail: string | null
   sessionStatus: string
 }
 
