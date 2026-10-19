@@ -180,6 +180,7 @@ function missingTitle(org: BcOrganization): string {
           :key="org.orgId"
           class="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 sm:table-row sm:py-0"
           :class="org.missingSince ? 'opacity-60' : ''"
+          :title="org.missingSince ? missingTitle(org) : undefined"
           data-testid="ta-org-row"
           :data-org-id="org.orgId"
           :data-missing="org.missingSince ? '1' : '0'"

@@ -901,7 +901,9 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       return h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [
         chevron,
         h('span', {
-          'class': multi ? 'text-highlighted' : 'font-mono text-xs text-highlighted',
+          // a Business Center name can be long: it is truncated visually (the full text stays in the DOM for
+          // QA and the `title` keeps the org id) so the column does not widen the whole table
+          'class': multi ? 'inline-block max-w-48 truncate align-middle text-highlighted' : 'font-mono text-xs text-highlighted',
           'title': org,
           'data-testid': 'ta-bc-org',
           'data-org': org,
