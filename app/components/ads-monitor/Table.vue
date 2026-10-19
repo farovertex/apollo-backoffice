@@ -13,6 +13,10 @@
  * รูปโฆษณา column right after ชื่อ (`ReportsAdThumb` + an eye button `am-row-covers-btn`) that asks the page to
  * open the "all ad images" modal (`show-covers`), mirroring `report-banned/Table.vue`'s `rb-row-covers-btn`.
  *
+ * TASK-campaign-delete-ui — the campaign tab gains a **last** column "ลบ" (`AdsMonitorDeleteCell`); no other
+ * column moves and the other two tabs are untouched, because the column set is picked by `level`. A row whose
+ * `deletedAt` is set is dimmed (`opacity-60`, `data-deleted="true"`) on all three tabs.
+ *
  * T9 — sticky header (spec "UI behaviour" → "Sticky header"): `am-table` owns its OWN vertical scrollbox
  * (`max-h-[70vh] overflow-auto`) rather than relying on the outer `UDashboardPanel` body scroll. Measured
  * first: on this page the real vertical scroller is that panel's `data-slot="body"` div, several ancestors
@@ -39,7 +43,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   'toggle': [row: MonitorRow, target: ToggleTarget]
   'show-covers': [row: MonitorRow]
+  /** TASK-campaign-delete-ui — campaign tab only: the row asks the page to open the confirm modal */
+  'delete': [row: MonitorRow]
 }>()
+
+/** TASK-campaign-delete-ui — a deleted row stays in the list, dimmed (`deletedAt` is set on all three tabs). */
+function isDeleted(row: MonitorRow): boolean {
+  return typeof row.deletedAt === 'string' && row.deletedAt !== ''
+}
 
 type Align = 'left' | 'right'
 type Format = 'int' | 'dec' | 'pct'
@@ -88,7 +99,9 @@ const COLUMNS: Record<MonitorLevel, Column[]> = {
     { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
     { key: 'budget', label: 'งบประมาณ', align: 'right' },
     ...METRIC_COLUMNS,
-    { key: 'adCount', label: 'โฆษณา', align: 'right' }
+    { key: 'adCount', label: 'โฆษณา', align: 'right' },
+    // TASK-campaign-delete-ui — campaign tab only, always the **last** column (nothing else moves)
+    { key: 'delete', label: 'ลบ', align: 'left' }
   ],
   adGroup: [
     ...HEAD,
@@ -187,6 +200,8 @@ function scheduleText(row: MonitorRow): string {
           :data-id="row.id"
           :data-level="row.level"
           :data-advertiser="row.advertiser.id"
+          :data-deleted="isDeleted(row) ? 'true' : 'false'"
+          :class="isDeleted(row) ? 'opacity-60' : ''"
         >
           <td
             v-for="column in columns"
@@ -250,7 +265,17 @@ function scheduleText(row: MonitorRow): string {
               />
             </div>
 
-            <AdsMonitorStatusCell v-else-if="column.key === 'status'" :status="row.status" />
+            <AdsMonitorStatusCell
+              v-else-if="column.key === 'status'"
+              :status="row.status"
+              :deleted-at="row.deletedAt"
+            />
+
+            <AdsMonitorDeleteCell
+              v-else-if="column.key === 'delete'"
+              :row="row"
+              @ask="emit('delete', row)"
+            />
 
             <span
               v-else-if="column.key === 'campaign'"

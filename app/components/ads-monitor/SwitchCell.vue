@@ -11,19 +11,29 @@
  *    `switchable.ok === false` — the reason text comes from the API, the BO never recomputes the rule.
  *
  * There is **no confirm dialog** (human decision, brief §0.4): the click posts straight away.
+ *
+ * TASK-campaign-delete-ui — a **deleted** row (`deletedAt` set) is always case 3 with the switch disabled and
+ * the title "ลบแล้ว": the API already answers `switchable.ok = false, reason = 'ลบแล้ว'`, and `deletedAt` is
+ * checked here too so the switch can never be pressed on a row we know is gone, whatever the rest says.
  */
 import type { MonitorRow, ToggleTarget } from '#shared/types/ads-monitor'
+
+const DELETED_TEXT = 'ลบแล้ว'
 
 const props = defineProps<{ row: MonitorRow }>()
 const emit = defineEmits<{ toggle: [target: ToggleTarget] }>()
 
-const pending = computed(() => props.row.optPending)
-const failure = computed(() => (pending.value ? null : props.row.optError))
+const deleted = computed(() => props.row.deletedAt !== null && props.row.deletedAt !== undefined)
+const pending = computed(() => (deleted.value ? null : props.row.optPending))
+const failure = computed(() => (pending.value || deleted.value ? null : props.row.optError))
 
 /** while pending the knob shows where the job is going, otherwise the value TikTok last reported */
 const checked = computed(() => (pending.value ? pending.value.target === 'on' : props.row.opt === 0))
-const disabled = computed(() => pending.value !== null || !props.row.switchable.ok)
-const tooltip = computed(() => (pending.value ? null : props.row.switchable.reason))
+const disabled = computed(() => deleted.value || pending.value !== null || !props.row.switchable.ok)
+const tooltip = computed(() => {
+  if (deleted.value) return props.row.switchable.reason || DELETED_TEXT
+  return pending.value ? null : props.row.switchable.reason
+})
 const ariaLabel = computed(() => `เปิด/ปิด ${props.row.name ?? props.row.id}`)
 const pendingText = computed(() => (pending.value?.target === 'on' ? 'กำลังเปิด…' : 'กำลังปิด…'))
 </script>
@@ -37,9 +47,10 @@ const pendingText = computed(() => (pending.value?.target === 'on' ? 'กำล�
     :data-opt="row.opt === null ? '' : String(row.opt)"
     :data-state="pending ? 'pending' : failure ? 'error' : 'idle'"
     :data-switchable="row.switchable.ok ? 'true' : 'false'"
+    :data-deleted="deleted ? 'true' : 'false'"
   >
     <UTooltip :text="tooltip ?? ''" :disabled="!tooltip">
-      <span class="inline-flex">
+      <span class="inline-flex" :title="tooltip ?? undefined">
         <USwitch
           :model-value="checked"
           :disabled="disabled"
