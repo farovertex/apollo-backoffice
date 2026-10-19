@@ -5,8 +5,21 @@
  * never drift apart in formatting. No client sort (the API fixes the order), no client sum: the footer
  * `am-total` always prints the response's `totals` (AC-20).
  *
- * Like `ReportBannedTable` this is a plain `<table>` inside an `overflow-x-auto` wrapper — the **table**
- * scrolls sideways on tablet/mobile, the page never does (AC-24).
+ * Like `ReportBannedTable` this is a plain `<table>` inside a scroll wrapper — the **table** scrolls sideways
+ * on tablet/mobile, the page never does (AC-24).
+ *
+ * T9 — sticky header (spec "UI behaviour" → "Sticky header"): `am-table` owns its OWN vertical scrollbox
+ * (`max-h-[70vh] overflow-auto`) rather than relying on the outer `UDashboardPanel` body scroll. Measured
+ * first: on this page the real vertical scroller is that panel's `data-slot="body"` div, several ancestors
+ * above `am-table` — but a `th` can only `position: sticky` against its *nearest* ancestor scroll container,
+ * and `overflow-x: auto` on this wrapper already makes it one (the CSS spec forces the paired `overflow-y`
+ * from `visible` to `auto` the moment `overflow-x` isn't `visible`), so a `thead th` here can never pin to
+ * the panel further out — tried, and it does not stick. Giving `am-table` a bounded height makes it the one
+ * real scroll container for both axes, so `sticky top-0` on each `th` pins against the box the horizontal
+ * scroll already lives in — same container, so it also scrolls sideways with the body (no misalignment).
+ * `bg-elevated` (opaque, not `/50`) on both the row and each `th` keeps rows from showing through underneath;
+ * `z-10` keeps it above `USwitch` / badges. `am-total` is not sticky (not required) — reachable by scrolling
+ * the same box to the end.
  */
 import type { MonitorLevel, MonitorRow, ToggleTarget } from '#shared/types/ads-monitor'
 import type { KpiMetrics } from '#shared/types/reports'
@@ -130,15 +143,15 @@ function scheduleText(row: MonitorRow): string {
 </script>
 
 <template>
-  <div class="min-w-0 overflow-x-auto" data-testid="am-table" :data-level="level">
+  <div class="min-w-0 max-h-[70vh] overflow-auto" data-testid="am-table" :data-level="level">
     <table class="w-full border-separate border-spacing-0 text-sm">
       <thead>
-        <tr class="bg-elevated/50">
+        <tr class="bg-elevated">
           <th
             v-for="(column, index) in columns"
             :key="column.key"
             scope="col"
-            class="border-y border-default px-2 py-2 font-semibold whitespace-nowrap text-highlighted"
+            class="sticky top-0 z-10 border-y border-default bg-elevated px-2 py-2 font-semibold whitespace-nowrap text-highlighted"
             :class="[
               column.align === 'right' ? 'text-right' : 'text-left',
               index === 0 ? 'rounded-l-lg border-l' : '',
