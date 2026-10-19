@@ -281,6 +281,15 @@ onUnmounted(() => {
   session++
 })
 
+// ── "view all ad images" modal (T11, api-contract.md v1.3 §8.3) ────────────────────────────────────────────────────
+const coversOpen = ref(false)
+const coversRow = ref<MonitorRow | null>(null)
+
+function showCovers(row: MonitorRow) {
+  coversRow.value = row
+  coversOpen.value = true
+}
+
 // ── toggle ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
  * One POST per press, no confirm dialog (brief §0.4). 202 → the row renders `am-switch-pending` from the
@@ -627,6 +636,7 @@ const intervalText = computed(() => {
               :totals="data.totals"
               :pending="pending"
               @toggle="toggle"
+              @show-covers="showCovers"
             />
 
             <div class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted">
@@ -646,4 +656,6 @@ const intervalText = computed(() => {
       </div>
     </template>
   </UDashboardPanel>
+
+  <AdsMonitorCoversModal v-model:open="coversOpen" :row="coversRow" />
 </template>

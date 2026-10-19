@@ -1,7 +1,8 @@
 /**
  * FEAT-056 — Ads monitor (`/ads-monitor`). Mirrors
- * `mission-control/.ai/features/FEAT-056-…/api-contract.md` **v1.2** §2 (status keys), §3 (the three list
- * envelopes `GET /ads-monitor/campaigns | ad-groups | ads`) and §4 (`POST /ads-monitor/toggle`).
+ * `mission-control/.ai/features/FEAT-056-…/api-contract.md` **v1.3** §2 (status keys), §3 (the three list
+ * envelopes `GET /ads-monitor/campaigns | ad-groups | ads`), §4 (`POST /ads-monitor/toggle`) and §8 (campaign
+ * `cover` + the "all ad images" modal endpoint, T11).
  *
  * The three tabs share one envelope and one row type: every key that only one level carries is optional
  * (`campaign` on the ad-group row, `media`/`source`/`adGroup` on the ad row, `budget`/`bid`/`schedule`,
@@ -10,6 +11,7 @@
  * TikTok's switch value is inverted on purpose: `opt === 0` is **on**, `opt === 1` is **off**, `null` =
  * not read yet (the switch is disabled until the next kpi round, spec A3). The toggle body talks `'on'|'off'`.
  */
+import type { BannedAd } from './report-banned'
 import type { KpiMetrics } from './reports'
 
 /** API level enum (contract §1 — `ad` is TikTok's `creative`). */
@@ -114,6 +116,13 @@ export interface MonitorMedia {
   isVideo: boolean
 }
 
+/** Campaign row's first-creative cover (contract v1.3 §8.1) — never null, a campaign row always has ≥ 1 ad. */
+export interface MonitorCover {
+  adId: string
+  coverUrl: string | null
+  isVideo: boolean
+}
+
 /** One row of any tab (contract §3.1 / §3.2 / §3.3). */
 export interface MonitorRow {
   level: MonitorLevel
@@ -141,6 +150,8 @@ export interface MonitorRow {
   campaign?: MonitorNamedRef
   adGroup?: MonitorNamedRef
   media?: MonitorMedia
+  /** campaign tab only (contract v1.3 §8.1) — first creative's cover, drives the รูปโฆษณา column */
+  cover?: MonitorCover
   source?: string | null
   createdAt: string | null
   metrics: KpiMetrics
@@ -187,4 +198,16 @@ export type ToggleConflictReason = 'pending' | 'banned' | 'notLoggedIn' | 'build
 export interface ToggleConflict {
   error: string
   reason: ToggleConflictReason
+}
+
+/**
+ * `GET /ads-monitor/campaigns/:advertiserId/:tiktokCampaignId/ads` (contract v1.3 §8.2) — every creative of
+ * one campaign, behind the campaign tab's eye button. Ad shape is identical to `GET /reports/banned/:id/ads`
+ * on purpose (contract note) so `BannedAd` / `ReportsCoversGrid` are reused rather than duplicated.
+ */
+export interface MonitorCampaignAdsResponse {
+  campaign: { id: string, name: string | null }
+  advertiser: { id: string, name: string | null, tiktokAdvertiserId: string }
+  total: number
+  ads: BannedAd[]
 }

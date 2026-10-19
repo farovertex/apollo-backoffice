@@ -8,6 +8,11 @@
  * Like `ReportBannedTable` this is a plain `<table>` inside a scroll wrapper — the **table** scrolls sideways
  * on tablet/mobile, the page never does (AC-24).
  *
+ * T11 (api-contract.md v1.3 §8.3, spec "Human change 2026-10-19 14:00") — the Order **column** is removed on
+ * all three tabs (the `am-filter-order` filter and the `orderIds` keys stay); the campaign tab gains a
+ * รูปโฆษณา column right after ชื่อ (`ReportsAdThumb` + an eye button `am-row-covers-btn`) that asks the page to
+ * open the "all ad images" modal (`show-covers`), mirroring `report-banned/Table.vue`'s `rb-row-covers-btn`.
+ *
  * T9 — sticky header (spec "UI behaviour" → "Sticky header"): `am-table` owns its OWN vertical scrollbox
  * (`max-h-[70vh] overflow-auto`) rather than relying on the outer `UDashboardPanel` body scroll. Measured
  * first: on this page the real vertical scroller is that panel's `data-slot="body"` div, several ancestors
@@ -31,7 +36,10 @@ const props = defineProps<{
   pending?: boolean
 }>()
 
-const emit = defineEmits<{ toggle: [row: MonitorRow, target: ToggleTarget] }>()
+const emit = defineEmits<{
+  'toggle': [row: MonitorRow, target: ToggleTarget]
+  'show-covers': [row: MonitorRow]
+}>()
 
 type Align = 'left' | 'right'
 type Format = 'int' | 'dec' | 'pct'
@@ -64,11 +72,20 @@ const HEAD: Column[] = [
   { key: 'status', label: 'สถานะ', align: 'left' }
 ]
 
+/**
+ * `HEAD` is `[switch, name, status]`; the cover column is spliced in right after `name` (index 1) so the
+ * order stays switch → name → รูปโฆษณา → status, exactly as the spec lists it.
+ */
+const CAMPAIGN_HEAD: Column[] = [
+  ...HEAD.slice(0, 2),
+  { key: 'cover', label: 'รูปโฆษณา', align: 'left' },
+  ...HEAD.slice(2)
+]
+
 const COLUMNS: Record<MonitorLevel, Column[]> = {
   campaign: [
-    ...HEAD,
+    ...CAMPAIGN_HEAD,
     { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
-    { key: 'order', label: 'Order', align: 'left' },
     { key: 'budget', label: 'งบประมาณ', align: 'right' },
     ...METRIC_COLUMNS,
     { key: 'adCount', label: 'โฆษณา', align: 'right' }
@@ -77,7 +94,6 @@ const COLUMNS: Record<MonitorLevel, Column[]> = {
     ...HEAD,
     { key: 'campaign', label: 'แคมเปญ', align: 'left' },
     { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
-    { key: 'order', label: 'Order', align: 'left' },
     { key: 'budget', label: 'งบประมาณ', align: 'right' },
     { key: 'bid', label: 'Bid', align: 'left' },
     { key: 'schedule', label: 'ตารางเวลา', align: 'left' },
@@ -88,7 +104,6 @@ const COLUMNS: Record<MonitorLevel, Column[]> = {
     { key: 'source', label: 'Source', align: 'left' },
     { key: 'adGroup', label: 'กลุ่มโฆษณา', align: 'left' },
     { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
-    { key: 'order', label: 'Order', align: 'left' },
     ...METRIC_COLUMNS
   ]
 }
@@ -217,6 +232,24 @@ function scheduleText(row: MonitorRow): string {
               </span>
             </div>
 
+            <div
+              v-else-if="column.key === 'cover'"
+              class="flex items-center gap-1.5"
+              data-testid="am-row-cover"
+            >
+              <ReportsAdThumb :url="row.cover?.coverUrl ?? null" :is-video="row.cover?.isVideo ?? false" size="sm" />
+              <UButton
+                icon="i-lucide-eye"
+                aria-label="ดูรูปโฆษณาทั้งหมด"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                data-testid="am-row-covers-btn"
+                :data-id="row.id"
+                @click="emit('show-covers', row)"
+              />
+            </div>
+
             <AdsMonitorStatusCell v-else-if="column.key === 'status'" :status="row.status" />
 
             <span
@@ -250,14 +283,6 @@ function scheduleText(row: MonitorRow): string {
             >
               <span>{{ accountLabel(row) }}</span>
               <span class="text-xs text-muted">{{ row.advertiser.name || REPORT_DASH }}</span>
-            </span>
-
-            <span v-else-if="column.key === 'order'" class="whitespace-nowrap" data-testid="am-row-order">
-              <template v-if="row.orderIds.length > 0">
-                <ULink :to="`/orders/${row.orderIds[0]}`" class="text-primary">{{ last4(row.orderIds[0]) }}</ULink>
-                <span v-if="row.orderIds.length > 1" class="ml-1 text-xs text-muted">+{{ row.orderIds.length - 1 }}</span>
-              </template>
-              <template v-else>{{ REPORT_DASH }}</template>
             </span>
 
             <span
