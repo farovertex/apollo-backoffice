@@ -52,8 +52,16 @@ const error = computed(() => props.state?.error ?? null)
 const orgs = computed<BcOrganization[]>(() => props.state?.data ?? [])
 const roots = computed(() => orgs.value.filter(org => org.isRoot))
 
-const NO_PARENT_VALUE = ''
+/** sentinel of the "clear the parent" item — `PATCH { parentOrgId: null }` (an empty string is not a valid id) */
+const NO_PARENT_VALUE = '__none__'
 const NO_PARENT_LABEL = '— ไม่ตั้ง —'
+/**
+ * The select is an action menu, not a field: it is **always** bound to this empty value (no item carries it, so
+ * the placeholder stays) and the page re-reads the orgs after the PATCH. Leaving it uncontrolled would keep the
+ * last choice inside the component and silently swallow a second attempt with the same parent — exactly the
+ * retry a 409 asks for.
+ */
+const UNSET = ''
 
 /** `root` · `sub` (`parentOrgId` set) · `ไม่ทราบแม่` (neither) — spec "UI behaviour" */
 function orgKind(org: BcOrganization): string {
@@ -111,7 +119,13 @@ function missingTitle(org: BcOrganization): string {
 </script>
 
 <template>
-  <div class="sticky left-0 w-[calc(100vw-4rem)] max-w-full sm:static sm:w-auto">
+  <!--
+    The account table scrolls sideways inside its own `overflow-x-auto` wrapper and is wider than the panel, so
+    an expansion that simply filled the cell would push its right-hand controls (the per-org Sync) out of sight.
+    `sticky left-0` + a content-sized width keeps the org rows at the left edge of the **visible** area at every
+    scroll position, and the mobile cap forces the row to wrap instead of widening the page.
+  -->
+  <div class="sticky left-0 w-fit min-w-72 max-w-[calc(100vw-4rem)]">
     <div
       v-if="loading"
       class="flex flex-col gap-2 py-1"
@@ -156,7 +170,7 @@ function missingTitle(org: BcOrganization): string {
 
     <table
       v-else
-      class="block w-full border-separate border-spacing-0 text-sm sm:table"
+      class="block w-full border-separate border-spacing-0 text-sm sm:table sm:w-auto"
       data-testid="ta-orgs"
       :data-id="account.id"
     >
@@ -172,11 +186,10 @@ function missingTitle(org: BcOrganization): string {
           :data-root="org.isRoot ? '1' : '0'"
         >
           <!-- badge + name + copy (+ the unknown-parent chooser); subs are indented one level -->
-          <td
-            class="block basis-full border-b border-default py-1 sm:table-cell sm:px-2"
-            :class="org.parentOrgId ? 'pl-4' : ''"
-          >
-            <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+          <td class="block basis-full border-b border-default py-1 sm:table-cell sm:px-2">
+            <!-- a sub is indented one level; the indent lives on the content, not on the cell padding
+                 (`sm:px-2` of the cell would win over a `pl-*` utility) -->
+            <div class="flex min-w-0 flex-wrap items-center gap-1.5" :class="org.parentOrgId ? 'ps-4' : ''">
               <UBadge
                 :color="kindColor(org)"
                 variant="subtle"
@@ -221,7 +234,7 @@ function missingTitle(org: BcOrganization): string {
             <div v-if="needsParent(org)" class="mt-1 flex flex-wrap items-center gap-1.5">
               <USelect
                 :items="parentItems()"
-                :model-value="NO_PARENT_VALUE"
+                :model-value="UNSET"
                 :loading="parentBusy === org.orgId"
                 :disabled="parentBusy === org.orgId"
                 placeholder="เลือก org แม่"
