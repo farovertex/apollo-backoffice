@@ -48,6 +48,21 @@ export function formatDateTime(iso: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/**
+ * `19 Oct 17:10` — `dd MMM HH:mm` in the browser's timezone, month names pinned to English short form so the
+ * text never depends on the browser locale (TASK-campaign-delete-ui: deletion time under the "ลบแล้ว" badge).
+ * `—` for null / an unparsable date.
+ */
+export function formatDayMonthClock(iso: string | null | undefined): string {
+  if (!iso) return REPORT_DASH
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return REPORT_DASH
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getDate())} ${MONTHS_SHORT[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 /** Thai relative time, deterministic (no locale lookup): "3 นาทีที่แล้ว". `—` for null. */
 export function timeAgoTh(iso: string | null | undefined, nowMs: number): string {
   if (!iso) return REPORT_DASH
@@ -201,6 +216,7 @@ const MONITOR_PENDING_RE = /audit|review|pending|not_start/i
  */
 export function monitorStatusLabel(key: MonitorStatusKey, primary?: string | null): string {
   switch (key) {
+    case 'deleted': return 'ลบแล้ว'
     case 'delivering': return 'ใช้งานอยู่'
     case 'notDelivering': return 'ไม่ส่ง'
     case 'paused': return 'หยุดชั่วคราว'
@@ -212,6 +228,7 @@ export function monitorStatusLabel(key: MonitorStatusKey, primary?: string | nul
 /** Dot colour per status key; `other` is amber while auditing, grey otherwise. */
 export function monitorStatusDot(key: MonitorStatusKey, primary?: string | null): string {
   switch (key) {
+    case 'deleted': return 'bg-muted'
     case 'delivering': return 'bg-success'
     case 'notDelivering': return 'bg-warning'
     case 'paused': return 'bg-muted'
@@ -223,6 +240,7 @@ export function monitorStatusDot(key: MonitorStatusKey, primary?: string | null)
 /** Text colour of the label, matching the dot. */
 export function monitorStatusText(key: MonitorStatusKey): string {
   switch (key) {
+    case 'deleted': return 'text-muted'
     case 'delivering': return 'text-success'
     case 'rejected': return 'text-error'
     case 'notDelivering': return 'text-warning'

@@ -17,10 +17,14 @@ import type { KpiMetrics } from './reports'
 /** API level enum (contract §1 — `ad` is TikTok's `creative`). */
 export type MonitorLevel = 'campaign' | 'adGroup' | 'ad'
 
-/** Classification of one level (contract §2); the Thai labels live in `app/utils/reports.ts`. */
-export type MonitorStatusKey = 'delivering' | 'notDelivering' | 'paused' | 'rejected' | 'other'
+/**
+ * Classification of one level (contract §2); the Thai labels live in `app/utils/reports.ts`.
+ * TASK-campaign-delete-ui — `deleted` is the API's **top-priority** key (above `rejected`): every row whose
+ * `deletedAt` is set reads `deleted`, because deleting a campaign deletes its groups and ads too.
+ */
+export type MonitorStatusKey = 'deleted' | 'delivering' | 'notDelivering' | 'paused' | 'rejected' | 'other'
 
-/** `status` query value — the five keys plus `all` (default). */
+/** `status` query value — the six keys plus `all` (default). */
 export type MonitorStatusFilter = 'all' | MonitorStatusKey
 
 /** `linked` query value — `true` (default: only ads our system launched), `false`, `all`. */
@@ -64,6 +68,32 @@ export interface OptErrorView {
 
 /** Why the switch may not be pressed — computed by the API so the BO never re-derives the rule. */
 export interface MonitorSwitchable {
+  ok: boolean
+  reason: string | null
+}
+
+/**
+ * TASK-campaign-delete-ui — view of `ads.deletePending` (mirrors `optPending`, without a target: a delete has
+ * only one direction). Set by the API and, between the accepted 202 and the next load, by the page's own
+ * optimistic override.
+ */
+export interface DeletePendingView {
+  jobId: string
+  requestedAt: string
+}
+
+/** View of `ads.deleteError` (mirrors `optError`). `reason` is a Thai sentence that is safe to show. */
+export interface DeleteErrorView {
+  jobId: string | null
+  at: string
+  reason: string
+}
+
+/**
+ * Why the campaign may not be deleted — same spirit as `switchable`: the first failing rule, computed by the
+ * API. `ok: false` with `reason: 'ลบแล้ว'` once the campaign is deleted.
+ */
+export interface MonitorDeletable {
   ok: boolean
   reason: string | null
 }
@@ -144,6 +174,17 @@ export interface MonitorRow {
   optError: OptErrorView | null
   switchable: MonitorSwitchable
   status: MonitorStatus
+  /**
+   * TASK-campaign-delete-ui — when our `campaignDelete` job removed this campaign on TikTok (the `ads` rows
+   * are kept). On every row of the three tabs; group/ad rows inherit the campaign's value.
+   */
+  deletedAt: string | null
+  /** campaign tab only — a `campaignDelete` job is queued/running for this campaign */
+  deletePending?: DeletePendingView | null
+  /** campaign tab only — the last `campaignDelete` job failed */
+  deleteError?: DeleteErrorView | null
+  /** campaign tab only — whether the trash button may be pressed, and why not */
+  deletable?: MonitorDeletable
   budget?: MonitorBudget
   bid?: MonitorBid
   schedule?: MonitorSchedule
@@ -189,6 +230,30 @@ export interface ToggleAccepted {
   target: ToggleTarget
   adCount: number
   optPending: OptPendingView
+}
+
+/** `POST /ads-monitor/delete-campaign` body (strict on the API side). */
+export interface DeleteCampaignBody {
+  advertiserId: string
+  tiktokCampaignId: string
+}
+
+/** `POST /ads-monitor/delete-campaign` 202 body. */
+export interface DeleteAccepted {
+  jobId: string
+  tiktokCampaignId: string
+  campaignName: string | null
+  adCount: number
+  deletePending: DeletePendingView
+}
+
+/** Why a delete was refused, in the API's own order. */
+export type DeleteConflictReason = 'deletePending' | 'optPending' | 'banned' | 'notLoggedIn' | 'buildInProgress'
+
+/** `POST /ads-monitor/delete-campaign` 409 body — `error` is the Thai sentence shown in the toast. */
+export interface DeleteConflict {
+  error: string
+  reason: DeleteConflictReason
 }
 
 /** Why a toggle was refused (contract §4 step 3). */
