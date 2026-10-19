@@ -36,6 +36,11 @@
  * discover job was scoped to — `null` = the whole login, and `null` for every non-discover job), and the new
  * `BcOrganization` / `OrganizationsResponse` mirror `GET /tiktok-accounts/:id/organizations`.
  * `PATCH /tiktok-accounts/:id/organizations/:orgId` takes `PatchOrganizationBody`.
+ * TASK-bc-sub-create round 2 (brief `.ai/features/_queue/bc-sub-create-ui.prompt.md` "API contract") — three
+ * routes behind the row action **สร้าง Sub BC**: `GET :id/bc-sub-create/suggest` (`BcSubCreateSuggest`),
+ * `POST :id/bc-sub-create` (`BcSubCreateBody` → 202 `BcSubCreateJobResponse`, 409 `BcSubCreateConflictBody`) and
+ * `GET :id/bc-sub-create/latest` (`BcSubCreateLatestResponse`). The job itself is `jobs.type = 'bcSubCreate'`;
+ * nothing of it is stored on the account view (decision D3), the BO reads its state from `latest` only.
  */
 
 import type { HumanTaskKind } from './human-tasks'
@@ -291,6 +296,93 @@ export interface PatchOrganizationBody {
  */
 export interface DiscoverOrgBody {
   bcOrgId: string
+}
+
+/**
+ * TASK-bc-sub-create — currency of a new sub Business Center. Only these two (decision D2); the timezone is
+ * fixed to Asia/Bangkok and is therefore not a field of the body at all.
+ */
+export type BcSubCurrency = 'THB' | 'USD'
+
+/**
+ * TASK-bc-sub-create — why a sub BC cannot be created right now. `suggest.reason` and the 409 body share the
+ * set; `nameTaken` is a POST-only answer (the typed name collides) and `exhausted` means `001`…`999` are used.
+ * Human texts: `app/utils/bc-sub-create.ts` (`bcSubCreateReasonText`).
+ */
+export type BcSubCreateReason
+  = 'noOrgId' | 'noProfile' | 'inactive' | 'running' | 'needsHuman' | 'exhausted' | 'nameTaken'
+
+/**
+ * TASK-bc-sub-create — `GET /tiktok-accounts/:id/bc-sub-create/suggest` 200 body. `name` is `<bcOrgName> NNN`
+ * with the lowest unused 3-digit number (`''` when the login was never synced, i.e. `reason: 'noOrgId'`),
+ * `taken` lists the `<bcOrgName> NNN` names that are already used (sorted) — the modal turns a typed name that
+ * is in this list into an inline error without asking the API.
+ */
+export interface BcSubCreateSuggest {
+  name: string
+  currency: BcSubCurrency
+  /** name of the root Business Center the sub is created under; `null` = never synced */
+  bcOrgName: string | null
+  taken: string[]
+  canCreate: boolean
+  reason: BcSubCreateReason | null
+}
+
+/** TASK-bc-sub-create — `POST /tiktok-accounts/:id/bc-sub-create` body (the API trims + collapses whitespace). */
+export interface BcSubCreateBody {
+  name: string
+  currency: BcSubCurrency
+}
+
+/** TASK-bc-sub-create — `POST /tiktok-accounts/:id/bc-sub-create` 202 body (`name` as the API normalised it). */
+export interface BcSubCreateJobResponse {
+  jobId: string
+  name: string
+  currency: BcSubCurrency
+}
+
+/** TASK-bc-sub-create — 409 body of the POST: the API's own Thai text plus the machine-readable reason. */
+export interface BcSubCreateConflictBody {
+  error: string
+  reason: BcSubCreateReason
+}
+
+/**
+ * TASK-bc-sub-create — proof of a finished create (`jobs.payload.bcSubCreate.result`): `null` for a dry run and
+ * for every failed round. `apiPath` is a path only (no query, no body — AGENTS.md §5).
+ */
+export interface BcSubCreateResult {
+  orgId: string | null
+  name: string
+  currency: string | null
+  timezone: string | null
+  apiPath: string | null
+}
+
+/** TASK-bc-sub-create — status of the `bcSubCreate` job (`jobs.status`); the BO polls until a terminal one. */
+export type BcSubCreateJobStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
+
+/**
+ * TASK-bc-sub-create — one `bcSubCreate` job as `GET …/bc-sub-create/latest` returns it. `lastLog` is the
+ * message of the last `error` log entry when the job failed, else the last entry (already redacted by the API).
+ */
+export interface BcSubCreateJobView {
+  id: string
+  status: BcSubCreateJobStatus
+  error: string | null
+  step: string | null
+  name: string
+  currency: string
+  dryRun: boolean
+  result: BcSubCreateResult | null
+  lastLog: string | null
+  createdAt: string
+  finishedAt: string | null
+}
+
+/** TASK-bc-sub-create — `GET /tiktok-accounts/:id/bc-sub-create/latest` 200 body; `job: null` = never ran. */
+export interface BcSubCreateLatestResponse {
+  job: BcSubCreateJobView | null
 }
 
 /**
