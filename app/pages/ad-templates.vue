@@ -54,6 +54,17 @@
  * so the FEAT-045 UTM-sync prompt above never fires for a duplicate. A stale page whose PATCH / DELETE /
  * UTM-sync is refused with 403 `TEMPLATE_NOT_OWNER` shows the API text where that modal already shows its
  * errors (`adt-form-error` / the delete toast / the sync modal's error) and the list is re-read afterwards.
+ *
+ * **FEAT-058** (api-contract v1 §1–§3 · spec AC-4..8, AC-10): a **Created by** select (`adt-filter-created-by`)
+ * right after the search box filters the list by `workspaceId` (including the FEAT-042 silent poll). Default =
+ * `useAuth().context.homeWorkspaceId` (fallback `all`); the first list request already carries it, before
+ * `GET /ad-templates/creators` (fetched once per page lifetime) has answered — items fall back to `Everyone` +
+ * `<admin.username> (me)` from the session until then or on a failed `/creators` (silent, `data-creators`).
+ * Changing the select resets the page to 1 and collapses into one list request, like the search box. Three
+ * empty states beyond the unchanged `adt-empty` / `adt-no-match`: `adt-empty-mine` (filter = me),
+ * `adt-empty-creator` (another creator), both with `adt-show-all` to fall back to `Everyone`. After a create
+ * or duplicate, a filter on another creator switches to **me** before the single `reload(1)` (the new row is
+ * always the caller's own); `all` / `me` keep the filter, like edit / delete / UTM-sync.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -62,6 +73,8 @@ import type {
   AdTemplate,
   AdTemplateOptions,
   AdTemplatesResponse,
+  Creator,
+  CreatorsResponse,
   VerifyPostInfoResponse
 } from '#shared/types/ad-templates'
 import { AD_ADD_ON_LABEL } from '~/utils/ad-add-on'
@@ -95,6 +108,49 @@ async function loadOptions() {
   }
 }
 
+// ── FEAT-058 · Created by filter ─────────────────────────────────────────────────────────────────────────────────────
+const auth = useAuth()
+const homeWorkspaceId = computed(() => auth.context.value?.homeWorkspaceId ?? null)
+
+/** default = own workspace (fallback `all`); never waits for `/creators` */
+const createdBy = ref<string>(homeWorkspaceId.value ?? 'all')
+
+const creators = ref<Creator[]>([])
+const creatorsStatus = ref<'pending' | 'ready' | 'error'>('pending')
+
+async function loadCreators() {
+  try {
+    // retry: 0, once per page lifetime — Refresh never re-issues it
+    const res = await api<CreatorsResponse>('/ad-templates/creators', { retry: 0 })
+    creators.value = res.creators ?? []
+    creatorsStatus.value = 'ready'
+  } catch {
+    // silent — fallback items below, no alert, no console error
+    creators.value = []
+    creatorsStatus.value = 'error'
+  }
+}
+
+const EVERYONE_ITEM = { label: 'Everyone', value: 'all' }
+
+/** before `/creators` resolves and when it fails: `Everyone` + `<admin.username> (me)` from the session */
+function fallbackCreatedByItems(): { label: string, value: string }[] {
+  const home = homeWorkspaceId.value
+  if (!home) return [EVERYONE_ITEM]
+  const username = auth.admin.value?.username ?? 'me'
+  return [EVERYONE_ITEM, { label: `${username} (me)`, value: home }]
+}
+
+function creatorLabel(creator: Creator): string {
+  const base = creator.username ?? creator.workspaceName ?? creator.workspaceId.slice(-4)
+  return creator.me ? `${base} (me)` : base
+}
+
+const createdByItems = computed(() => {
+  if (creatorsStatus.value !== 'ready') return fallbackCreatedByItems()
+  return [EVERYONE_ITEM, ...creators.value.map(creator => ({ label: creatorLabel(creator), value: creator.workspaceId }))]
+})
+
 // ── list ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const page = ref(1)
 const search = ref('')
@@ -119,7 +175,12 @@ async function load(silent = false) {
     // retry: 0 — exactly one request per load, ofetch must not re-issue it on 5xx
     const res = await api<AdTemplatesResponse>('/ad-templates', {
       retry: 0,
-      query: { page: page.value, limit: LIMIT, q: q || undefined }
+      query: {
+        page: page.value,
+        limit: LIMIT,
+        q: q || undefined,
+        workspaceId: createdBy.value !== 'all' ? createdBy.value : undefined
+      }
     })
     if (s !== session) return
     items.value = res.templates ?? []
@@ -146,7 +207,12 @@ watch(searchDebounced, () => {
   page.value = 1
 })
 
-const queryKey = computed(() => `${page.value}|${searchDebounced.value.trim()}`)
+// FEAT-058 — same rule for the Created by filter, registered before the queryKey watcher
+watch(createdBy, () => {
+  page.value = 1
+})
+
+const queryKey = computed(() => `${page.value}|${searchDebounced.value.trim()}|${createdBy.value}`)
 watch(queryKey, () => {
   void load()
 })
@@ -229,6 +295,7 @@ async function verifyPost(template: AdTemplate) {
 onMounted(() => {
   void load()
   void loadOptions()
+  void loadCreators()
 })
 
 onUnmounted(() => {
@@ -243,13 +310,22 @@ function reload(target?: number) {
 }
 
 const hasSearch = computed(() => searchDebounced.value.trim() !== '')
-const isEmpty = computed(() =>
+const isFilterAll = computed(() => createdBy.value === 'all')
+const isFilterMine = computed(() => !isFilterAll.value && createdBy.value === homeWorkspaceId.value)
+const isFilterOtherCreator = computed(() => !isFilterAll.value && !isFilterMine.value)
+
+const baseEmpty = computed(() =>
   loaded.value && !error.value && !forbidden.value && total.value === 0 && !hasSearch.value
 )
+const isEmpty = computed(() => baseEmpty.value && isFilterAll.value)
+const isEmptyMine = computed(() => baseEmpty.value && isFilterMine.value)
+const isEmptyCreator = computed(() => baseEmpty.value && isFilterOtherCreator.value)
 const isNoMatch = computed(() =>
   loaded.value && !error.value && !forbidden.value && total.value === 0 && hasSearch.value
 )
-const showTable = computed(() => !error.value && !forbidden.value && !isEmpty.value && !isNoMatch.value)
+const showTable = computed(() =>
+  !error.value && !forbidden.value && !isEmpty.value && !isEmptyMine.value && !isEmptyCreator.value && !isNoMatch.value
+)
 
 function clearSearch() {
   search.value = ''
@@ -404,6 +480,13 @@ function onSynced() {
 }
 
 function onCreated() {
+  // FEAT-058 — a filter on another creator would hide the new row (always the caller's own): switch to
+  // `me` and let the createdBy/queryKey watchers collapse the page reset into the single list request;
+  // calling reload(1) as well here would double the request (watcher + direct call both firing).
+  if (isFilterOtherCreator.value) {
+    createdBy.value = homeWorkspaceId.value ?? 'all'
+    return
+  }
   // the list is sorted by -updatedAt — the new row is on page 1
   reload(1)
 }
@@ -477,6 +560,17 @@ function onDeleted() {
             placeholder="Search name or description"
             data-testid="adt-search"
           />
+          <span :data-creators="creatorsStatus" data-testid="adt-filter-created-by-state">
+            <USelect
+              :model-value="createdBy"
+              :items="createdByItems"
+              :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
+              class="w-full sm:w-auto sm:min-w-48"
+              aria-label="Created by"
+              data-testid="adt-filter-created-by"
+              @update:model-value="(v: string) => createdBy = v"
+            />
+          </span>
         </div>
 
         <UAlert
@@ -537,6 +631,51 @@ function onDeleted() {
               :disabled="!options"
               data-testid="adt-empty-create"
               @click="openCreate"
+            />
+          </template>
+        </UEmpty>
+
+        <UEmpty
+          v-else-if="isEmptyMine"
+          icon="i-lucide-clapperboard"
+          title="You have no templates yet"
+          description="Create one, or look at everyone's templates"
+          data-testid="adt-empty-mine"
+        >
+          <template #actions>
+            <UButton
+              label="Create template"
+              icon="i-lucide-plus"
+              color="primary"
+              :disabled="!options"
+              data-testid="adt-empty-create"
+              @click="openCreate"
+            />
+            <UButton
+              label="Show everyone's templates"
+              icon="i-lucide-users"
+              color="neutral"
+              variant="outline"
+              data-testid="adt-show-all"
+              @click="createdBy = 'all'"
+            />
+          </template>
+        </UEmpty>
+
+        <UEmpty
+          v-else-if="isEmptyCreator"
+          icon="i-lucide-search-x"
+          title="No templates from this creator"
+          data-testid="adt-empty-creator"
+        >
+          <template #actions>
+            <UButton
+              label="Show everyone's templates"
+              icon="i-lucide-users"
+              color="neutral"
+              variant="outline"
+              data-testid="adt-show-all"
+              @click="createdBy = 'all'"
             />
           </template>
         </UEmpty>
