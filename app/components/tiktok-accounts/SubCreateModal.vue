@@ -64,6 +64,12 @@ const blockedText = computed<string | null>(() =>
   props.suggest && !props.suggest.canCreate ? bcSubCreateReasonText(props.suggest.reason) : null
 )
 const nameTaken = computed(() => isBcSubNameTaken(state.name, taken.value))
+/**
+ * The inline error is bound on the field itself instead of being left to the schema: `UForm`'s `validate-on`
+ * only surfaces zod issues once the form was submitted (same in `EditModal`), and "the name you typed is
+ * already used" has to be visible **while** typing. The superRefine below stays as the submit-time guard.
+ */
+const nameError = computed<string | undefined>(() => nameTaken.value ? BC_SUB_CREATE_REASON_TEXT.nameTaken : undefined)
 
 const schema = z.object({
   name: z.string({ error: 'ต้องใส่ชื่อ' })
@@ -165,7 +171,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           data-testid="ta-sub-create-blocked"
         />
 
-        <UFormField label="ชื่อ" name="name" required>
+        <UFormField
+          label="ชื่อ"
+          name="name"
+          required
+          :error="nameError"
+        >
           <UInput
             v-model="state.name"
             autocomplete="off"
@@ -174,6 +185,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             :disabled="submitting || !!blockedText"
             data-testid="ta-sub-create-name"
           />
+          <template #error="{ error }">
+            <span data-testid="ta-sub-create-name-error">{{ error }}</span>
+          </template>
         </UFormField>
 
         <UFormField
