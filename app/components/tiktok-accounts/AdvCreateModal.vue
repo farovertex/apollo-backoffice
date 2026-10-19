@@ -192,10 +192,17 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <template #error="{ error }">
             <span data-testid="ta-adv-create-name-error">{{ error }}</span>
           </template>
-          <template #help>
-            <span data-testid="ta-adv-create-timezone">{{ TIMEZONE_HINT }}</span>
-          </template>
         </UFormField>
+
+        <!--
+          The hint is a paragraph of its own, not the field's `#help` slot: `UFormField` renders help in a
+          `v-else-if` after the error block, and that block exists as soon as an `#error` slot is passed (which
+          this field needs for `ta-adv-create-name-error`) — the hint would never be rendered. Verified in the
+          browser: it was invisible until it moved out here.
+        -->
+        <p class="text-xs text-muted" data-testid="ta-adv-create-timezone">
+          {{ TIMEZONE_HINT }}
+        </p>
 
         <UAlert
           v-if="submitError"

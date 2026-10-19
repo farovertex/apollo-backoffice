@@ -1024,6 +1024,8 @@ function advCreateFailedFor(accountId: string): Record<string, string> {
  */
 function advCreateBlockedReason(account: TikTokAccount): string | null {
   if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
+  // one create job per login: while this account has one running, every org of it would get a 409 `running`
+  if (advCreatePendingOrgs(account.id).length) return 'กำลังสร้างบัญชีโฆษณาอยู่'
   if (account.runningJob) {
     if (account.runningJob.type === 'discover') return 'Sync in progress'
     if (account.runningJob.type === 'login') return 'Login in progress'
