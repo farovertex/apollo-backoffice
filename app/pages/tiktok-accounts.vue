@@ -105,6 +105,18 @@
  * (the existing poll's `onDone`) or when Refresh is pressed while the row is open — collapse/expand alone never
  * re-requests. The per-org Sync posts `{ bcOrgId }` to the **same** discover endpoint; the account-level Sync
  * still sends no body at all. An account with 0 or 1 org renders exactly as before the feature.
+ * TASK-bc-sub-create round 2 (brief `.ai/features/_queue/bc-sub-create-ui.prompt.md`) — row action
+ * **สร้าง Sub BC** (`ta-sub-create-<accountId>`, icon-only, right after Sync): one `GET …/bc-sub-create/suggest`
+ * per click → `TiktokAccountsSubCreateModal` (`ta-sub-create-modal`) with the prefilled name and the currency →
+ * `POST …/bc-sub-create` 202 `{ jobId }`. The job is then followed by its **own** 2 s loop on
+ * `GET …/bc-sub-create/latest` (`startSubCreatePoll`, keyed by account id): `startPoll` above cannot be reused
+ * as it is — it polls `GET /tiktok-accounts/:id` and hands a `TikTokAccount` to `done`/`onDone`, while this one
+ * reads another URL and another shape — so it is the same pattern (one loop per account, no overlapping
+ * request, cleared in `onUnmounted`) written for `BcSubCreateJobView`. While it runs the BC org cell shows
+ * `ta-sub-create-pending-<id>`; `completed` toasts and calls `refreshAndFollowDiscovers()` (the API chains a
+ * discover job, whose existing poll re-reads the org drill-down memo when it ends), `failed`/`cancelled` toasts
+ * and leaves `ta-sub-create-failed-<id>` (tooltip = the job's `lastLog`) until the next attempt. The BC org cell
+ * renders **exactly** its FEAT-059 DOM whenever there is no chip to show.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -117,6 +129,9 @@ import type { DiscoverJobResponse } from '#shared/types/advertisers'
 import type {
   AccountsResponse,
   BcOrganization,
+  BcSubCreateJobResponse,
+  BcSubCreateLatestResponse,
+  BcSubCreateSuggest,
   DiscoverOrgBody,
   LoginConflictBody,
   LoginJobResponse,
@@ -752,6 +767,189 @@ async function onSetOrgParent(accountId: string, payload: { org: BcOrganization,
   }
 }
 
+// ── TASK-bc-sub-create — create a sub Business Center ────────────────────────────────────────────────────────────────
+const subCreateOpen = ref(false)
+const subCreateTarget = ref<TikTokAccount | null>(null)
+/** answer of the one `GET …/bc-sub-create/suggest` made for the open modal (the modal itself requests nothing) */
+const subCreateSuggest = ref<BcSubCreateSuggest | null>(null)
+/** account id whose suggest request is in flight (button spinner + no double click) */
+const subCreateAsking = ref<string | null>(null)
+/** account ids whose `bcSubCreate` job is being followed → chip `ta-sub-create-pending-<id>` */
+const subCreatePending = ref(new Set<string>())
+/** account id → text of the last failed attempt → chip `ta-sub-create-failed-<id>`; dropped on the next attempt */
+const subCreateFailed = ref(new Map<string, string>())
+
+function setSubCreatePending(id: string, on: boolean) {
+  const next = new Set(subCreatePending.value)
+  if (on) next.add(id)
+  else next.delete(id)
+  subCreatePending.value = next
+}
+
+function setSubCreateFailed(id: string, text: string | null) {
+  const next = new Map(subCreateFailed.value)
+  if (text) next.set(id, text)
+  else next.delete(id)
+  subCreateFailed.value = next
+}
+
+/**
+ * Why the row action is disabled (the tooltip text), `null` = enabled. The brief's rule is "a `bcOrgId` and no
+ * running job"; `isActive` is checked too because the API answers 409 `inactive` for a disabled account, and a
+ * job type that is neither discover nor login (top-up, or the sub-create job of another tab) gets a generic
+ * sentence instead of the wrong one.
+ */
+function subCreateBlockedReason(account: TikTokAccount): string | null {
+  if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
+  if (!account.bcOrgId) return 'Sync first'
+  if (account.runningJob) {
+    if (account.runningJob.type === 'discover') return 'Sync in progress'
+    if (account.runningJob.type === 'login') return 'Login in progress'
+    return 'Job in progress'
+  }
+  if (!account.isActive) return 'Account is disabled'
+  return null
+}
+
+/** click → one suggest request → the modal opens on 200 only (any error is a toast and no modal) */
+async function onAskSubCreate(account: TikTokAccount) {
+  if (subCreateAsking.value || subCreateBlockedReason(account)) return
+  subCreateAsking.value = account.id
+  try {
+    // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
+    const suggest = await api<BcSubCreateSuggest>(
+      `/tiktok-accounts/${encodeURIComponent(account.id)}/bc-sub-create/suggest`,
+      { retry: 0 }
+    )
+    subCreateTarget.value = account
+    subCreateSuggest.value = suggest
+    subCreateOpen.value = true
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({
+      title: 'เปิดฟอร์มสร้าง Sub BC ไม่ได้',
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: 'error'
+    })
+  } finally {
+    subCreateAsking.value = null
+  }
+}
+
+/**
+ * Same pattern as `startPoll` (one loop per account id, 2 s, never two requests in flight, cleared on unmount)
+ * on `GET …/bc-sub-create/latest` — see the file header for why it is not the same function.
+ */
+const subCreatePolls = new Map<string, ReturnType<typeof setInterval>>()
+const subCreateInFlight = new Set<string>()
+
+function stopSubCreatePoll(id: string) {
+  const timer = subCreatePolls.get(id)
+  if (timer) clearInterval(timer)
+  subCreatePolls.delete(id)
+  subCreateInFlight.delete(id)
+}
+
+async function pollSubCreate(id: string, jobId: string, label: string) {
+  if (!subCreatePolls.has(id) || subCreateInFlight.has(id)) return
+  subCreateInFlight.add(id)
+  try {
+    // retry: 0 — one request per tick
+    const res = await api<BcSubCreateLatestResponse>(
+      `/tiktok-accounts/${encodeURIComponent(id)}/bc-sub-create/latest`,
+      { retry: 0 }
+    )
+    if (!subCreatePolls.has(id)) return // stopped meanwhile (unmount / terminal in another tick)
+    const job = res.job
+    if (!job) return // nothing to follow yet — the next tick looks again
+    if (job.id !== jobId) {
+      // a newer job of this account is the latest one: that attempt owns the row now
+      stopSubCreatePoll(id)
+      setSubCreatePending(id, false)
+      return
+    }
+    if (job.status === 'waiting' || job.status === 'active') return
+    stopSubCreatePoll(id)
+    setSubCreatePending(id, false)
+    if (job.status === 'completed') {
+      const orgId = job.result?.orgId ?? null
+      toast.add({
+        title: `สร้าง ${job.name} แล้ว${orgId ? ` (org …${orgId.slice(-4)})` : ''} — กำลัง Sync`,
+        description: label,
+        color: 'success'
+      })
+      // the API chained a discover job for the whole login: refresh and let the existing discover poll follow
+      // it (its `onDone` re-reads the org drill-down memo, so the new sub appears there on its own)
+      await refreshAndFollowDiscovers()
+      if (orgsById.value[id]) void loadOrgs(id)
+    } else {
+      const detail = [job.error, job.lastLog].filter(Boolean).join(' — ') || 'ไม่ทราบสาเหตุ'
+      setSubCreateFailed(id, detail)
+      toast.add({ title: 'สร้าง Sub BC ไม่สำเร็จ', description: `${label}: ${detail}`, color: 'error' })
+      await refresh()
+    }
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    // the account (or the route) is gone → nothing left to follow; any other error is transient
+    if (err.statusCode === 404) {
+      stopSubCreatePoll(id)
+      setSubCreatePending(id, false)
+    }
+  } finally {
+    subCreateInFlight.delete(id)
+  }
+}
+
+function startSubCreatePoll(account: TikTokAccount, job: BcSubCreateJobResponse) {
+  const id = account.id
+  setSubCreateFailed(id, null) // a new attempt starts clean
+  setSubCreatePending(id, true)
+  if (subCreatePolls.has(id)) return
+  const label = account.label ?? account.loginEmail
+  subCreatePolls.set(id, setInterval(() => {
+    void pollSubCreate(id, job.jobId, label)
+  }, POLL_MS))
+  void pollSubCreate(id, job.jobId, label)
+}
+
+/** 202 of the modal's POST: the modal closed itself, the row takes over */
+function onSubCreated(job: BcSubCreateJobResponse) {
+  const account = subCreateTarget.value
+  if (!account) return
+  toast.add({ title: 'เริ่มสร้าง Sub BC แล้ว', description: job.name, color: 'info' })
+  startSubCreatePoll(account, job)
+}
+
+onUnmounted(() => {
+  for (const id of [...subCreatePolls.keys()]) stopSubCreatePoll(id)
+})
+
+/** pending / failed chip of the BC org cell; `null` → that cell keeps its FEAT-059 DOM byte for byte */
+function subCreateChip(a: TikTokAccount): VNode | null {
+  if (subCreatePending.value.has(a.id)) {
+    return h('span', {
+      'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted',
+      'data-testid': `ta-sub-create-pending-${a.id}`,
+      'data-id': a.id
+    }, [
+      h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
+      'กำลังสร้าง Sub BC…'
+    ])
+  }
+  const failed = subCreateFailed.value.get(a.id)
+  if (!failed) return null
+  return h(UTooltip, { text: failed }, () => h(UBadge, {
+    'color': 'error',
+    'variant': 'subtle',
+    'size': 'sm',
+    'icon': 'i-lucide-triangle-alert',
+    'class': 'max-w-48 truncate whitespace-nowrap',
+    'title': failed,
+    'data-testid': `ta-sub-create-failed-${a.id}`,
+    'data-id': a.id
+  }, () => 'สร้าง Sub BC ไม่สำเร็จ'))
+}
+
 // ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
 // FEAT-051 — saved cards of one account (GOD/Payment only; the column is not rendered for anybody else)
 const cardsOpen = ref(false)
@@ -891,14 +1089,20 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
             'onClick': () => toggleOrgs(a.id)
           })
         : null
+      // TASK-bc-sub-create — the create job's live state belongs to the Business Center column; no chip ⇒ the
+      // cell is byte-identical to FEAT-059 (`withChip` returns the untouched node)
+      const chip = subCreateChip(a)
+      const withChip = (node: VNode) => chip
+        ? h('div', { class: 'flex flex-col items-start gap-0.5' }, [node, chip])
+        : node
       if (!org) {
         const dash = h('span', { 'class': 'text-muted', 'data-testid': 'ta-bc-org' }, '—')
         // no root org id but several org rows: keep the drill-down reachable instead of hiding the orgs
-        return multi ? h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [chevron, dash]) : dash
+        return withChip(multi ? h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [chevron, dash]) : dash)
       }
       // > 1 org: the name says which Business Center the balance belongs to, the count that there are subs
       const label = multi ? `${a.bcOrgName || shortId(org)} · ${count} orgs` : shortId(org)
-      return h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [
+      return withChip(h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [
         chevron,
         h('span', {
           // a Business Center name can be long: it is truncated visually (the full text stays in the DOM for
@@ -919,7 +1123,7 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
           'data-testid': 'ta-bc-org-copy',
           'onClick': () => copyText(org, 'BC org id copied')
         })
-      ])
+      ]))
     }
   },
   {
@@ -1116,6 +1320,7 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       const job = row.original.runningJob
       const running = !!job
       const syncBlocked = syncBlockedReason(row.original)
+      const subCreateBlocked = subCreateBlockedReason(row.original)
       // BUG-028: never disabled — a running job only annotates the tooltip
       const loginHint = running ? (job.type === 'discover' ? 'Sync in progress — login again anyway' : 'Login in progress — login again anyway') : null
       const wide = wideActions.value
@@ -1149,6 +1354,22 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
             'aria-label': 'Sync',
             'data-testid': 'ta-sync',
             'onClick': () => onSync(row.original)
+          })
+        ])),
+        // TASK-bc-sub-create — icon-only on every viewport (a 4th label would widen the Actions column); the
+        // tooltip is therefore always on and names the action or says why it is disabled
+        h(UTooltip, { text: subCreateBlocked ?? 'สร้าง Sub BC' }, () => h('span', { class: 'inline-flex' }, [
+          h(UButton, {
+            'icon': 'i-lucide-building-2',
+            'color': 'neutral',
+            'variant': 'outline',
+            'size': 'xs',
+            'disabled': !!subCreateBlocked,
+            'loading': subCreateAsking.value === row.original.id,
+            'aria-label': 'สร้าง Sub BC',
+            'data-testid': `ta-sub-create-${row.original.id}`,
+            'data-id': row.original.id,
+            'onClick': () => onAskSubCreate(row.original)
           })
         ])),
         h(UTooltip, { text: loginHint ?? 'Login', disabled: wide && !loginHint }, () => h('span', { class: 'inline-flex' }, [
@@ -1417,6 +1638,12 @@ const showTable = computed(() => !error.value && !isEmpty.value)
       <TiktokAccountsCardsModal
         v-model:open="cardsOpen"
         :account="cardsTarget"
+      />
+      <TiktokAccountsSubCreateModal
+        v-model:open="subCreateOpen"
+        :account="subCreateTarget"
+        :suggest="subCreateSuggest"
+        @created="onSubCreated"
       />
       <TopupsPayModal
         v-model:open="modalOpen"
