@@ -57,7 +57,7 @@ const ariaLabel = computed(() => `ลบแคมเปญ ${props.row.name ?? p
 
     <template v-else-if="failure">
       <span
-        class="max-w-44 text-xs leading-tight text-error"
+        class="w-44 text-xs leading-tight text-error"
         :data-testid="`am-delete-error-${row.id}`"
       >ลบไม่สำเร็จ: {{ failure.reason }}</span>
       <UButton
