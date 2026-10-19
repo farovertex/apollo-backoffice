@@ -17,6 +17,14 @@
  * Because the expansion lives inside the account table's `overflow-x-auto` wrapper, the content is pinned with
  * `sticky left-0` and a viewport-bound width on mobile (same trick as `ReportBannedCampaigns`): scrolling the
  * wide account table sideways keeps the org rows visible.
+ *
+ * TASK-bc-adv-create round 2 — each row gains the icon button **สร้างบัญชีโฆษณา**
+ * (`ta-adv-create-<orgId>`, right of the per-org Sync) which only emits `adv-create`; the page owns the suggest
+ * request, the modal and the job poll. The button is **not rendered at all** on a row with `missingSince` (there
+ * is nothing to create under an org that is gone) and is disabled with `advCreateBlocked` as the tooltip while a
+ * job of the account runs. The live state of the create job of **this** org is a chip under the name:
+ * `ta-adv-create-pending-<orgId>` while it is followed, `ta-adv-create-failed-<orgId>` (tooltip = the job's
+ * `lastLog`) until the next attempt — both come in as plain props so the component stays renderless-logic-free.
  */
 import type { BcOrganization, OrganizationsState, TikTokAccount } from '#shared/types/tiktok-accounts'
 
@@ -31,6 +39,14 @@ const props = defineProps<{
   syncBlocked?: string | null
   /** `orgId` whose `POST …/discover` is in flight (button spinner, no double click) */
   syncStarting?: string | null
+  /** TASK-bc-adv-create — why every "สร้างบัญชีโฆษณา" button of this account is disabled; `null` = enabled */
+  advCreateBlocked?: string | null
+  /** `orgId` whose `GET …/bc-adv-create/suggest` is in flight (button spinner, no double click) */
+  advCreateAsking?: string | null
+  /** `orgId`s whose `bcAdvCreate` job is being followed → chip `ta-adv-create-pending-<orgId>` */
+  advCreatePending?: readonly string[]
+  /** `orgId` → failure text of its last attempt → chip `ta-adv-create-failed-<orgId>` */
+  advCreateFailed?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -40,6 +56,8 @@ const emit = defineEmits<{
   /** the copy button of `ta-org-name` — the page owns the clipboard toast (same as `ta-bc-org-copy`) */
   'copy': [org: BcOrganization]
   'set-parent': [payload: { org: BcOrganization, parentOrgId: string | null }]
+  /** TASK-bc-adv-create — the page answers with one suggest request and opens `AdvCreateModal` */
+  'adv-create': [org: BcOrganization]
 }>()
 
 /** the relative "synced" text follows the clock like the Advertisers column of the account row */
@@ -115,6 +133,28 @@ function syncedText(org: BcOrganization): string {
 
 function missingTitle(org: BcOrganization): string {
   return `ไม่เห็นใน BC ตั้งแต่ ${formatDateTime(org.missingSince)}`
+}
+
+/**
+ * TASK-bc-adv-create — a missing org has no button at all (nothing can be created under it any more); every
+ * other row shows it, disabled while `advCreateBlocked` or while this org's own job is still being followed.
+ */
+function canOfferAdvCreate(org: BcOrganization): boolean {
+  return !org.missingSince
+}
+
+function isAdvCreatePending(org: BcOrganization): boolean {
+  return props.advCreatePending?.includes(org.orgId) ?? false
+}
+
+function advCreateFailedText(org: BcOrganization): string | null {
+  return props.advCreateFailed?.[org.orgId] ?? null
+}
+
+/** tooltip / disabled reason of one row's button: this org's own job first, then the account-level reason */
+function advCreateReason(org: BcOrganization): string | null {
+  if (isAdvCreatePending(org)) return 'กำลังสร้างบัญชีโฆษณาอยู่'
+  return props.advCreateBlocked ?? null
 }
 </script>
 
@@ -232,6 +272,31 @@ function missingTitle(org: BcOrganization): string {
               </UBadge>
             </div>
 
+            <!-- TASK-bc-adv-create — live state of this org's create job, under its name -->
+            <div
+              v-if="isAdvCreatePending(org)"
+              class="mt-0.5 flex items-center gap-1 whitespace-nowrap text-xs text-muted"
+              :data-testid="`ta-adv-create-pending-${org.orgId}`"
+              :data-org-id="org.orgId"
+            >
+              <UIcon name="i-lucide-loader-circle" class="size-3.5 shrink-0 animate-spin text-primary" />
+              กำลังสร้างบัญชีโฆษณา…
+            </div>
+            <UTooltip v-else-if="advCreateFailedText(org)" :text="advCreateFailedText(org) ?? ''">
+              <UBadge
+                color="error"
+                variant="subtle"
+                size="sm"
+                icon="i-lucide-triangle-alert"
+                class="mt-0.5 max-w-48 truncate whitespace-nowrap"
+                :title="advCreateFailedText(org) ?? undefined"
+                :data-testid="`ta-adv-create-failed-${org.orgId}`"
+                :data-org-id="org.orgId"
+              >
+                สร้างบัญชีโฆษณาไม่สำเร็จ
+              </UBadge>
+            </UTooltip>
+
             <div v-if="needsParent(org)" class="mt-1 flex flex-wrap items-center gap-1.5">
               <USelect
                 :items="parentItems()"
@@ -302,24 +367,43 @@ function missingTitle(org: BcOrganization): string {
             </span>
           </td>
 
-          <!-- Sync this org only -->
+          <!-- Sync this org only · create an advertiser under this org -->
           <td class="block border-b border-default py-1 text-right sm:table-cell sm:px-2">
-            <UTooltip :text="syncBlocked ?? 'Sync advertisers ของ org นี้'">
-              <span class="inline-flex">
-                <UButton
-                  :label="isSyncing(org) ? 'Syncing…' : 'Sync'"
-                  icon="i-lucide-refresh-cw"
-                  color="neutral"
-                  variant="outline"
-                  size="xs"
-                  :disabled="!!syncBlocked"
-                  :loading="syncStarting === org.orgId"
-                  data-testid="ta-org-sync"
-                  :data-org-id="org.orgId"
-                  @click="emit('sync', org)"
-                />
-              </span>
-            </UTooltip>
+            <span class="inline-flex items-center gap-1">
+              <UTooltip :text="syncBlocked ?? 'Sync advertisers ของ org นี้'">
+                <span class="inline-flex">
+                  <UButton
+                    :label="isSyncing(org) ? 'Syncing…' : 'Sync'"
+                    icon="i-lucide-refresh-cw"
+                    color="neutral"
+                    variant="outline"
+                    size="xs"
+                    :disabled="!!syncBlocked"
+                    :loading="syncStarting === org.orgId"
+                    data-testid="ta-org-sync"
+                    :data-org-id="org.orgId"
+                    @click="emit('sync', org)"
+                  />
+                </span>
+              </UTooltip>
+              <!-- icon-only: a label here would widen every org row (the account table already scrolls) -->
+              <UTooltip v-if="canOfferAdvCreate(org)" :text="advCreateReason(org) ?? 'สร้างบัญชีโฆษณา'">
+                <span class="inline-flex">
+                  <UButton
+                    icon="i-lucide-plus"
+                    color="neutral"
+                    variant="outline"
+                    size="xs"
+                    :disabled="!!advCreateReason(org)"
+                    :loading="advCreateAsking === org.orgId"
+                    aria-label="สร้างบัญชีโฆษณา"
+                    :data-testid="`ta-adv-create-${org.orgId}`"
+                    :data-org-id="org.orgId"
+                    @click="emit('adv-create', org)"
+                  />
+                </span>
+              </UTooltip>
+            </span>
           </td>
         </tr>
       </tbody>
