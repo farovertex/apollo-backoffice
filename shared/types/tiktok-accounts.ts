@@ -395,9 +395,10 @@ export interface BcSubCreateLatestResponse {
 
 /**
  * TASK-bc-adv-create — why an advertiser (ad account) cannot be created under an org right now. `suggest.reason`
- * and the 409 body of the POST share the set; `noOrg` is a **404** on suggest (the org does not belong to this
- * account) and only appears as a 409 reason, `nameTaken` is POST-only (the typed name collides) and `exhausted`
- * means `001`…`999` of this org's name are all used. Human texts: `app/utils/bc-adv-create.ts`.
+ * and the 409 body of the POST share the set, except `noOrg`: an org that is not this account's is a **404**
+ * `{ error: 'ไม่พบ org' }` on suggest **and** on the POST (verified against the API), so `noOrg` never arrives as
+ * a `reason` — the key only carries the 404's fallback text. `nameTaken` is POST-only (the typed name collides)
+ * and `exhausted` means `001`…`999` of this org's name are all used. Human texts: `app/utils/bc-adv-create.ts`.
  */
 export type BcAdvConflictReason
   = 'noOrg' | 'orgMissing' | 'noOrgName' | 'noProfile' | 'inactive' | 'running' | 'needsHuman' | 'exhausted' | 'nameTaken'

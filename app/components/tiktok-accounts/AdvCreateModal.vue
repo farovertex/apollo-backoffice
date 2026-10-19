@@ -104,10 +104,11 @@ function errorState(e: unknown): { title: string, description?: string } {
   const err = e as FetchError<Partial<BcAdvConflictBody & ApiErrorBody>>
   const issues = err.data?.issues?.map(i => i.message).filter(Boolean)
   const reason = err.data?.reason
-  return {
-    title: err.data?.error ?? err.message ?? 'สร้างบัญชีโฆษณาไม่สำเร็จ',
-    description: issues && issues.length ? issues.join(' · ') : (reason ? bcAdvCreateReasonText(reason) : undefined)
-  }
+  const title = err.data?.error ?? err.message ?? 'สร้างบัญชีโฆษณาไม่สำเร็จ'
+  const description = issues && issues.length ? issues.join(' · ') : (reason ? bcAdvCreateReasonText(reason) : undefined)
+  // our Thai texts are copied from the API's `BC_ADV_CONFLICT`, so on a 409 the reason sentence usually **is**
+  // the `error` the API already sent — printing it twice (alert title + description) reads like a stutter
+  return { title, description: description === title ? undefined : description }
 }
 
 async function onSubmit(event: FormSubmitEvent<Schema>) {
