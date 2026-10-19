@@ -41,6 +41,14 @@
  * `POST :id/bc-sub-create` (`BcSubCreateBody` → 202 `BcSubCreateJobResponse`, 409 `BcSubCreateConflictBody`) and
  * `GET :id/bc-sub-create/latest` (`BcSubCreateLatestResponse`). The job itself is `jobs.type = 'bcSubCreate'`;
  * nothing of it is stored on the account view (decision D3), the BO reads its state from `latest` only.
+ * TASK-bc-adv-create round 2 (brief `.ai/features/_queue/bc-adv-create-ui.prompt.md` "API contract") — the same
+ * three-route shape one level down, behind the **per-org** button **สร้างบัญชีโฆษณา** of the FEAT-059 drill-down:
+ * `GET :id/organizations/:orgId/bc-adv-create/suggest` (`BcAdvSuggest`),
+ * `POST :id/organizations/:orgId/bc-adv-create` (`BcAdvCreateBody` → 202 `BcAdvCreateAccepted`, 409
+ * `BcAdvConflictBody`) and `GET :id/organizations/:orgId/bc-adv-create/latest` (`BcAdvCreateLatestResponse`).
+ * The job is `jobs.type = 'bcAdvCreate'` and, unlike the sub one, its state is per **org** — nothing of it is
+ * stored on the account or the org view (decision D3); the new advertiser appears as a row through the per-org
+ * discover the API chains after a proven create.
  */
 
 import type { HumanTaskKind } from './human-tasks'
@@ -383,6 +391,95 @@ export interface BcSubCreateJobView {
 /** TASK-bc-sub-create — `GET /tiktok-accounts/:id/bc-sub-create/latest` 200 body; `job: null` = never ran. */
 export interface BcSubCreateLatestResponse {
   job: BcSubCreateJobView | null
+}
+
+/**
+ * TASK-bc-adv-create — why an advertiser (ad account) cannot be created under an org right now. `suggest.reason`
+ * and the 409 body of the POST share the set; `noOrg` is a **404** on suggest (the org does not belong to this
+ * account) and only appears as a 409 reason, `nameTaken` is POST-only (the typed name collides) and `exhausted`
+ * means `001`…`999` of this org's name are all used. Human texts: `app/utils/bc-adv-create.ts`.
+ */
+export type BcAdvConflictReason
+  = 'noOrg' | 'orgMissing' | 'noOrgName' | 'noProfile' | 'inactive' | 'running' | 'needsHuman' | 'exhausted' | 'nameTaken'
+
+/**
+ * TASK-bc-adv-create — `GET /tiktok-accounts/:id/organizations/:orgId/bc-adv-create/suggest` 200 body. `name` is
+ * `<orgName> NNN` with the lowest unused 3-digit number (`''` when the org row carries no name, i.e.
+ * `reason: 'noOrgName'`), `taken` lists the `<orgName> NNN` names already used by an advertiser of this org or by
+ * a queued/running/completed `bcAdvCreate` job of it (sorted) — the modal turns a typed name that is in this list
+ * into an inline error without asking the API. The timezone is fixed (decision D2) and sent for display only.
+ */
+export interface BcAdvSuggest {
+  name: string
+  /** `bc_organizations.orgId` the advertiser is created under (echo of the path parameter) */
+  orgId: string
+  /** name of that org; `null` = the row has no name yet (`reason: 'noOrgName'`) */
+  orgName: string | null
+  /** always `Asia/Bangkok` this round — a hint in the modal, never a field */
+  timezone: string
+  taken: string[]
+  canCreate: boolean
+  reason: BcAdvConflictReason | null
+}
+
+/**
+ * TASK-bc-adv-create — `POST /tiktok-accounts/:id/organizations/:orgId/bc-adv-create` body. Only the name: the
+ * server decides `timezone`, `dryRun` and `chainDiscover` and answers 400 when any of them is sent (D2).
+ */
+export interface BcAdvCreateBody {
+  name: string
+}
+
+/** TASK-bc-adv-create — 202 body of the POST (`name` as the API normalised it, `orgId` echoed back). */
+export interface BcAdvCreateAccepted {
+  jobId: string
+  name: string
+  orgId: string
+}
+
+/** TASK-bc-adv-create — 409 body of the POST: the API's own Thai text plus the machine-readable reason. */
+export interface BcAdvConflictBody {
+  error: string
+  reason: BcAdvConflictReason
+}
+
+/**
+ * TASK-bc-adv-create — proof of a finished create (`jobs.payload.bcAdvCreate.result`): `null` for a dry run and
+ * for every failed round. `apiPath` is a path only (no query, no body — AGENTS.md §5).
+ */
+export interface BcAdvCreateResult {
+  advertiserId: string | null
+  name: string
+  timezone: string | null
+  apiPath: string | null
+}
+
+/** TASK-bc-adv-create — status of the `bcAdvCreate` job (`jobs.status`); the BO polls until a terminal one. */
+export type BcAdvCreateJobStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
+
+/**
+ * TASK-bc-adv-create — one `bcAdvCreate` job as `GET …/organizations/:orgId/bc-adv-create/latest` returns it
+ * (the latest job **of that org**, any status). `lastLog` is the message of the last `error` log entry when the
+ * job failed, else the last entry (already redacted by the API).
+ */
+export interface BcAdvCreateJob {
+  id: string
+  status: BcAdvCreateJobStatus
+  error: string | null
+  step: string | null
+  orgId: string
+  name: string
+  timezone: string
+  dryRun: boolean
+  result: BcAdvCreateResult | null
+  lastLog: string | null
+  createdAt: string
+  finishedAt: string | null
+}
+
+/** TASK-bc-adv-create — `GET …/organizations/:orgId/bc-adv-create/latest` 200 body; `job: null` = never ran. */
+export interface BcAdvCreateLatestResponse {
+  job: BcAdvCreateJob | null
 }
 
 /**
