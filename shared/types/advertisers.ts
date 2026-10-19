@@ -20,6 +20,9 @@
  * appear in `AdvertiserView` any more) and live only on the TikTok account (`shared/types/tiktok-accounts.ts`,
  * `AccountAutoTopup`). The per-advertiser top-up button stays — it is a different entry point to the same
  * wallet — but the advertiser itself carries no balance or auto-top-up state.
+ * FEAT-059 (api-contract.md v1 §5/§7): the view gains `bcOrgName` right after `bcOrgId` (the name of the
+ * Business Center org that listed the advertiser) and both list endpoints accept the `bcOrgId` filter
+ * (`AdvertisersQuery`), which is what the advertisers slideover sends when it is opened from one org row.
  */
 
 import type { AdvertiserReport } from './reports'
@@ -57,11 +60,33 @@ export interface AdvertiserDelivery {
 /** `missing` query of `GET /tiktok-accounts/:id/advertisers`: `false` (default) → only current rows, `all` → every row. */
 export type AdvertiserMissingFilter = 'false' | 'true' | 'all'
 
+/**
+ * FEAT-059 (api-contract.md v1 §5) — query of `GET /tiktok-accounts/:id/advertisers` and `GET /advertisers` as
+ * the BO sends it. The slideover builds it inline; this type documents the keys (there was no query type
+ * before the feature) and is the one place `bcOrgId` is described: an exact org match, omitted = every org.
+ */
+export interface AdvertisersQuery {
+  page: number
+  limit: number
+  sort?: 'bcOrder'
+  missing?: AdvertiserMissingFilter
+  q?: string
+  status?: AdvertiserStatus
+  /** FEAT-059 — only the advertisers of this Business Center org (`bc_organizations.orgId`) */
+  bcOrgId?: string
+}
+
 export interface Advertiser {
   id: string
   tiktokAccountId: string
   workspaceId: string
   bcOrgId: string
+  /**
+   * FEAT-059 (api-contract.md v1 §7) — name of the Business Center org that listed this advertiser, denormalised
+   * by `applyRun`; `null` for rows written before the feature or when the org has no name. Shown as the muted
+   * org chip of a row when the account has more than one org.
+   */
+  bcOrgName: string | null
   /** BC `account_id` (unique per tiktokAccountId) */
   tiktokAdvertiserId: string
   /** BC `account_name` */

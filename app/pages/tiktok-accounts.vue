@@ -96,15 +96,36 @@
  * both. No copy button — this pass removes per-row buttons, it does not add them. Specs used to address these
  * two cells by column index; they address `ta-account*` now.
  * `ta-edit`, `ta-sync`, `ta-login`, `ta-balance*`, `ta-topup*`, `ta-adv-*` and `ta-bc-org*` are untouched.
+ * FEAT-059 (api-contract.md v1 §5/§7/§8, spec "UI behaviour", AC-13..17) — one login may be admin of several
+ * Business Center orgs. An account with `organizationCount > 1` gets a chevron **inside** the existing BC org
+ * cell (`ta-org-expand`; a new column would move every `ta-*` cell index the specs rely on) and the cell text
+ * becomes `<bcOrgName> · N orgs`; expanding renders `TiktokAccountsOrganizationRows` in `UTable`'s `#expanded`
+ * row with one `<tr data-testid="ta-org-row">` per org. `GET /tiktok-accounts/:id/organizations` runs **once
+ * per account per page lifetime** (`orgsById` is the memo), and again when a discover job of that account ends
+ * (the existing poll's `onDone`) or when Refresh is pressed while the row is open — collapse/expand alone never
+ * re-requests. The per-org Sync posts `{ bcOrgId }` to the **same** discover endpoint; the account-level Sync
+ * still sends no body at all. An account with 0 or 1 org renders exactly as before the feature.
  */
 import type { VNode } from 'vue'
+import type { Row } from '@tanstack/table-core'
 import type { DropdownMenuItem, TableColumn } from '@nuxt/ui'
 import { formatTimeAgo } from '@vueuse/core'
 import type { UseTimeAgoMessages } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { DiscoverJobResponse } from '#shared/types/advertisers'
-import type { AccountsResponse, LoginConflictBody, LoginJobResponse, SessionStatus, TikTokAccount } from '#shared/types/tiktok-accounts'
+import type {
+  AccountsResponse,
+  BcOrganization,
+  DiscoverOrgBody,
+  LoginConflictBody,
+  LoginJobResponse,
+  OrganizationsResponse,
+  OrganizationsState,
+  PatchOrganizationBody,
+  SessionStatus,
+  TikTokAccount
+} from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
 
@@ -458,6 +479,9 @@ function startPoll(kind: PollKind, id: string, done: AccountPoll['done'], onDone
 function startDiscoverPoll(id: string) {
   startPoll('discover', id, next => next.runningJob === null, (next) => {
     const label = next.label ?? next.loginEmail
+    // FEAT-059 — the job wrote `advertiserCount` / `lastDiscoverAt` / `lastDiscoverError` per org: re-read the
+    // drill-down of this account (only when it was opened at least once, i.e. it has a cache entry)
+    if (orgsById.value[id]) void loadOrgs(id)
     if (next.lastDiscoverError) {
       toast.add({ title: 'Advertiser sync failed', description: `${label}: ${discoverErrorText(next.lastDiscoverError)}`, color: 'error' })
     } else {
@@ -608,13 +632,24 @@ function syncBlockedReason(account: TikTokAccount): string | null {
   return null
 }
 
-async function onSync(account: TikTokAccount) {
-  if (syncStarting.value || syncBlockedReason(account)) return
+/**
+ * FEAT-059 — `bcOrgId` null (the account action and the slideover's empty state) posts **no body at all**, byte
+ * for byte the FEAT-005 request; an org row posts `{ bcOrgId }` (contract §5/§8, AC-14). Everything after the
+ * POST — toasts, 409 handling, the poll — is shared on purpose: one job per login whatever its scope.
+ */
+async function onSync(account: TikTokAccount, bcOrgId: string | null = null) {
+  if (syncStarting.value || orgSyncStarting.value || syncBlockedReason(account)) return
   const label = account.label ?? account.loginEmail
-  syncStarting.value = account.id
+  if (bcOrgId) orgSyncStarting.value = bcOrgId
+  else syncStarting.value = account.id
   try {
     // retry: 0 — exactly one POST per click (ofetch would otherwise re-issue it on 5xx)
-    await api<DiscoverJobResponse>(`/tiktok-accounts/${encodeURIComponent(account.id)}/discover`, { method: 'POST', retry: 0 })
+    await api<DiscoverJobResponse>(
+      `/tiktok-accounts/${encodeURIComponent(account.id)}/discover`,
+      bcOrgId
+        ? { method: 'POST', retry: 0, body: { bcOrgId } satisfies DiscoverOrgBody }
+        : { method: 'POST', retry: 0 }
+    )
     toast.add({ title: 'Syncing advertisers…', description: label, color: 'info' })
     startDiscoverPoll(account.id)
   } catch (e) {
@@ -632,6 +667,88 @@ async function onSync(account: TikTokAccount) {
     }
   } finally {
     syncStarting.value = null
+    orgSyncStarting.value = null
+  }
+}
+
+// ── FEAT-059 · Business Center org drill-down ────────────────────────────────────────────────────────────────────────
+/**
+ * `expandedOrgs` is `UTable`'s own `expanded` model (keyed by account id thanks to `get-row-id`), so the
+ * expansion `<tr>` is rendered by the table itself instead of a second table next to it; `orgsById` is both the
+ * cache and the memo — a key exists ⇒ the account was opened at least once ⇒ a finished discover re-reads it.
+ */
+const expandedOrgs = ref<Record<string, boolean>>({})
+const orgsById = ref<Record<string, OrganizationsState>>({})
+/** API error text of the last parent PATCH, keyed by `orgId` (shown inline in `ta-org-parent-error`) */
+const orgParentErrors = ref<Record<string, string>>({})
+const orgParentBusy = ref<string | null>(null)
+/** `orgId` whose per-org `POST …/discover` is in flight */
+const orgSyncStarting = ref<string | null>(null)
+
+const expandedOrgIds = computed(() => Object.keys(expandedOrgs.value).filter(id => expandedOrgs.value[id]))
+
+function setOrgsState(id: string, state: OrganizationsState) {
+  orgsById.value = { ...orgsById.value, [id]: state }
+}
+
+/** one `GET …/organizations` per call; the previous rows stay visible while it is in flight */
+async function loadOrgs(id: string) {
+  setOrgsState(id, { pending: true, error: null, data: orgsById.value[id]?.data ?? null })
+  try {
+    // retry: 0 — one request, ofetch must not re-issue it on 5xx (the error row offers Retry)
+    const res = await api<OrganizationsResponse>(`/tiktok-accounts/${encodeURIComponent(id)}/organizations`, { retry: 0 })
+    setOrgsState(id, { pending: false, error: null, data: res.organizations })
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    setOrgsState(id, { pending: false, error: err.data?.error ?? err.message ?? 'Unexpected error', data: null })
+  }
+}
+
+/** open/close one account; the request happens **once per account** — `orgsById` is the memo */
+function toggleOrgs(id: string) {
+  const open = !expandedOrgs.value[id]
+  expandedOrgs.value = { ...expandedOrgs.value, [id]: open }
+  if (open && !orgsById.value[id]) void loadOrgs(id)
+}
+
+/** Refresh re-reads the orgs of every row that is open right now (AC-13) */
+function reloadOpenOrgs() {
+  for (const id of expandedOrgIds.value) void loadOrgs(id)
+}
+
+async function onRefresh() {
+  await refresh()
+  reloadOpenOrgs()
+}
+
+/**
+ * The human picks the parent of an org the rule could not decide: one PATCH, then the orgs of that account are
+ * re-read (the badge becomes **sub** and the select disappears). 404/409 keep the row as it is and print the
+ * API's own text inline.
+ */
+async function onSetOrgParent(accountId: string, payload: { org: BcOrganization, parentOrgId: string | null }) {
+  if (orgParentBusy.value) return
+  const { org, parentOrgId } = payload
+  orgParentBusy.value = org.orgId
+  // drop the previous inline error of this org (a new attempt starts clean)
+  orgParentErrors.value = Object.fromEntries(
+    Object.entries(orgParentErrors.value).filter(([orgId]) => orgId !== org.orgId)
+  )
+  try {
+    // retry: 0 — exactly one PATCH per choice
+    await api<BcOrganization>(
+      `/tiktok-accounts/${encodeURIComponent(accountId)}/organizations/${encodeURIComponent(org.orgId)}`,
+      { method: 'PATCH', retry: 0, body: { parentOrgId } satisfies PatchOrganizationBody }
+    )
+    await loadOrgs(accountId)
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    orgParentErrors.value = {
+      ...orgParentErrors.value,
+      [org.orgId]: err.data?.error ?? err.message ?? 'Unexpected error'
+    }
+  } finally {
+    orgParentBusy.value = null
   }
 }
 
@@ -650,6 +767,9 @@ function openCards(account: TikTokAccount) {
 
 const advOpen = ref(false)
 const advTargetId = ref<string | null>(null)
+// FEAT-059 — set only when the slideover was opened from one org row (`ta-org-adv-count`)
+const advOrgId = ref<string | null>(null)
+const advOrgName = ref<string | null>(null)
 // resolved from the live rows so the slideover sees the polled `runningJob` / `advertiserCount`
 const advTarget = computed<TikTokAccount | null>(() => {
   const id = advTargetId.value
@@ -657,8 +777,15 @@ const advTarget = computed<TikTokAccount | null>(() => {
   return polledById.value.get(id) ?? accounts.value.find(a => a.id === id) ?? null
 })
 
-function openAdvertisers(account: TikTokAccount) {
+/**
+ * FEAT-059 — `org` null (the account-level count button) lists every org of the login exactly as before;
+ * from an org row the slideover gets `bcOrgId` + the org name, which adds `bcOrgId=<orgId>` to its request and
+ * ` · <org name>` to its title (AC-16).
+ */
+function openAdvertisers(account: TikTokAccount, org: BcOrganization | null = null) {
   advTargetId.value = account.id
+  advOrgId.value = org?.orgId ?? null
+  advOrgName.value = org ? (org.name || `…${org.orgId.slice(-4)}`) : null
   advOpen.value = true
 }
 
@@ -743,10 +870,44 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
     accessorKey: 'bcOrgId',
     header: 'BC org',
     cell: ({ row }) => {
-      const org = row.original.bcOrgId
-      if (!org) return h('span', { 'class': 'text-muted', 'data-testid': 'ta-bc-org' }, '—')
+      const a = row.original
+      const org = a.bcOrgId
+      // FEAT-059 — the drill-down exists only for a login that really is admin of several orgs (A9); with 0 or 1
+      // org this cell is byte-identical to FEAT-005/FEAT-010 (no chevron, no count, same text).
+      const count = a.organizationCount
+      const multi = count > 1
+      const expanded = expandedOrgs.value[a.id] === true
+      const chevron = multi
+        ? h(UButton, {
+            'icon': expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right',
+            'color': 'neutral',
+            'variant': 'ghost',
+            'size': 'xs',
+            'class': 'shrink-0',
+            'aria-expanded': expanded,
+            'aria-label': `Business Center orgs ของ ${a.bcOrgName ?? a.label ?? a.loginEmail}`,
+            'data-testid': 'ta-org-expand',
+            'data-id': a.id,
+            'onClick': () => toggleOrgs(a.id)
+          })
+        : null
+      if (!org) {
+        const dash = h('span', { 'class': 'text-muted', 'data-testid': 'ta-bc-org' }, '—')
+        // no root org id but several org rows: keep the drill-down reachable instead of hiding the orgs
+        return multi ? h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [chevron, dash]) : dash
+      }
+      // > 1 org: the name says which Business Center the balance belongs to, the count that there are subs
+      const label = multi ? `${a.bcOrgName || shortId(org)} · ${count} orgs` : shortId(org)
       return h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [
-        h('span', { 'class': 'font-mono text-xs text-highlighted', 'title': org, 'data-testid': 'ta-bc-org', 'data-org': org }, shortId(org)),
+        chevron,
+        h('span', {
+          'class': multi ? 'text-highlighted' : 'font-mono text-xs text-highlighted',
+          'title': org,
+          'data-testid': 'ta-bc-org',
+          'data-org': org,
+          // only on a multi-org row: a single-org cell keeps the exact DOM it had before FEAT-059
+          'data-orgs': multi ? count : undefined
+        }, label),
         h(UButton, {
           'icon': 'i-lucide-copy',
           'color': 'neutral',
@@ -1058,7 +1219,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             :loading="pending"
             :ui="{ label: 'hidden sm:inline' }"
             data-testid="ta-refresh"
-            @click="refresh()"
+            @click="onRefresh()"
           />
           <UButton
             label="Batch upload"
@@ -1177,11 +1338,13 @@ const showTable = computed(() => !error.value && !isEmpty.value)
 
         <div v-if="showTable" class="overflow-x-auto" data-testid="ta-table">
           <UTable
+            v-model:expanded="expandedOrgs"
             :data="rows"
             :columns="columns"
             :loading="pending"
             loading-animation="carousel"
             class="shrink-0"
+            :get-row-id="(account: TikTokAccount) => account.id"
             :ui="{
               base: 'border-separate border-spacing-0',
               thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
@@ -1193,6 +1356,23 @@ const showTable = computed(() => !error.value && !isEmpty.value)
           >
             <template #empty>
               {{ pending ? 'Loading accounts…' : 'No accounts match your search' }}
+            </template>
+
+            <!-- FEAT-059 — the Business Center orgs of the opened account (one `<tr>` per org inside this cell) -->
+            <template #expanded="{ row }: { row: Row<TikTokAccount> }">
+              <TiktokAccountsOrganizationRows
+                :account="row.original"
+                :state="orgsById[row.original.id]"
+                :parent-errors="orgParentErrors"
+                :parent-busy="orgParentBusy"
+                :sync-blocked="syncBlockedReason(row.original)"
+                :sync-starting="orgSyncStarting"
+                @retry="loadOrgs(row.original.id)"
+                @sync="org => onSync(row.original, org.orgId)"
+                @advertisers="org => openAdvertisers(row.original, org)"
+                @copy="org => copyText(org.orgId, 'BC org id copied')"
+                @set-parent="payload => onSetOrgParent(row.original.id, payload)"
+              />
             </template>
           </UTable>
         </div>
@@ -1228,6 +1408,8 @@ const showTable = computed(() => !error.value && !isEmpty.value)
       <TiktokAccountsAdvertisersSlideover
         v-model:open="advOpen"
         :account="advTarget"
+        :bc-org-id="advOrgId"
+        :org-name="advOrgName"
         @sync="onSync"
       />
       <TiktokAccountsCardsModal
