@@ -117,6 +117,17 @@
  * discover job, whose existing poll re-reads the org drill-down memo when it ends), `failed`/`cancelled` toasts
  * and leaves `ta-sub-create-failed-<id>` (tooltip = the job's `lastLog`) until the next attempt. The BC org cell
  * renders **exactly** its FEAT-059 DOM whenever there is no chip to show.
+ * TASK-bc-adv-create round 2 (brief `.ai/features/_queue/bc-adv-create-ui.prompt.md`) — the same flow one level
+ * down: the **per-org** button `ta-adv-create-<orgId>` of `TiktokAccountsOrganizationRows` (right of the per-org
+ * Sync, no button on a missing org) emits `adv-create`, the page answers with one
+ * `GET …/organizations/<orgId>/bc-adv-create/suggest` → `TiktokAccountsAdvCreateModal` (`ta-adv-create-modal`,
+ * name only — the timezone is fixed) → `POST …/organizations/<orgId>/bc-adv-create` 202 `{ jobId, name, orgId }`.
+ * The job gets its own 2 s loop on that org's `…/bc-adv-create/latest` (`startAdvCreatePoll`), keyed
+ * `<accountId>:<orgId>` because one login may create under several orgs at once; while it runs the **org row**
+ * shows `ta-adv-create-pending-<orgId>`, `completed` toasts and calls `refreshAndFollowDiscovers()` (the API
+ * chains a per-org discover, whose poll re-reads the drill-down when it ends), `failed`/`cancelled` toasts and
+ * leaves `ta-adv-create-failed-<orgId>` (tooltip = `lastLog`) until the next attempt. An account with 0 or 1 org
+ * has no drill-down and therefore no button this round.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -128,6 +139,9 @@ import type { ApiErrorBody } from '#shared/types/auth'
 import type { DiscoverJobResponse } from '#shared/types/advertisers'
 import type {
   AccountsResponse,
+  BcAdvCreateAccepted,
+  BcAdvCreateLatestResponse,
+  BcAdvSuggest,
   BcOrganization,
   BcSubCreateJobResponse,
   BcSubCreateLatestResponse,
@@ -950,6 +964,187 @@ function subCreateChip(a: TikTokAccount): VNode | null {
   }, () => 'สร้าง Sub BC ไม่สำเร็จ'))
 }
 
+// ── TASK-bc-adv-create — create an advertiser under one Business Center org ──────────────────────────────────────────
+/**
+ * Same three-step shape as the sub-BC block above (suggest → POST → poll `latest`), but everything is keyed by
+ * **account + org**: one login can create advertisers under several of its orgs, and the pending / failed chip
+ * belongs to the org row of the drill-down, not to the account row. `advKey()` builds that key; the component
+ * receives the plain per-account projections (`advCreatePendingOrgs` / `advCreateFailedFor`).
+ */
+const advCreateOpen = ref(false)
+const advCreateTarget = ref<TikTokAccount | null>(null)
+/** answer of the one `GET …/bc-adv-create/suggest` made for the open modal (the modal requests nothing itself) */
+const advCreateSuggest = ref<BcAdvSuggest | null>(null)
+/** `orgId` whose suggest request is in flight (button spinner + no double click) */
+const advCreateAsking = ref<string | null>(null)
+/** `<accountId>:<orgId>` of every `bcAdvCreate` job being followed → chip `ta-adv-create-pending-<orgId>` */
+const advCreatePending = ref(new Set<string>())
+/** `<accountId>:<orgId>` → text of the last failed attempt; dropped when the next attempt starts */
+const advCreateFailed = ref(new Map<string, string>())
+
+function advKey(accountId: string, orgId: string): string {
+  return `${accountId}:${orgId}`
+}
+
+function setAdvCreatePending(key: string, on: boolean) {
+  const next = new Set(advCreatePending.value)
+  if (on) next.add(key)
+  else next.delete(key)
+  advCreatePending.value = next
+}
+
+function setAdvCreateFailed(key: string, text: string | null) {
+  const next = new Map(advCreateFailed.value)
+  if (text) next.set(key, text)
+  else next.delete(key)
+  advCreateFailed.value = next
+}
+
+/** org ids of this account whose create job is being followed (prop of `OrganizationRows`) */
+function advCreatePendingOrgs(accountId: string): string[] {
+  const prefix = `${accountId}:`
+  return [...advCreatePending.value].filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length))
+}
+
+/** org id → failure text, for this account only (prop of `OrganizationRows`) */
+function advCreateFailedFor(accountId: string): Record<string, string> {
+  const prefix = `${accountId}:`
+  const out: Record<string, string> = {}
+  for (const [key, text] of advCreateFailed.value) {
+    if (key.startsWith(prefix)) out[key.slice(prefix.length)] = text
+  }
+  return out
+}
+
+/**
+ * Why every "สร้างบัญชีโฆษณา" button of this account is disabled (the tooltip text), `null` = enabled. The
+ * per-org part (this org's own job still running, or a missing org, which has no button at all) is decided
+ * inside `OrganizationRows`. A `bcSubCreate` job the page is following is named explicitly because the account
+ * snapshot may not carry it as `runningJob` yet.
+ */
+function advCreateBlockedReason(account: TikTokAccount): string | null {
+  if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
+  if (account.runningJob) {
+    if (account.runningJob.type === 'discover') return 'Sync in progress'
+    if (account.runningJob.type === 'login') return 'Login in progress'
+    return 'Job in progress'
+  }
+  if (!account.isActive) return 'Account is disabled'
+  return null
+}
+
+/** click on an org's button → one suggest request → the modal opens on 200 only (any error is a toast) */
+async function onAskAdvCreate(account: TikTokAccount, org: BcOrganization) {
+  if (advCreateAsking.value || advCreateBlockedReason(account)) return
+  advCreateAsking.value = org.orgId
+  try {
+    // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
+    const suggest = await api<BcAdvSuggest>(
+      `/tiktok-accounts/${encodeURIComponent(account.id)}/organizations/${encodeURIComponent(org.orgId)}/bc-adv-create/suggest`,
+      { retry: 0 }
+    )
+    advCreateTarget.value = account
+    advCreateSuggest.value = suggest
+    advCreateOpen.value = true
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({
+      // 404 is the contract's answer for an org that is not (or no longer) part of this account
+      title: err.statusCode === 404 ? 'ไม่พบ org' : 'เปิดฟอร์มสร้างบัญชีโฆษณาไม่ได้',
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: 'error'
+    })
+  } finally {
+    advCreateAsking.value = null
+  }
+}
+
+/** one loop per `<accountId>:<orgId>`, 2 s, never two requests in flight, cleared on unmount */
+const advCreatePolls = new Map<string, ReturnType<typeof setInterval>>()
+const advCreateInFlight = new Set<string>()
+
+function stopAdvCreatePoll(key: string) {
+  const timer = advCreatePolls.get(key)
+  if (timer) clearInterval(timer)
+  advCreatePolls.delete(key)
+  advCreateInFlight.delete(key)
+}
+
+async function pollAdvCreate(accountId: string, orgId: string, jobId: string, label: string) {
+  const key = advKey(accountId, orgId)
+  if (!advCreatePolls.has(key) || advCreateInFlight.has(key)) return
+  advCreateInFlight.add(key)
+  try {
+    // retry: 0 — one request per tick
+    const res = await api<BcAdvCreateLatestResponse>(
+      `/tiktok-accounts/${encodeURIComponent(accountId)}/organizations/${encodeURIComponent(orgId)}/bc-adv-create/latest`,
+      { retry: 0 }
+    )
+    if (!advCreatePolls.has(key)) return // stopped meanwhile (unmount / terminal in another tick)
+    const job = res.job
+    if (!job) return // nothing to follow yet — the next tick looks again
+    if (job.id !== jobId) {
+      // a newer job of this org is the latest one: that attempt owns the row now
+      stopAdvCreatePoll(key)
+      setAdvCreatePending(key, false)
+      return
+    }
+    if (job.status === 'waiting' || job.status === 'active') return
+    stopAdvCreatePoll(key)
+    setAdvCreatePending(key, false)
+    if (job.status === 'completed') {
+      const advertiserId = job.result?.advertiserId ?? null
+      toast.add({
+        title: `สร้าง ${job.name} แล้ว${advertiserId ? ` (…${advertiserId.slice(-4)})` : ''} — กำลัง Sync`,
+        description: label,
+        color: 'success'
+      })
+      // the API chained a per-org discover: refresh and let the existing discover poll follow it (its `onDone`
+      // re-reads the drill-down memo, so the new advertiser shows up in this org's count on its own)
+      await refreshAndFollowDiscovers()
+      if (orgsById.value[accountId]) void loadOrgs(accountId)
+    } else {
+      const detail = [job.error, job.lastLog].filter(Boolean).join(' — ') || 'ไม่ทราบสาเหตุ'
+      setAdvCreateFailed(key, detail)
+      toast.add({ title: 'สร้างบัญชีโฆษณาไม่สำเร็จ', description: `${label}: ${detail}`, color: 'error' })
+      await refresh()
+    }
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    // the account / org (or the route) is gone → nothing left to follow; any other error is transient
+    if (err.statusCode === 404) {
+      stopAdvCreatePoll(key)
+      setAdvCreatePending(key, false)
+    }
+  } finally {
+    advCreateInFlight.delete(key)
+  }
+}
+
+function startAdvCreatePoll(account: TikTokAccount, job: BcAdvCreateAccepted) {
+  const key = advKey(account.id, job.orgId)
+  setAdvCreateFailed(key, null) // a new attempt starts clean
+  setAdvCreatePending(key, true)
+  if (advCreatePolls.has(key)) return
+  const label = account.label ?? account.loginEmail
+  advCreatePolls.set(key, setInterval(() => {
+    void pollAdvCreate(account.id, job.orgId, job.jobId, label)
+  }, POLL_MS))
+  void pollAdvCreate(account.id, job.orgId, job.jobId, label)
+}
+
+/** 202 of the modal's POST: the modal closed itself, the org row takes over */
+function onAdvCreated(job: BcAdvCreateAccepted) {
+  const account = advCreateTarget.value
+  if (!account) return
+  toast.add({ title: 'เริ่มสร้างบัญชีโฆษณาแล้ว', description: job.name, color: 'info' })
+  startAdvCreatePoll(account, job)
+}
+
+onUnmounted(() => {
+  for (const key of [...advCreatePolls.keys()]) stopAdvCreatePoll(key)
+})
+
 // ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
 // FEAT-051 — saved cards of one account (GOD/Payment only; the column is not rendered for anybody else)
 const cardsOpen = ref(false)
@@ -1590,11 +1785,16 @@ const showTable = computed(() => !error.value && !isEmpty.value)
                 :parent-busy="orgParentBusy"
                 :sync-blocked="syncBlockedReason(row.original)"
                 :sync-starting="orgSyncStarting"
+                :adv-create-blocked="advCreateBlockedReason(row.original)"
+                :adv-create-asking="advCreateAsking"
+                :adv-create-pending="advCreatePendingOrgs(row.original.id)"
+                :adv-create-failed="advCreateFailedFor(row.original.id)"
                 @retry="loadOrgs(row.original.id)"
                 @sync="org => onSync(row.original, org.orgId)"
                 @advertisers="org => openAdvertisers(row.original, org)"
                 @copy="org => copyText(org.orgId, 'BC org id copied')"
                 @set-parent="payload => onSetOrgParent(row.original.id, payload)"
+                @adv-create="org => onAskAdvCreate(row.original, org)"
               />
             </template>
           </UTable>
@@ -1644,6 +1844,12 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         :account="subCreateTarget"
         :suggest="subCreateSuggest"
         @created="onSubCreated"
+      />
+      <TiktokAccountsAdvCreateModal
+        v-model:open="advCreateOpen"
+        :account="advCreateTarget"
+        :suggest="advCreateSuggest"
+        @created="onAdvCreated"
       />
       <TopupsPayModal
         v-model:open="modalOpen"
