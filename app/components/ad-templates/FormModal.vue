@@ -1,11 +1,32 @@
 <script setup lang="ts">
 /**
- * FEAT-012 — Create / Edit ad template (function 6.9; api-contract.md **v1**
+ * FEAT-012 + FEAT-057 — Create / Duplicate / Edit ad template (function 6.9; api-contract.md **v1**
  * `POST /ad-templates`, `PATCH /ad-templates/:id`).
  *
- * One component for both modes: `template === null` → create (`POST` with a **complete 6-key** config prefilled
- * from `options.systemDefault`, never `catalogVersion`), a row → edit (`PATCH` with **only the changed keys**;
- * each changed top-level `config` key is sent whole — the API replaces it wholesale, it never deep-merges).
+ * One component for all three modes: `template === null` → create (`POST` with a **complete 6-key** config
+ * prefilled from `options.systemDefault`, never `catalogVersion`), a row → edit (`PATCH` with **only the changed
+ * keys**; each changed top-level `config` key is sent whole — the API replaces it wholesale, it never
+ * deep-merges).
+ *
+ * **FEAT-057** (api-contract v1 §5, §5.1 · spec AC-14, AC-15, AC-16) — `duplicateFrom` is the third mode:
+ * `template` stays `null`, so this is an ordinary **create** (one `POST`, the `Create` button, system defaults
+ * for keys the source lacks), but the whole state is pre-filled from that row through the same `stateFrom()` /
+ * `configStateFrom()` mapping edit mode uses (identity, instant page incl. the CTA-image mode and its
+ * thumbnail, CTA values, tracking, tri-state, the 4 UTM values, the add-on card and its thumbnail), the name
+ * starts as `<source name> (copy)`, the title/description say where it came from, and the body carries one extra
+ * key `duplicateOf: <source id>`.
+ * The **Spark code** is the reason that key exists: the view the BO holds is masked (`hasCode` / `codeLast4`),
+ * so a duplicate of an `authCode` source opens in `keep` mode with the hint reading
+ * `Spark code copied from the source template (…<last4>)` and sends the bare
+ * `identity.post: { selection: 'authCode' }` — the API copies the stored code server-side (§5.1). **Change code**
+ * + typing switches to `{ selection: 'authCode', code }` as usual, and a source without a stored code (legacy
+ * `first` / `named`) opens with the empty, required input of a plain create.
+ * A 201 toasts `Template duplicated` and the page reloads page 1 through `created` (never `updated`, so the
+ * FEAT-045 UTM-sync prompt cannot fire for a duplicate); a 409 on the name, a 404 on `duplicateOf` and every
+ * other refusal land exactly where the create path already puts them (name field / `adt-form-error`), modal
+ * open. Nothing is created until Create is pressed, so cancelling leaves no copy behind.
+ * Everything that belongs to a **saved** document keeps reading `template`: the post-info section
+ * (`adt-post-info`) and the read-only UTM ids are not rendered for a duplicate.
  *
  * Every radio group is built from `options` (`{ value, label }`) — including the single-valued `identityMode`,
  * `identitySource` and `destinationMode` lists (spec A3) — so no enum label is hard-coded in the BO. The five
@@ -150,12 +171,18 @@ import type {
   VerifyPostInfoResponse
 } from '#shared/types/ad-templates'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** null = create, a row = edit */
   template: AdTemplate | null
   /** fetched once per page lifetime and passed down — the modal never re-fetches it */
   options: AdTemplateOptions
-}>()
+  /**
+   * FEAT-057 — **duplicate mode**: `template` stays `null` (so every create code path applies: `POST`, the
+   * `Create` button, the system defaults for keys the source lacks) while the form is pre-filled from this row
+   * and the POST carries `duplicateOf: <row.id>`. `null` = plain create / edit.
+   */
+  duplicateFrom?: AdTemplate | null
+}>(), { duplicateFrom: null })
 
 const emit = defineEmits<{
   created: [template: AdTemplate]
@@ -180,6 +207,25 @@ const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
 const editing = computed<AdTemplate | null>(() => props.template)
 
 const isEdit = computed(() => editing.value !== null)
+/** FEAT-057 — create, pre-filled from another row (`duplicateOf` travels in the POST) */
+const isDuplicate = computed(() => props.template === null && props.duplicateFrom !== null)
+/**
+ * FEAT-057 — the row the form reads its values from: the edited one, or the duplicate source (null for a plain
+ * create). Everything that is about the **saved** document (the post-info section, the UTM ids the API filled in)
+ * keeps reading `editing` instead: a duplicate has no document yet.
+ */
+const sourceRow = computed<AdTemplate | null>(() => props.template ?? props.duplicateFrom)
+
+const modalTitle = computed(() => {
+  if (isEdit.value) return 'Edit ad template'
+  return isDuplicate.value ? 'Duplicate ad template' : 'Create ad template'
+})
+
+const modalDescription = computed(() => {
+  if (isEdit.value) return 'Changes apply to future orders only.'
+  if (isDuplicate.value) return `Starts from “${props.duplicateFrom?.name ?? ''}”. Saved as a new template of yours.`
+  return 'Starts from the TikTok system defaults.'
+})
 
 // ── FEAT-017 fixed selections and instant-page defaults (spec L-10; `/options` only supplies their labels) ───────────
 const POST_AUTH_CODE = 'authCode'
@@ -399,12 +445,21 @@ function configStateFrom(
   }
 }
 
+/**
+ * The whole form state from a row: the edited one, or — FEAT-057 — the duplicate source, which goes through
+ * exactly the same `configStateFrom()` mapping (identity, instant page incl. the CTA-image mode and its
+ * thumbnail, CTA values, tracking, tri-state, the 4 UTM values, the add-on card and its thumbnail; keys the
+ * source lacks fall back to the system defaults, as in a plain create). A duplicate starts with
+ * `<source> (copy)` as its name; nothing else is renamed.
+ */
 function stateFrom(template: AdTemplate | null): FormState {
-  const config = template ? template.config : props.options.systemDefault
+  const source = template ?? props.duplicateFrom
+  const config = source ? source.config : props.options.systemDefault
+  const duplicate = template === null && source !== null
   return {
-    name: template?.name ?? '',
-    description: template?.description ?? '',
-    config: configStateFrom(config, template?.addOnImage ?? null, template?.buttonImage ?? null)
+    name: source ? (duplicate ? `${source.name} (copy)` : source.name) : '',
+    description: source?.description ?? '',
+    config: configStateFrom(config, source?.addOnImage ?? null, source?.buttonImage ?? null)
   }
 }
 
@@ -520,18 +575,37 @@ function labelOf(items: OptionItem[] | undefined, value: string): string {
 const postSelectionLabel = computed(() => labelOf(props.options.postSelection, POST_AUTH_CODE))
 const pageSelectionLabel = computed(() => labelOf(props.options.pageSelection, PAGE_CREATE))
 
-/** the loaded template already has a stored code (its masked view says so) → the hint can be offered */
+/**
+ * The loaded template already has a stored code (its masked view says so) → the hint can be offered.
+ * FEAT-057: in duplicate mode the **source** is the row that carries the mask, and the API copies that stored
+ * code server-side when the body omits it (api-contract §5.1) — so the very same hint applies.
+ */
 const hasStoredCode = computed(() => {
-  const post = editing.value?.config?.identity?.post
+  const post = sourceRow.value?.config?.identity?.post
   return post?.selection === POST_AUTH_CODE && 'hasCode' in post && post.hasCode === true
 })
 
-/** `••••<last4>`, or `••••` when the stored code is shorter than 5 characters (spec L-11) */
-const codeHint = computed(() => {
-  const post = editing.value?.config?.identity?.post
-  const last4 = post?.selection === POST_AUTH_CODE && 'codeLast4' in post ? post.codeLast4 : null
-  return `••••${last4 ?? ''}`
+/** the last 4 characters the masked view carries, `null` when the API served none (code shorter than 5) */
+const codeLast4 = computed(() => {
+  const post = sourceRow.value?.config?.identity?.post
+  return post?.selection === POST_AUTH_CODE && 'codeLast4' in post ? post.codeLast4 : null
 })
+
+/**
+ * `••••<last4>`, or `••••` when the stored code is shorter than 5 characters (spec L-11).
+ * FEAT-057 — in duplicate mode the line says where that code comes from instead (spec "UI behaviour").
+ */
+const codeHint = computed(() => {
+  if (isDuplicate.value) return `Spark code copied from the source template (…${codeLast4.value ?? ''})`
+  return `••••${codeLast4.value ?? ''}`
+})
+
+/** the sentence under the hint — "the saved code" on an edit, "the source's code" on a duplicate */
+const codeKeepHelp = computed(() =>
+  isDuplicate.value
+    ? 'The code of the source template is copied unless you change it.'
+    : 'The saved code is kept unless you change it.'
+)
 
 /**
  * `keep` = the hint is shown and the body carries `{ selection: 'authCode' }` (the API keeps the stored code);
@@ -717,7 +791,8 @@ function toggleCtaAll() {
  */
 const utmPrefixItems = computed<string[]>(() => {
   const listed = props.options.utmPrefixes ?? []
-  const bound = editing.value?.config?.utm?.prefix ?? ''
+  // FEAT-057: in duplicate mode the pre-filled prefix is the source's — keep it selectable for the same reason
+  const bound = sourceRow.value?.config?.utm?.prefix ?? ''
   return bound && !listed.includes(bound) ? [...listed, bound] : [...listed]
 })
 
@@ -932,8 +1007,9 @@ watch(open, (isOpen) => {
  */
 function resetToDefaults() {
   state.config = configStateFrom(props.options.systemDefault)
-  state.config.identity.post.code = storedSparkCode(editing.value?.config)
-  state.config.utm = utmStateFrom(editing.value?.config?.utm)
+  // FEAT-057: in duplicate mode "the stored code / the bound UTM" are the source's — restored the same way
+  state.config.identity.post.code = storedSparkCode(sourceRow.value?.config)
+  state.config.utm = utmStateFrom(sourceRow.value?.config?.utm)
   resetCodeMode()
   submitError.value = null
   clearServerErrors()
@@ -1565,15 +1641,25 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
   // create always sends the complete 6-key config and never `catalogVersion` (the API stamps it)
   const body: CreateAdTemplateBody = { name, description, config: configFromState() }
+  // FEAT-057 — one single POST for a duplicate too; `duplicateOf` is the only extra key (api-contract §5), and
+  // it is what lets `config.identity.post` be the bare `{ selection: 'authCode' }` while the keep hint is shown
+  // (§5.1: the API copies the source's secret code — the BO never sees it)
+  const duplicate = isDuplicate.value
+  const source = props.duplicateFrom
+  if (duplicate && source) body.duplicateOf = source.id
   submitting.value = true
   try {
     // retry: 0 — exactly one POST per submit
     const created = await api<AdTemplate>('/ad-templates', { method: 'POST', body, retry: 0 })
     open.value = false
-    toast.add({ title: 'Template created', description: created.name, color: 'success' })
+    toast.add({
+      title: duplicate ? 'Template duplicated' : 'Template created',
+      description: created.name,
+      color: 'success'
+    })
     emit('created', created)
   } catch (e) {
-    showApiError(e, 'Could not create the template')
+    showApiError(e, duplicate ? 'Could not duplicate the template' : 'Could not create the template')
   } finally {
     submitting.value = false
   }
@@ -1583,8 +1669,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 <template>
   <UModal
     v-model:open="open"
-    :title="isEdit ? 'Edit ad template' : 'Create ad template'"
-    :description="isEdit ? 'Changes apply to future orders only.' : 'Starts from the TikTok system defaults.'"
+    :title="modalTitle"
+    :description="modalDescription"
     :dismissible="!submitting"
     :ui="{ content: 'max-w-3xl' }"
     :content="modalContent"
@@ -1933,8 +2019,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               :error="serverErrors['config.identity.post.code']"
             >
               <div class="flex flex-wrap items-center gap-2">
+                <!-- FEAT-057 — in duplicate mode the same place reads "copied from the source template (…last4)" -->
                 <span
-                  class="font-mono text-sm text-highlighted"
+                  class="text-sm text-highlighted"
+                  :class="isDuplicate ? 'break-words' : 'font-mono'"
                   data-testid="adt-post-code-hint"
                 >{{ codeHint }}</span>
                 <UButton
@@ -1949,7 +2037,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 />
               </div>
               <template #help>
-                The saved code is kept unless you change it.
+                {{ codeKeepHelp }}
               </template>
             </UFormField>
 

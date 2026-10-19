@@ -8,11 +8,18 @@
  * FEAT-047 — adds the "Launched" column (`rb-row-launched`) between Advertiser and Banned at, mirroring
  * `rb-row-banned`'s `formatDateTime`/`data-iso` handling; footer first cell `colspan` 3 → 4.
  *
+ * FEAT-056 — per-advertiser campaign expansion (spec "UI behaviour", AC-25). The chevron `rb-expand` is put
+ * **inside** the existing account cell instead of a new leading column on purpose: a new column would change
+ * `rb-foot`'s `colspan` and the FEAT-043 spec asserts it. An icon-only `UButton` adds no text, so the
+ * account cell's exact-text assertions keep passing. The expansion is one extra `<tr>` per open row; the
+ * request and its state belong to the page, this component only renders and emits.
+ *
  * TASK-banned-ad-covers — adds the "รูปโฆษณา" column (`rb-row-cover`) between Advertiser and Launched: the
  * advertiser's first ad thumbnail (`ReportsAdThumb`, reused from FEAT-020) plus an eye button that asks the
- * page to open the "all ad images" modal (`show-covers`). Footer first cell `colspan` 4 → 5.
+ * page to open the "all ad images" modal (`show-covers`). Footer first cell `colspan` 4 → 5 (the FEAT-043
+ * spec was updated with it), and the FEAT-056 expansion row spans 5 + metric columns.
  */
-import type { BannedRow } from '#shared/types/report-banned'
+import type { BannedCampaignsState, BannedRow } from '#shared/types/report-banned'
 import type { KpiMetrics } from '#shared/types/reports'
 
 const props = withDefaults(defineProps<{
@@ -22,13 +29,25 @@ const props = withDefaults(defineProps<{
   advertiserCount: number
   accountCount: number
   pending?: boolean
+  /** advertiser ids whose campaign table is open */
+  expanded?: string[]
+  /** per-advertiser campaign state, keyed by advertiser id */
+  campaigns?: Record<string, BannedCampaignsState>
 }>(), {
-  pending: false
+  pending: false,
+  expanded: () => [],
+  campaigns: () => ({})
 })
 
 const emit = defineEmits<{
+  'toggle-expand': [id: string]
+  'retry-campaigns': [id: string]
   'show-covers': [row: BannedRow]
 }>()
+
+function isExpanded(id: string): boolean {
+  return props.expanded.includes(id)
+}
 
 const METRIC_COLUMNS: { field: keyof KpiMetrics | 'adCount', label: string, format: 'int' | 'dec' | 'pct' }[] = [
   { field: 'adCount', label: 'โฆษณา', format: 'int' },
@@ -40,6 +59,9 @@ const METRIC_COLUMNS: { field: keyof KpiMetrics | 'adCount', label: string, form
   { field: 'conversions', label: 'Conv.', format: 'int' },
   { field: 'conversionCost', label: 'CPA', format: 'dec' }
 ]
+
+/** account + advertiser + cover + launched + banned (5) plus every metric column */
+const expansionSpan = 5 + METRIC_COLUMNS.length
 
 /** `adCount` lives on the row itself, every other column reads the row's `metrics`. */
 function cellValue(row: BannedRow, field: string): number | null {
@@ -104,70 +126,99 @@ function formatField(value: number | null, format: 'int' | 'dec' | 'pct'): strin
         </tr>
       </thead>
       <tbody :class="pending ? 'opacity-60' : ''">
-        <tr
-          v-for="row in rows"
-          :key="row.advertiser.id"
-          data-testid="rb-row"
-          :data-id="row.advertiser.id"
-          :data-account="row.account.id"
-          :data-ads="row.adCount"
-        >
-          <td class="border-b border-default px-2 py-2" data-testid="rb-row-account">
-            <div class="flex min-w-0 flex-col">
-              <span class="max-w-48 truncate" :title="row.account.label ?? row.account.loginEmail ?? ''">
-                {{ row.account.label || row.account.loginEmail || REPORT_DASH }}
-              </span>
-              <span class="text-xs text-muted">{{ row.workspace.name || REPORT_DASH }}</span>
-            </div>
-          </td>
-          <td class="border-b border-default px-2 py-2" data-testid="rb-row-advertiser">
-            <div class="flex min-w-0 flex-col">
-              <span class="max-w-44 truncate" :title="row.advertiser.name">
-                {{ row.advertiser.name || REPORT_DASH }}
-              </span>
-              <span class="text-xs text-muted" :title="row.advertiser.tiktokAdvertiserId">
-                aadvid {{ last4(row.advertiser.tiktokAdvertiserId) }}
-              </span>
-            </div>
-          </td>
-          <td class="border-b border-default px-2 py-2" data-testid="rb-row-cover">
-            <div class="flex items-center gap-1.5">
-              <ReportsAdThumb :url="row.cover.coverUrl" :is-video="row.cover.isVideo" size="sm" />
-              <UButton
-                icon="i-lucide-eye"
-                aria-label="ดูรูปโฆษณาทั้งหมด"
-                color="neutral"
-                variant="ghost"
-                size="xs"
-                data-testid="rb-row-covers-btn"
-                :data-id="row.advertiser.id"
-                @click="emit('show-covers', row)"
+        <template v-for="row in rows" :key="row.advertiser.id">
+          <tr
+            data-testid="rb-row"
+            :data-id="row.advertiser.id"
+            :data-account="row.account.id"
+            :data-ads="row.adCount"
+            :data-expanded="isExpanded(row.advertiser.id) ? 'true' : 'false'"
+          >
+            <td class="border-b border-default px-2 py-2" data-testid="rb-row-account">
+              <div class="flex min-w-0 items-center gap-1">
+                <UButton
+                  :icon="isExpanded(row.advertiser.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+                  color="neutral"
+                  variant="ghost"
+                  size="xs"
+                  class="shrink-0"
+                  :aria-expanded="isExpanded(row.advertiser.id)"
+                  :aria-label="`แคมเปญของ ${row.advertiser.name || row.advertiser.id}`"
+                  data-testid="rb-expand"
+                  :data-id="row.advertiser.id"
+                  @click="emit('toggle-expand', row.advertiser.id)"
+                />
+                <div class="flex min-w-0 flex-col">
+                  <span class="max-w-48 truncate" :title="row.account.label ?? row.account.loginEmail ?? ''">
+                    {{ row.account.label || row.account.loginEmail || REPORT_DASH }}
+                  </span>
+                  <span class="text-xs text-muted">{{ row.workspace.name || REPORT_DASH }}</span>
+                </div>
+              </div>
+            </td>
+            <td class="border-b border-default px-2 py-2" data-testid="rb-row-advertiser">
+              <div class="flex min-w-0 flex-col">
+                <span class="max-w-44 truncate" :title="row.advertiser.name">
+                  {{ row.advertiser.name || REPORT_DASH }}
+                </span>
+                <span class="text-xs text-muted" :title="row.advertiser.tiktokAdvertiserId">
+                  aadvid {{ last4(row.advertiser.tiktokAdvertiserId) }}
+                </span>
+              </div>
+            </td>
+            <td class="border-b border-default px-2 py-2" data-testid="rb-row-cover">
+              <div class="flex items-center gap-1.5">
+                <ReportsAdThumb :url="row.cover.coverUrl" :is-video="row.cover.isVideo" size="sm" />
+                <UButton
+                  icon="i-lucide-eye"
+                  aria-label="ดูรูปโฆษณาทั้งหมด"
+                  color="neutral"
+                  variant="ghost"
+                  size="xs"
+                  data-testid="rb-row-covers-btn"
+                  :data-id="row.advertiser.id"
+                  @click="emit('show-covers', row)"
+                />
+              </div>
+            </td>
+            <td
+              class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
+              data-testid="rb-row-launched"
+              :data-iso="row.launchedAt ?? ''"
+            >
+              {{ formatDateTime(row.launchedAt) }}
+            </td>
+            <td
+              class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
+              data-testid="rb-row-banned"
+              :data-iso="row.bannedAt ?? ''"
+            >
+              {{ formatDateTime(row.bannedAt) }}
+            </td>
+            <td
+              v-for="column in METRIC_COLUMNS"
+              :key="column.field"
+              class="border-b border-default px-2 py-2 text-right tabular-nums"
+              :data-field="column.field"
+            >
+              {{ formatField(cellValue(row, column.field), column.format) }}
+            </td>
+          </tr>
+
+          <tr
+            v-if="isExpanded(row.advertiser.id)"
+            data-testid="rb-expansion"
+            :data-id="row.advertiser.id"
+          >
+            <td :colspan="expansionSpan" class="border-b border-default bg-elevated/30 px-2 py-2">
+              <ReportBannedCampaigns
+                :advertiser-id="row.advertiser.id"
+                :state="campaigns[row.advertiser.id]"
+                @retry="emit('retry-campaigns', row.advertiser.id)"
               />
-            </div>
-          </td>
-          <td
-            class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
-            data-testid="rb-row-launched"
-            :data-iso="row.launchedAt ?? ''"
-          >
-            {{ formatDateTime(row.launchedAt) }}
-          </td>
-          <td
-            class="border-b border-default px-2 py-2 whitespace-nowrap tabular-nums"
-            data-testid="rb-row-banned"
-            :data-iso="row.bannedAt ?? ''"
-          >
-            {{ formatDateTime(row.bannedAt) }}
-          </td>
-          <td
-            v-for="column in METRIC_COLUMNS"
-            :key="column.field"
-            class="border-b border-default px-2 py-2 text-right tabular-nums"
-            :data-field="column.field"
-          >
-            {{ formatField(cellValue(row, column.field), column.format) }}
-          </td>
-        </tr>
+            </td>
+          </tr>
+        </template>
       </tbody>
       <tfoot>
         <tr

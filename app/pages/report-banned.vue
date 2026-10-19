@@ -18,12 +18,25 @@
  * - `GET /advertisers?limit=100[&tiktokAccountId]` — on mount and again whenever `tiktokAccountId` changes,
  *   advertiser filter options bound to the selected account; failure swallowed likewise.
  * No polling anywhere on this page.
+ *
+ * FEAT-056 adds two things and changes nothing else (every `rb-*` test id of FEAT-043/047 stays):
+ * - a fourth range button **กำหนดเอง** (`rb-range-custom`) with two date inputs (`rb-from` / `rb-to`) →
+ *   `range=custom&from=&to=`. An incomplete or impossible pair renders `rb-range-invalid` and issues **no**
+ *   request at all (AC-25), so the API never sees a 400 from this page.
+ * - an expandable per-advertiser campaign table: `rb-expand` → `GET /reports/banned/:id/campaigns` with the
+ *   **same** range query, once per (row, range); the cache is dropped and the open rows reload when the range
+ *   changes. The state lives here (the page owns `useApi()`), the rendering in `ReportBannedCampaigns`.
  */
 import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { BannedReportResponse, BannedRow } from '#shared/types/report-banned'
-import type { ReportRange } from '#shared/types/reports'
+import type {
+  BannedCampaignsResponse,
+  BannedCampaignsState,
+  BannedRange,
+  BannedReportResponse,
+  BannedRow
+} from '#shared/types/report-banned'
 import type { AccountsResponse, TikTokAccount } from '#shared/types/tiktok-accounts'
 
 useSeoMeta({ title: 'Report Banned accounts' })
@@ -44,11 +57,45 @@ function queryString(key: string): string | undefined {
 }
 
 /** Unlike `/reports`/`/reports/summary` the default range here is `all` — an unknown value also falls to `all` (contract §3.2). */
-function parseBannedRange(value: unknown): ReportRange {
-  return value === 'today' || value === '7d' ? value : 'all'
+function parseBannedRange(value: unknown): BannedRange {
+  return value === 'today' || value === '7d' || value === 'custom' ? value : 'all'
 }
 
-const range = computed<ReportRange>(() => parseBannedRange(route.query.range))
+const range = computed<BannedRange>(() => parseBannedRange(route.query.range))
+const customFrom = computed(() => queryString('from') ?? '')
+const customTo = computed(() => queryString('to') ?? '')
+
+const DAY_MS = 86_400_000
+const MAX_RANGE_DAYS = 366
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function dayMs(value: string): number {
+  return Date.parse(`${value}T00:00:00Z`)
+}
+
+/**
+ * Thai reason why the custom pair cannot be sent, `null` when it is fine (contract §6.1: both required,
+ * `from ≤ to`, at most 366 days apart). Mirrors the API's `superRefine` so the page never fires a 400.
+ */
+const rangeInvalid = computed<string | null>(() => {
+  if (range.value !== 'custom') return null
+  const from = customFrom.value
+  const to = customTo.value
+  if (!ISO_DAY_RE.test(from) || !ISO_DAY_RE.test(to)) return 'เลือกวันที่เริ่มต้นและวันสิ้นสุด'
+  const fromMs = dayMs(from)
+  const toMs = dayMs(to)
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return 'รูปแบบวันที่ไม่ถูกต้อง'
+  if (toMs < fromMs) return 'วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น'
+  if ((toMs - fromMs) / DAY_MS > MAX_RANGE_DAYS) return `ช่วงเวลาต้องไม่เกิน ${MAX_RANGE_DAYS} วัน`
+  return null
+})
+
+/** The range part of every request this page makes (`/reports/banned` and the campaign expansion). */
+function rangeQuery(): { range: BannedRange, from?: string, to?: string } {
+  return range.value === 'custom'
+    ? { range: 'custom', from: customFrom.value, to: customTo.value }
+    : { range: range.value }
+}
 const page = computed(() => {
   const n = Number(route.query.page)
   return Number.isInteger(n) && n > 0 ? n : 1
@@ -117,6 +164,12 @@ function rememberFromQuery() {
 }
 
 async function load() {
+  // FEAT-056 — an incomplete/impossible custom pair sends nothing at all (AC-25)
+  if (rangeInvalid.value) {
+    session++
+    pending.value = false
+    return
+  }
   const s = ++session
   pending.value = true
   error.value = null
@@ -126,7 +179,7 @@ async function load() {
     const res = await api<BannedReportResponse>('/reports/banned', {
       retry: 0,
       query: {
-        range: range.value,
+        ...rangeQuery(),
         page: page.value,
         limit: LIMIT,
         workspaceId: workspaceId.value === 'all' ? undefined : workspaceId.value,
@@ -181,11 +234,60 @@ async function loadAdvertisers() {
 }
 
 const bannedQueryKey = computed(() => JSON.stringify([
-  range.value, page.value, workspaceId.value, accountId.value, advertiserId.value
+  range.value, customFrom.value, customTo.value, page.value, workspaceId.value, accountId.value, advertiserId.value
 ]))
 
 watch(bannedQueryKey, () => {
   void load()
+})
+
+// ── FEAT-056 · per-advertiser campaign expansion ─────────────────────────────────────────────────────────────────────
+const expanded = ref<string[]>([])
+const campaigns = ref<Record<string, BannedCampaignsState>>({})
+
+/** identity of the current range — the campaign cache is valid for exactly one of these */
+const rangeKey = computed(() => JSON.stringify([range.value, customFrom.value, customTo.value]))
+
+function setCampaignState(id: string, state: BannedCampaignsState) {
+  campaigns.value = { ...campaigns.value, [id]: state }
+}
+
+async function loadCampaigns(id: string) {
+  if (rangeInvalid.value) return
+  const key = rangeKey.value
+  setCampaignState(id, { pending: true, error: null, data: campaigns.value[id]?.data ?? null })
+  try {
+    const res = await api<BannedCampaignsResponse>(`/reports/banned/${id}/campaigns`, {
+      retry: 0,
+      query: rangeQuery()
+    })
+    if (key !== rangeKey.value) return // the range moved on; the new range reloads on its own
+    setCampaignState(id, { pending: false, error: null, data: res })
+  } catch (e) {
+    if (key !== rangeKey.value) return
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    setCampaignState(id, {
+      pending: false,
+      error: err.data?.error ?? err.message ?? 'Unexpected error',
+      data: null
+    })
+  }
+}
+
+/** open/close one row; the request happens **once per (row, range)** — the cache is the memo */
+function toggleExpand(id: string) {
+  if (expanded.value.includes(id)) {
+    expanded.value = expanded.value.filter(other => other !== id)
+    return
+  }
+  expanded.value = [...expanded.value, id]
+  if (!campaigns.value[id]) void loadCampaigns(id)
+}
+
+/** a range change keeps the rows open but throws the numbers away and re-reads them for the new range */
+watch(rangeKey, () => {
+  campaigns.value = {}
+  for (const id of expanded.value) void loadCampaigns(id)
 })
 
 watch(accountId, () => {
@@ -241,10 +343,20 @@ const intervalText = computed(() => {
   return `อัปเดตทุก ${phrase} · ล่าสุด ${last}`
 })
 
-const RANGES: ReportRange[] = ['today', '7d', 'all']
+const RANGES: BannedRange[] = ['today', '7d', 'all', 'custom']
+const BANNED_RANGE_LABEL: Record<BannedRange, string> = { ...RANGE_LABEL, custom: 'กำหนดเอง' }
 
-function setRange(value: ReportRange) {
-  setQuery({ range: value === 'all' ? undefined : value })
+/** Switching to `custom` keeps whatever dates are in the URL; with none the page shows `rb-range-invalid`. */
+function setRange(value: BannedRange) {
+  if (value === 'custom') {
+    setQuery({ range: 'custom' })
+    return
+  }
+  setQuery({ range: value === 'all' ? undefined : value, from: undefined, to: undefined })
+}
+
+function setCustomDate(side: 'from' | 'to', value: string) {
+  setQuery({ [side]: value || undefined })
 }
 
 function setPage(value: number) {
@@ -282,7 +394,7 @@ function showCovers(row: BannedRow) {
             <UButton
               v-for="key in RANGES"
               :key="key"
-              :label="RANGE_LABEL[key]"
+              :label="BANNED_RANGE_LABEL[key]"
               size="xs"
               :color="range === key ? 'primary' : 'neutral'"
               :variant="range === key ? 'solid' : 'outline'"
@@ -327,6 +439,34 @@ function showCovers(row: BannedRow) {
           <p class="text-sm text-muted" data-testid="rb-interval">
             {{ intervalText }}
           </p>
+
+          <!-- FEAT-056 — custom range: two day inputs; an invalid pair renders the hint and sends nothing -->
+          <div v-if="range === 'custom'" class="flex flex-wrap items-center gap-1.5">
+            <UInput
+              type="date"
+              :model-value="customFrom"
+              class="w-44"
+              aria-label="ตั้งแต่วันที่"
+              data-testid="rb-from"
+              @update:model-value="(v: string | number) => setCustomDate('from', String(v))"
+            />
+            <span class="text-sm text-muted">→</span>
+            <UInput
+              type="date"
+              :model-value="customTo"
+              class="w-44"
+              aria-label="ถึงวันที่"
+              data-testid="rb-to"
+              @update:model-value="(v: string | number) => setCustomDate('to', String(v))"
+            />
+            <p
+              v-if="rangeInvalid"
+              class="text-sm text-error"
+              data-testid="rb-range-invalid"
+            >
+              {{ rangeInvalid }}
+            </p>
+          </div>
 
           <!-- filters -->
           <div class="flex flex-wrap items-center gap-1.5">
@@ -430,6 +570,10 @@ function showCovers(row: BannedRow) {
               :advertiser-count="banned.advertiserCount"
               :account-count="banned.accountCount"
               :pending="pending"
+              :expanded="expanded"
+              :campaigns="campaigns"
+              @toggle-expand="toggleExpand"
+              @retry-campaigns="loadCampaigns"
               @show-covers="showCovers"
             />
 

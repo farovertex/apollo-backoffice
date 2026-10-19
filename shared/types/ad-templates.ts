@@ -401,6 +401,12 @@ export interface AdTemplate {
   workspace: { id: string, name: string | null }
   /** `username` is null when the admin row is gone */
   createdBy: { id: string, username: string | null }
+  /**
+   * FEAT-057 (api-contract v1 §1.2) — may the **caller of this request** edit / delete / UTM-sync / verify this
+   * template (`isGod(ctx) || createdBy === ctx.adminId`)? Computed per request, never stored. The page renders
+   * Edit, Sync UTM and Delete only for a row that carries `true`; every row can be duplicated.
+   */
+  canEdit: boolean
   createdAt: string
   updatedAt: string
 }
@@ -472,6 +478,13 @@ export interface CreateAdTemplateBody {
   name: string
   description?: string | null
   config: AdConfigRequest
+  /**
+   * FEAT-057 (api-contract v1 §5, §5.1) — the id of the template this one was duplicated from. Only sent by the
+   * Duplicate flow; it lets the API copy the **secret** Spark code of the source when `config.identity.post` is
+   * the bare `{ selection: 'authCode' }` (the BO never sees that code), and it is written into the audit detail
+   * as `duplicatedFrom`. Unknown id → 404 `ไม่พบ template`, nothing created.
+   */
+  duplicateOf?: string
 }
 
 /**

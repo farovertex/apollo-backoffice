@@ -128,6 +128,12 @@ export interface AdGroupTemplate {
   workspace: { id: string, name: string | null }
   /** `username` is null when the admin row is gone */
   createdBy: { id: string, username: string | null }
+  /**
+   * FEAT-057 (api-contract v1 §1.1) — may the **caller of this request** edit / delete this template
+   * (`isGod(ctx) || createdBy === ctx.adminId`)? Computed per request, never stored. The page renders Edit and
+   * Delete only for a row that carries `true`; every row can be duplicated.
+   */
+  canEdit: boolean
   createdAt: string
   updatedAt: string
 }
@@ -191,6 +197,12 @@ export interface CreateAdGroupTemplateBody {
   name: string
   description?: string | null
   config: AdGroupConfig
+  /**
+   * FEAT-057 (api-contract v1 §5) — the id of the template this one was duplicated from. Only sent by the
+   * Duplicate flow; the API uses it for the audit detail `duplicatedFrom` (unknown id → 404 `ไม่พบ template`).
+   * The new row stores nothing of it: name / description / config are what this body carries.
+   */
+  duplicateOf?: string
 }
 
 /**
