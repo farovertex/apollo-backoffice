@@ -146,6 +146,23 @@ export interface AdGroupTemplatesResponse {
   total: number
 }
 
+/**
+ * FEAT-058 — one row of `GET /ad-group-templates/creators` (api-contract.md v1 §1, §3), the option list of
+ * the BO's **Created by** select. `me` is `workspaceId === ctx.homeWorkspaceId`; exactly one row carries it.
+ */
+export interface Creator {
+  workspaceId: string
+  workspaceName: string | null
+  adminId: string | null
+  username: string | null
+  me: boolean
+}
+
+/** `GET /ad-group-templates/creators` 200 body — exactly one top-level key. */
+export interface CreatorsResponse {
+  creators: Creator[]
+}
+
 /** `options.listLimits` — the API's own numbers for every free-text list (FEAT-011 A5). */
 export interface AdGroupListLimits {
   maxItems: number
