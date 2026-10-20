@@ -129,6 +129,42 @@ export interface MonitorBudget {
   mode: string | null
 }
 
+/** FEAT-060 — `advertisers.budget.edits`: the modal's daily edit-quota counter. */
+export interface AdvertiserBudgetEdits {
+  left: number
+  total: number
+  forDate: string | null
+}
+
+/** FEAT-060 — view of `advertisers.budgetPending` (contract §1.3, `budgetPendingView`). */
+export interface BudgetPendingView {
+  mode: 'custom' | 'unlimited'
+  amount: number | null
+  jobId: string
+  requestedAt: string
+}
+
+/**
+ * FEAT-060 — `row.advertiserBudget` (contract §3.1, exactly 9 keys), carried on every row of the three
+ * `GET /ads-monitor/*` tabs, but only rendered as a column on the campaign tab (spec "UI behaviour"). The
+ * budget is per **advertiser** (spec A1): `pending`/`error` are the same for every row of the same advertiser,
+ * and the BO's own optimistic state is a second override map keyed by `advertiser.id` (`ads-monitor.vue` →
+ * `advertiserOverrides`), never by this row's id.
+ */
+export interface MonitorAdvertiserBudget {
+  mode: 'custom' | 'unlimited' | null
+  amount: number | null
+  currency: string | null
+  setAt: string | null
+  readAt: string | null
+  edits: AdvertiserBudgetEdits | null
+  pending: BudgetPendingView | null
+  /** `budget.lastError` — a Thai sentence, safe to show */
+  error: string | null
+  /** why the button may not be pressed, computed by the API — the BO never re-derives this rule */
+  settable: { ok: boolean, reason: string | null }
+}
+
 export interface MonitorBid {
   strategy: string | null
   pricing: string | null
@@ -186,6 +222,11 @@ export interface MonitorRow {
   /** campaign tab only — whether the trash button may be pressed, and why not */
   deletable?: MonitorDeletable
   budget?: MonitorBudget
+  /**
+   * FEAT-060 — the **advertiser's** spending cap (contract §3.1). Optional so a row from an older API or a
+   * test stub without it renders as `blocked` (`AdsMonitorBudgetCell`) rather than crashing.
+   */
+  advertiserBudget?: MonitorAdvertiserBudget | null
   bid?: MonitorBid
   schedule?: MonitorSchedule
   campaign?: MonitorNamedRef
@@ -275,4 +316,48 @@ export interface MonitorCampaignAdsResponse {
   advertiser: { id: string, name: string | null, tiktokAdvertiserId: string }
   total: number
   ads: BannedAd[]
+}
+
+/**
+ * FEAT-060 — `POST /advertisers/:advertiserId/budget` body (contract §2). Discriminated on `mode`; `amount`
+ * only exists on the `custom` branch (the API's zod schema is `.strict()` on both branches).
+ */
+export type SetBudgetBody = { mode: 'custom', amount: number } | { mode: 'unlimited' }
+
+/** View of `advertisers.budget` carried on the 200 `unchanged` body (contract §2 step 3; `toBudgetView`, 7 keys). */
+export interface AdvertiserBudgetView {
+  mode: 'custom' | 'unlimited' | null
+  amount: number | null
+  currency: string | null
+  readAt: string | null
+  setAt: string | null
+  lastError: string | null
+  edits: AdvertiserBudgetEdits | null
+}
+
+/** `POST /advertisers/:advertiserId/budget` 202 body. */
+export interface SetBudgetAccepted {
+  jobId: string
+  advertiserId: string
+  mode: 'custom' | 'unlimited'
+  amount: number | null
+  budgetPending: BudgetPendingView
+}
+
+/** `POST /advertisers/:advertiserId/budget` 200 body — the request equalled the stored value, no job created. */
+export interface SetBudgetUnchanged {
+  unchanged: true
+  advertiserId: string
+  mode: 'custom' | 'unlimited'
+  amount: number | null
+  budget: AdvertiserBudgetView
+}
+
+/** Why a budget set was refused, in the API's own order (contract §2 step 4). */
+export type BudgetConflictReason = 'pending' | 'banned' | 'notLoggedIn' | 'buildInProgress' | 'notDiscovered'
+
+/** `POST /advertisers/:advertiserId/budget` 409 body — `error` is the Thai sentence shown in the toast. */
+export interface BudgetConflict {
+  error: string
+  reason: BudgetConflictReason
 }

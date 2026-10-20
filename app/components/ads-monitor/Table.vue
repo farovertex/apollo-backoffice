@@ -17,6 +17,10 @@
  * column moves and the other two tabs are untouched, because the column set is picked by `level`. A row whose
  * `deletedAt` is set is dimmed (`opacity-60`, `data-deleted="true"`) on all three tabs.
  *
+ * FEAT-060 — the campaign tab gains a column "งบ advertiser" (`AdsMonitorBudgetCell`) right after "บัญชี /
+ * advertiser" and before the campaign's own "งบประมาณ" (spec "UI behaviour"); no other column moves and the
+ * Ad group / Ad tabs are untouched.
+ *
  * T9 — sticky header (spec "UI behaviour" → "Sticky header"): `am-table` owns its OWN vertical scrollbox
  * (`max-h-[70vh] overflow-auto`) rather than relying on the outer `UDashboardPanel` body scroll. Measured
  * first: on this page the real vertical scroller is that panel's `data-slot="body"` div, several ancestors
@@ -45,6 +49,8 @@ const emit = defineEmits<{
   'show-covers': [row: MonitorRow]
   /** TASK-campaign-delete-ui — campaign tab only: the row asks the page to open the confirm modal */
   'delete': [row: MonitorRow]
+  /** FEAT-060 — campaign tab only: the row asks the page to open the budget modal */
+  'budget': [row: MonitorRow]
 }>()
 
 /** TASK-campaign-delete-ui — a deleted row stays in the list, dimmed (`deletedAt` is set on all three tabs). */
@@ -97,6 +103,8 @@ const COLUMNS: Record<MonitorLevel, Column[]> = {
   campaign: [
     ...CAMPAIGN_HEAD,
     { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
+    // FEAT-060 — campaign tab only, right after "บัญชี / advertiser" and before the campaign's own budget
+    { key: 'advertiserBudget', label: 'งบ advertiser', align: 'left' },
     { key: 'budget', label: 'งบประมาณ', align: 'right' },
     ...METRIC_COLUMNS,
     { key: 'adCount', label: 'โฆษณา', align: 'right' },
@@ -309,6 +317,12 @@ function scheduleText(row: MonitorRow): string {
               <span>{{ accountLabel(row) }}</span>
               <span class="text-xs text-muted">{{ row.advertiser.name || REPORT_DASH }}</span>
             </span>
+
+            <AdsMonitorBudgetCell
+              v-else-if="column.key === 'advertiserBudget'"
+              :row="row"
+              @ask="emit('budget', row)"
+            />
 
             <span
               v-else-if="column.key === 'budget'"
