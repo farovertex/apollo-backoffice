@@ -25,6 +25,17 @@
  * job of the account runs. The live state of the create job of **this** org is a chip under the name:
  * `ta-adv-create-pending-<orgId>` while it is followed, `ta-adv-create-failed-<orgId>` (tooltip = the job's
  * `lastLog`) until the next attempt — both come in as plain props so the component stays renderless-logic-free.
+ *
+ * 2026-10-20 (human request, TASK-ta-org-redesign) — **redesign of the drill-down.** The org rows used to float
+ * at the left edge of the expansion cell as a bare, header-less table: three loose rows that did not read as
+ * "the children of the account above". They are now one **panel** (`ta-org-panel`): a bordered, slightly raised
+ * card indented under the account row with a title strip (icon · "Business Center" · the account name · org
+ * count), a caption row naming the columns (Org · Advertisers · Synced · actions) and the rows underneath. Subs
+ * are drawn as a tree — indented under the root with a corner connector — and the root row is the only bold one,
+ * so the structure is visible before any badge is read. The caption row is a `<tr>` of `<td>`s inside `<thead>`
+ * on purpose: the FEAT-003 specs read **every** `thead th` under `ta-table` to find the account table's column
+ * indexes, and a nested `<th>` would appear in that list. Every `ta-org-*` test id, every `data-*` attribute, the
+ * row order and every text (`root` / `sub` / `ไม่ทราบแม่`, `ยังไม่เคย`, "Syncing…", the id tail) are unchanged.
  */
 import type { BcOrganization, OrganizationsState, TikTokAccount } from '#shared/types/tiktok-accounts'
 
@@ -70,6 +81,9 @@ const error = computed(() => props.state?.error ?? null)
 const orgs = computed<BcOrganization[]>(() => props.state?.data ?? [])
 const roots = computed(() => orgs.value.filter(org => org.isRoot))
 
+/** the panel title names the account the way the rest of the page does (label first, email as the fallback) */
+const accountName = computed(() => props.account.label ?? props.account.loginEmail)
+
 /** sentinel of the "clear the parent" item — `PATCH { parentOrgId: null }` (an empty string is not a valid id) */
 const NO_PARENT_VALUE = '__none__'
 const NO_PARENT_LABEL = '— ไม่ตั้ง —'
@@ -99,6 +113,11 @@ function kindTitle(org: BcOrganization): string | undefined {
 
 function orgName(org: BcOrganization): string {
   return org.name || REPORT_DASH
+}
+
+/** a sub (or an org whose parent is still unknown) is drawn one level under the root */
+function isChild(org: BcOrganization): boolean {
+  return !org.isRoot
 }
 
 /** the select only exists while nobody could decide the parent (the rule writes `auto`, a human `human`) */
@@ -156,257 +175,320 @@ function advCreateReason(org: BcOrganization): string | null {
   if (isAdvCreatePending(org)) return 'กำลังสร้างบัญชีโฆษณาอยู่'
   return props.advCreateBlocked ?? null
 }
+
+/** cell chrome shared by the caption row and the data rows (one place, so the two can never drift apart) */
+const CELL = 'block sm:table-cell sm:px-3'
 </script>
 
 <template>
   <!--
-    The account table scrolls sideways inside its own `overflow-x-auto` wrapper and is wider than the panel, so
-    an expansion that simply filled the cell would push its right-hand controls (the per-org Sync) out of sight.
-    `sticky left-0` + a content-sized width keeps the org rows at the left edge of the **visible** area at every
-    scroll position, and the mobile cap forces the row to wrap instead of widening the page.
+    The account table scrolls sideways inside its own `overflow-x-auto` wrapper and can be wider than the panel,
+    so an expansion that simply filled the cell would push its right-hand controls (the per-org Sync) out of
+    sight. `sticky left-0` + a content-sized width keeps the panel at the left edge of the **visible** area at
+    every scroll position, and the mobile cap forces the rows to wrap instead of widening the page.
   -->
-  <div class="sticky left-0 w-fit min-w-72 max-w-[calc(100vw-4rem)]">
+  <div class="sticky left-0 w-fit min-w-72 max-w-[calc(100vw-4rem)] py-2 sm:min-w-[40rem] sm:ps-8">
     <div
-      v-if="loading"
-      class="flex flex-col gap-2 py-1"
-      data-testid="ta-org-loading"
+      class="overflow-hidden rounded-lg border border-default bg-elevated/40"
+      data-testid="ta-org-panel"
       :data-id="account.id"
     >
-      <USkeleton class="h-6 w-full" />
-      <USkeleton class="h-6 w-full" />
-    </div>
-
-    <UAlert
-      v-else-if="error"
-      color="error"
-      variant="subtle"
-      icon="i-lucide-triangle-alert"
-      title="โหลด Business Center orgs ไม่สำเร็จ"
-      :description="error"
-      data-testid="ta-org-error"
-      :data-id="account.id"
-    >
-      <template #actions>
-        <UButton
-          label="Retry"
-          icon="i-lucide-refresh-cw"
-          color="error"
-          size="xs"
-          data-testid="ta-org-retry"
-          :data-id="account.id"
-          @click="emit('retry')"
-        />
-      </template>
-    </UAlert>
-
-    <p
-      v-else-if="orgs.length === 0"
-      class="py-2 text-sm text-muted"
-      data-testid="ta-org-empty"
-      :data-id="account.id"
-    >
-      ยังไม่เคย Sync
-    </p>
-
-    <table
-      v-else
-      class="block w-full border-separate border-spacing-0 text-sm sm:table sm:w-auto"
-      data-testid="ta-orgs"
-      :data-id="account.id"
-    >
-      <tbody class="block sm:table-row-group">
-        <tr
-          v-for="org in orgs"
-          :key="org.orgId"
-          class="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 sm:table-row sm:py-0"
-          :class="org.missingSince ? 'opacity-60' : ''"
-          :title="org.missingSince ? missingTitle(org) : undefined"
-          data-testid="ta-org-row"
-          :data-org-id="org.orgId"
-          :data-missing="org.missingSince ? '1' : '0'"
-          :data-root="org.isRoot ? '1' : '0'"
+      <!-- title strip: what this panel is and whose orgs these are -->
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-default bg-elevated/60 px-3 py-1.5 text-xs">
+        <UIcon name="i-lucide-network" class="size-4 shrink-0 text-primary" />
+        <span class="font-medium text-highlighted">Business Center</span>
+        <span class="text-muted">·</span>
+        <span class="min-w-0 truncate text-muted" :title="accountName">{{ accountName }}</span>
+        <UBadge
+          v-if="!loading && !error"
+          color="neutral"
+          variant="subtle"
+          size="sm"
+          class="ms-auto tabular-nums"
         >
-          <!-- badge + name + copy (+ the unknown-parent chooser); subs are indented one level -->
-          <td class="block basis-full border-b border-default py-1 sm:table-cell sm:px-2">
-            <!-- a sub is indented one level; the indent lives on the content, not on the cell padding
-                 (`sm:px-2` of the cell would win over a `pl-*` utility) -->
-            <div class="flex min-w-0 flex-wrap items-center gap-1.5" :class="org.parentOrgId ? 'ps-4' : ''">
-              <UBadge
-                :color="kindColor(org)"
-                variant="subtle"
-                size="sm"
-                class="whitespace-nowrap"
-                :title="kindTitle(org)"
-                data-testid="ta-org-kind"
-                :data-kind="org.isRoot ? 'root' : org.parentOrgId ? 'sub' : 'unknown'"
-                :data-parent-source="org.parentSource ?? ''"
-              >
-                {{ orgKind(org) }}
-              </UBadge>
-              <span class="inline-flex min-w-0 items-center gap-0.5">
-                <span class="min-w-0 truncate text-highlighted" :title="org.orgId" data-testid="ta-org-name">
-                  {{ orgName(org) }} <span class="font-mono text-xs text-muted">…{{ org.orgId.slice(-4) }}</span>
-                </span>
-                <UButton
-                  icon="i-lucide-copy"
-                  color="neutral"
-                  variant="ghost"
-                  size="xs"
-                  aria-label="Copy BC org id"
-                  data-testid="ta-org-copy"
-                  :data-org-id="org.orgId"
-                  @click="emit('copy', org)"
+          {{ orgs.length }} orgs
+        </UBadge>
+      </div>
+
+      <div
+        v-if="loading"
+        class="flex flex-col gap-2 p-3"
+        data-testid="ta-org-loading"
+        :data-id="account.id"
+      >
+        <USkeleton class="h-6 w-full" />
+        <USkeleton class="h-6 w-full" />
+      </div>
+
+      <UAlert
+        v-else-if="error"
+        color="error"
+        variant="soft"
+        icon="i-lucide-triangle-alert"
+        title="โหลด Business Center orgs ไม่สำเร็จ"
+        :description="error"
+        class="rounded-none"
+        data-testid="ta-org-error"
+        :data-id="account.id"
+      >
+        <template #actions>
+          <UButton
+            label="Retry"
+            icon="i-lucide-refresh-cw"
+            color="error"
+            size="xs"
+            data-testid="ta-org-retry"
+            :data-id="account.id"
+            @click="emit('retry')"
+          />
+        </template>
+      </UAlert>
+
+      <p
+        v-else-if="orgs.length === 0"
+        class="px-3 py-3 text-sm text-muted"
+        data-testid="ta-org-empty"
+        :data-id="account.id"
+      >
+        ยังไม่เคย Sync
+      </p>
+
+      <table
+        v-else
+        class="block w-full border-separate border-spacing-0 text-sm sm:table"
+        data-testid="ta-orgs"
+        :data-id="account.id"
+      >
+        <!-- column captions — `<td>`s on purpose, see the file header (`thead th` is how the specs index the account table) -->
+        <thead class="hidden sm:table-header-group">
+          <tr class="text-xs text-muted">
+            <td :class="CELL" class="border-b border-default py-1.5 font-medium">
+              Org
+            </td>
+            <td :class="CELL" class="border-b border-default py-1.5 font-medium">
+              Advertisers
+            </td>
+            <td :class="CELL" class="border-b border-default py-1.5 font-medium">
+              Synced
+            </td>
+            <td :class="CELL" class="border-b border-default py-1.5" />
+          </tr>
+        </thead>
+        <tbody class="block sm:table-row-group">
+          <tr
+            v-for="org in orgs"
+            :key="org.orgId"
+            class="group flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-default px-3 py-2 transition-colors last:border-b-0 hover:bg-elevated/60 sm:table-row sm:border-b-0 sm:px-0 sm:py-0 [&:last-child>td]:border-b-0"
+            :class="org.missingSince ? 'opacity-60' : ''"
+            :title="org.missingSince ? missingTitle(org) : undefined"
+            data-testid="ta-org-row"
+            :data-org-id="org.orgId"
+            :data-missing="org.missingSince ? '1' : '0'"
+            :data-root="org.isRoot ? '1' : '0'"
+          >
+            <!-- tree: connector + badge + name + copy (+ the unknown-parent chooser); children are indented one level -->
+            <td :class="CELL" class="basis-full py-1 sm:border-b sm:border-default sm:py-2">
+              <div class="flex min-w-0 items-start gap-2">
+                <!-- the indent lives on the content, not on the cell padding (`sm:px-3` of the cell would win over `pl-*`) -->
+                <UIcon
+                  v-if="isChild(org)"
+                  name="i-lucide-corner-down-right"
+                  class="ms-1 mt-1 size-3.5 shrink-0 text-dimmed"
+                  aria-hidden="true"
                 />
-              </span>
-              <UBadge
-                v-if="org.missingSince"
+                <UIcon
+                  v-else
+                  name="i-lucide-landmark"
+                  class="mt-1 size-3.5 shrink-0 text-primary"
+                  aria-hidden="true"
+                />
+                <div class="flex min-w-0 flex-col gap-0.5">
+                  <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span class="inline-flex min-w-0 items-center gap-0.5">
+                      <span
+                        class="min-w-0 truncate"
+                        :class="org.isRoot ? 'font-medium text-highlighted' : 'text-highlighted'"
+                        :title="org.orgId"
+                        data-testid="ta-org-name"
+                      >
+                        {{ orgName(org) }} <span class="font-mono text-xs text-muted">…{{ org.orgId.slice(-4) }}</span>
+                      </span>
+                      <UButton
+                        icon="i-lucide-copy"
+                        color="neutral"
+                        variant="ghost"
+                        size="xs"
+                        class="opacity-60 group-hover:opacity-100"
+                        aria-label="Copy BC org id"
+                        data-testid="ta-org-copy"
+                        :data-org-id="org.orgId"
+                        @click="emit('copy', org)"
+                      />
+                    </span>
+                    <UBadge
+                      :color="kindColor(org)"
+                      variant="subtle"
+                      size="sm"
+                      class="whitespace-nowrap"
+                      :title="kindTitle(org)"
+                      data-testid="ta-org-kind"
+                      :data-kind="org.isRoot ? 'root' : org.parentOrgId ? 'sub' : 'unknown'"
+                      :data-parent-source="org.parentSource ?? ''"
+                    >
+                      {{ orgKind(org) }}
+                    </UBadge>
+                    <UBadge
+                      v-if="org.missingSince"
+                      color="neutral"
+                      variant="outline"
+                      size="sm"
+                      icon="i-lucide-eye-off"
+                      class="whitespace-nowrap"
+                      :title="missingTitle(org)"
+                      data-testid="ta-org-missing"
+                    >
+                      หาย
+                    </UBadge>
+                  </div>
+
+                  <!-- TASK-bc-adv-create — live state of this org's create job, under its name -->
+                  <div
+                    v-if="isAdvCreatePending(org)"
+                    class="flex items-center gap-1 whitespace-nowrap text-xs text-muted"
+                    :data-testid="`ta-adv-create-pending-${org.orgId}`"
+                    :data-org-id="org.orgId"
+                  >
+                    <UIcon name="i-lucide-loader-circle" class="size-3.5 shrink-0 animate-spin text-primary" />
+                    กำลังสร้างบัญชีโฆษณา…
+                  </div>
+                  <UTooltip v-else-if="advCreateFailedText(org)" :text="advCreateFailedText(org) ?? ''">
+                    <UBadge
+                      color="error"
+                      variant="subtle"
+                      size="sm"
+                      icon="i-lucide-triangle-alert"
+                      class="max-w-48 truncate whitespace-nowrap"
+                      :title="advCreateFailedText(org) ?? undefined"
+                      :data-testid="`ta-adv-create-failed-${org.orgId}`"
+                      :data-org-id="org.orgId"
+                    >
+                      สร้างบัญชีโฆษณาไม่สำเร็จ
+                    </UBadge>
+                  </UTooltip>
+
+                  <div v-if="needsParent(org)" class="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <USelect
+                      :items="parentItems()"
+                      :model-value="UNSET"
+                      :loading="parentBusy === org.orgId"
+                      :disabled="parentBusy === org.orgId"
+                      placeholder="เลือก org แม่"
+                      size="xs"
+                      class="min-w-40"
+                      aria-label="org แม่"
+                      data-testid="ta-org-parent-select"
+                      :data-org-id="org.orgId"
+                      @update:model-value="(value: string) => onParentChange(org, value)"
+                    />
+                    <span
+                      v-if="parentErrors?.[org.orgId]"
+                      class="text-xs text-error"
+                      data-testid="ta-org-parent-error"
+                      :data-org-id="org.orgId"
+                    >
+                      {{ parentErrors[org.orgId] }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </td>
+
+            <!-- advertisers of this org -->
+            <td :class="CELL" class="py-1 whitespace-nowrap sm:border-b sm:border-default sm:py-2">
+              <UButton
+                :label="String(org.advertiserCount)"
+                icon="i-lucide-building-2"
                 color="neutral"
-                variant="outline"
-                size="sm"
-                icon="i-lucide-eye-off"
-                class="whitespace-nowrap"
-                :title="missingTitle(org)"
-                data-testid="ta-org-missing"
-              >
-                หาย
-              </UBadge>
-            </div>
-
-            <!-- TASK-bc-adv-create — live state of this org's create job, under its name -->
-            <div
-              v-if="isAdvCreatePending(org)"
-              class="mt-0.5 flex items-center gap-1 whitespace-nowrap text-xs text-muted"
-              :data-testid="`ta-adv-create-pending-${org.orgId}`"
-              :data-org-id="org.orgId"
-            >
-              <UIcon name="i-lucide-loader-circle" class="size-3.5 shrink-0 animate-spin text-primary" />
-              กำลังสร้างบัญชีโฆษณา…
-            </div>
-            <UTooltip v-else-if="advCreateFailedText(org)" :text="advCreateFailedText(org) ?? ''">
-              <UBadge
-                color="error"
-                variant="subtle"
-                size="sm"
-                icon="i-lucide-triangle-alert"
-                class="mt-0.5 max-w-48 truncate whitespace-nowrap"
-                :title="advCreateFailedText(org) ?? undefined"
-                :data-testid="`ta-adv-create-failed-${org.orgId}`"
-                :data-org-id="org.orgId"
-              >
-                สร้างบัญชีโฆษณาไม่สำเร็จ
-              </UBadge>
-            </UTooltip>
-
-            <div v-if="needsParent(org)" class="mt-1 flex flex-wrap items-center gap-1.5">
-              <USelect
-                :items="parentItems()"
-                :model-value="UNSET"
-                :loading="parentBusy === org.orgId"
-                :disabled="parentBusy === org.orgId"
-                placeholder="เลือก org แม่"
+                variant="ghost"
                 size="xs"
-                class="min-w-40"
-                aria-label="org แม่"
-                data-testid="ta-org-parent-select"
+                class="font-medium tabular-nums"
+                :aria-label="`${org.advertiserCount} advertisers — open the list`"
+                data-testid="ta-org-adv-count"
                 :data-org-id="org.orgId"
-                @update:model-value="(value: string) => onParentChange(org, value)"
+                :data-count="org.advertiserCount"
+                @click="emit('advertisers', org)"
               />
-              <span
-                v-if="parentErrors?.[org.orgId]"
-                class="text-xs text-error"
-                data-testid="ta-org-parent-error"
-                :data-org-id="org.orgId"
-              >
-                {{ parentErrors[org.orgId] }}
-              </span>
-            </div>
-          </td>
+            </td>
 
-          <!-- advertisers of this org -->
-          <td class="block border-b border-default py-1 sm:table-cell sm:px-2">
-            <UButton
-              :label="String(org.advertiserCount)"
-              icon="i-lucide-building-2"
-              color="neutral"
-              variant="ghost"
-              size="xs"
-              class="font-medium tabular-nums"
-              :aria-label="`${org.advertiserCount} advertisers — open the list`"
-              data-testid="ta-org-adv-count"
-              :data-org-id="org.orgId"
-              :data-count="org.advertiserCount"
-              @click="emit('advertisers', org)"
-            />
-          </td>
-
-          <!-- last sync of this org + its error -->
-          <td class="block border-b border-default py-1 sm:table-cell sm:px-2">
-            <span class="flex flex-wrap items-center gap-1">
-              <span
-                class="whitespace-nowrap text-xs text-muted"
-                :title="org.lastDiscoverAt ?? undefined"
-                data-testid="ta-org-synced"
-                :data-at="org.lastDiscoverAt ?? ''"
-              >
-                {{ syncedText(org) }}
-              </span>
-              <UTooltip v-if="org.lastDiscoverError" :text="discoverErrorText(org.lastDiscoverError)">
-                <UBadge
-                  color="error"
-                  variant="subtle"
-                  size="sm"
-                  icon="i-lucide-triangle-alert"
-                  class="whitespace-nowrap"
-                  :title="discoverErrorText(org.lastDiscoverError)"
-                  data-testid="ta-org-error-chip"
-                  :data-error="org.lastDiscoverError"
+            <!-- last sync of this org + its error -->
+            <td :class="CELL" class="py-1 sm:border-b sm:border-default sm:py-2">
+              <span class="flex flex-wrap items-center gap-1">
+                <span
+                  class="whitespace-nowrap text-xs text-muted"
+                  :title="org.lastDiscoverAt ?? undefined"
+                  data-testid="ta-org-synced"
+                  :data-at="org.lastDiscoverAt ?? ''"
                 >
-                  {{ discoverErrorShort(org.lastDiscoverError) }}
-                </UBadge>
-              </UTooltip>
-            </span>
-          </td>
+                  {{ syncedText(org) }}
+                </span>
+                <UTooltip v-if="org.lastDiscoverError" :text="discoverErrorText(org.lastDiscoverError)">
+                  <UBadge
+                    color="error"
+                    variant="subtle"
+                    size="sm"
+                    icon="i-lucide-triangle-alert"
+                    class="whitespace-nowrap"
+                    :title="discoverErrorText(org.lastDiscoverError)"
+                    data-testid="ta-org-error-chip"
+                    :data-error="org.lastDiscoverError"
+                  >
+                    {{ discoverErrorShort(org.lastDiscoverError) }}
+                  </UBadge>
+                </UTooltip>
+              </span>
+            </td>
 
-          <!-- Sync this org only · create an advertiser under this org -->
-          <td class="block border-b border-default py-1 text-right sm:table-cell sm:px-2">
-            <span class="inline-flex items-center gap-1">
-              <UTooltip :text="syncBlocked ?? 'Sync advertisers ของ org นี้'">
-                <span class="inline-flex">
-                  <UButton
-                    :label="isSyncing(org) ? 'Syncing…' : 'Sync'"
-                    icon="i-lucide-refresh-cw"
-                    color="neutral"
-                    variant="outline"
-                    size="xs"
-                    :disabled="!!syncBlocked"
-                    :loading="syncStarting === org.orgId"
-                    data-testid="ta-org-sync"
-                    :data-org-id="org.orgId"
-                    @click="emit('sync', org)"
-                  />
-                </span>
-              </UTooltip>
-              <!-- icon-only: a label here would widen every org row (the account table already scrolls) -->
-              <UTooltip v-if="canOfferAdvCreate(org)" :text="advCreateReason(org) ?? 'สร้างบัญชีโฆษณา'">
-                <span class="inline-flex">
-                  <UButton
-                    icon="i-lucide-plus"
-                    color="neutral"
-                    variant="outline"
-                    size="xs"
-                    :disabled="!!advCreateReason(org)"
-                    :loading="advCreateAsking === org.orgId"
-                    aria-label="สร้างบัญชีโฆษณา"
-                    :data-testid="`ta-adv-create-${org.orgId}`"
-                    :data-org-id="org.orgId"
-                    @click="emit('adv-create', org)"
-                  />
-                </span>
-              </UTooltip>
-            </span>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+            <!-- Sync this org only · create an advertiser under this org -->
+            <td :class="CELL" class="ms-auto py-1 text-right whitespace-nowrap sm:ms-0 sm:border-b sm:border-default sm:py-2">
+              <span class="inline-flex items-center gap-1">
+                <UTooltip :text="syncBlocked ?? 'Sync advertisers ของ org นี้'">
+                  <span class="inline-flex">
+                    <UButton
+                      :label="isSyncing(org) ? 'Syncing…' : 'Sync'"
+                      icon="i-lucide-refresh-cw"
+                      color="neutral"
+                      variant="outline"
+                      size="xs"
+                      :disabled="!!syncBlocked"
+                      :loading="syncStarting === org.orgId"
+                      data-testid="ta-org-sync"
+                      :data-org-id="org.orgId"
+                      @click="emit('sync', org)"
+                    />
+                  </span>
+                </UTooltip>
+                <!-- icon-only: a label here would widen every org row (the account table already scrolls) -->
+                <UTooltip v-if="canOfferAdvCreate(org)" :text="advCreateReason(org) ?? 'สร้างบัญชีโฆษณา'">
+                  <span class="inline-flex">
+                    <UButton
+                      icon="i-lucide-plus"
+                      color="neutral"
+                      variant="outline"
+                      size="xs"
+                      :disabled="!!advCreateReason(org)"
+                      :loading="advCreateAsking === org.orgId"
+                      aria-label="สร้างบัญชีโฆษณา"
+                      :data-testid="`ta-adv-create-${org.orgId}`"
+                      :data-org-id="org.orgId"
+                      @click="emit('adv-create', org)"
+                    />
+                  </span>
+                </UTooltip>
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>

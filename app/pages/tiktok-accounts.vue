@@ -128,6 +128,18 @@
  * chains a per-org discover, whose poll re-reads the drill-down when it ends), `failed`/`cancelled` toasts and
  * leaves `ta-adv-create-failed-<orgId>` (tooltip = `lastLog`) until the next attempt. An account with 0 or 1 org
  * has no drill-down and therefore no button this round.
+ * 2026-10-20 (human request, TASK-ta-org-redesign) — two things, both to make the table narrower and the
+ * drill-down readable:
+ *   · **Label** merged into **Account** (8 columns now). The cell is label (bold, `ta-label`, absent when the
+ *     account has none — no `—` any more), then the login email (`ta-account-email`: small and toned under a
+ *     label, full-size and highlighted when it *is* the row's name) and the provider profile id
+ *     (`ta-account-profile-id`, unchanged). `ta-row` (+ `data-id` / `data-launching`, mirrored onto the `<tr>`)
+ *     is the wrapper of the whole merged cell, so the row locators of every spec still resolve; `ta-account`
+ *     still wraps the email + id lines. There is no "Label" header any more — the FEAT-003/005 specs that
+ *     index it by header text need the harness update listed in the task's handoff.
+ *   · The Business Center drill-down of `TiktokAccountsOrganizationRows` is a titled panel with a tree instead
+ *     of a bare floating table — see that component's header. Nothing changed on this side: same props, same
+ *     events, same `expandedOrgs` model.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -1199,16 +1211,25 @@ function openAdvertisers(account: TikTokAccount, org: BcOrganization | null = nu
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
  * The list is a computed because two cells read `canPay`: the Balance cell's auto-channel chip and the "⋯"
- * menu's cards item must not exist at all for an Admin (FEAT-053 AC-20 / FEAT-051 AC-35). Nine columns since
- * the 2026-10-16 declutter and the Login email + Browser profile merge.
+ * menu's cards item must not exist at all for an Admin (FEAT-053 AC-20 / FEAT-051 AC-35). Eight columns since
+ * the 2026-10-16 declutter, the Login email + Browser profile merge and the 2026-10-20 Label merge.
  */
 const columns = computed<TableColumn<TikTokAccount>[]>(() => [
+  // 2026-10-11 (human request): the "Email password", "Recovery email" and "TikTok password" columns are no
+  // longer rendered in the table — the values stay in the row data and in the edit/add modals.
+  // 2026-10-16 (human request): "Login email" + "Browser profile" merged into one two-line "Account" cell.
+  // 2026-10-20 (human request, TASK-ta-org-redesign): "Label" merged into that cell too — see the file header.
   {
-    accessorKey: 'label',
-    header: 'Label',
+    id: 'account',
+    header: 'Account',
     cell: ({ row }) => {
       const a = row.original
       const launching = a.launchingAds === true
+      // `providerProfileId` is null in two cases, both rendered as `—` with `data-profile-id=""`: no profile at
+      // all (orphan account) and FEAT-024 (the profile row is only reserved while the create job runs, or the
+      // create failed). The profile *name* is deliberately not rendered — the label carries the human-readable
+      // name.
+      const pid = a.browserProfile?.providerProfileId ?? null
       return h('div', {
         'class': 'flex min-w-0 flex-col',
         'data-testid': 'ta-row',
@@ -1217,32 +1238,22 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
         'onVnodeMounted': markRowLaunching(launching),
         'onVnodeUpdated': markRowLaunching(launching)
       }, [
+        // the label is the row's name when there is one; without a label the email takes that place (no `—`)
         a.label
-          ? h('span', { class: 'font-medium text-highlighted' }, a.label)
-          : h('span', { class: 'text-muted' }, '—')
-      ])
-    }
-  },
-  // 2026-10-11 (human request): the "Email password", "Recovery email" and "TikTok password" columns are no
-  // longer rendered in the table — the values stay in the row data and in the edit/add modals.
-  // 2026-10-16 (human request): "Login email" + "Browser profile" merged into this one two-line cell.
-  {
-    id: 'account',
-    header: 'Account',
-    cell: ({ row }) => {
-      // `providerProfileId` is null in two cases, both rendered as `—` with `data-profile-id=""`: no profile at
-      // all (orphan account) and FEAT-024 (the profile row is only reserved while the create job runs, or the
-      // create failed). The profile *name* is deliberately not rendered — the Label column carries the
-      // human-readable name.
-      const pid = row.original.browserProfile?.providerProfileId ?? null
-      return h('div', { 'class': 'flex min-w-0 flex-col', 'data-testid': 'ta-account' }, [
-        h('span', { 'class': 'whitespace-nowrap text-highlighted', 'data-testid': 'ta-account-email' }, row.original.loginEmail),
-        h('span', {
-          'class': 'font-mono text-xs text-muted',
-          'data-testid': 'ta-account-profile-id',
-          'data-profile-id': pid ?? '',
-          'title': pid ?? undefined
-        }, pid ?? '—')
+          ? h('span', { 'class': 'truncate font-medium text-highlighted', 'title': a.label, 'data-testid': 'ta-label' }, a.label)
+          : null,
+        h('div', { 'class': 'flex min-w-0 flex-col', 'data-testid': 'ta-account' }, [
+          h('span', {
+            'class': a.label ? 'whitespace-nowrap text-xs text-toned' : 'whitespace-nowrap text-highlighted',
+            'data-testid': 'ta-account-email'
+          }, a.loginEmail),
+          h('span', {
+            'class': 'font-mono text-xs text-muted',
+            'data-testid': 'ta-account-profile-id',
+            'data-profile-id': pid ?? '',
+            'title': pid ?? undefined
+          }, pid ?? '—')
+        ])
       ])
     }
   },
