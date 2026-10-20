@@ -14,7 +14,9 @@
  *
  * TASK-campaign-delete-ui — the campaign tab can also **delete** a campaign on TikTok
  * (`POST /ads-monitor/delete-campaign`, confirm modal `am-delete-modal`); the `ads` rows are never deleted, so
- * a deleted campaign keeps showing up with `status.key = 'deleted'` and is filterable through `status=deleted`.
+ * a deleted campaign keeps its row with `status.key = 'deleted'`. Since TASK-monitor-hide-deleted (2026-10-21) the
+ * API's `status=all` (default) **excludes** deleted rows, so they are only visible through `status=deleted` — the
+ * "ทั้งหมด" option is labelled "ทั้งหมด (ยกเว้นลบแล้ว)" to say so.
  *
  * Filter options come from the same two side endpoints `/reports/banned` uses (`GET /tiktok-accounts` once,
  * `GET /advertisers?limit=100[&tiktokAccountId]` on mount and per account change, failures swallowed — they
@@ -53,7 +55,8 @@ const TABS: { value: MonitorLevel, label: string, path: string }[] = [
 ]
 
 const STATUS_ITEMS: { label: string, value: MonitorStatusFilter }[] = [
-  { label: 'ทั้งหมด', value: 'all' },
+  // TASK-monitor-hide-deleted (2026-10-21) — the API's `all` excludes `deleted`; the label says so
+  { label: 'ทั้งหมด (ยกเว้นลบแล้ว)', value: 'all' },
   { label: 'ใช้งานอยู่', value: 'delivering' },
   { label: 'ไม่ส่ง', value: 'notDelivering' },
   { label: 'หยุดชั่วคราว', value: 'paused' },
