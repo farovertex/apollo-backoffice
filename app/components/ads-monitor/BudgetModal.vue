@@ -60,7 +60,8 @@ const title = computed(() => {
   const adv = advertiser.value
   if (!adv) return 'ตั้งงบ advertiser'
   const label = adv.name || adv.tiktokAdvertiserId
-  return `ตั้งงบ advertiser ${label} (…${last4(adv.tiktokAdvertiserId)})`
+  // last4() already supplies its own leading "…" — a literal one here would double it up (BUG found by qa-author)
+  return `ตั้งงบ advertiser ${label} (${last4(adv.tiktokAdvertiserId)})`
 })
 
 function amountText(value: number | null): string {
