@@ -646,8 +646,9 @@ function onDeleted() {
                   <span data-testid="agt-schedule">{{ scheduleCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-3 py-2">
-                  <!-- FEAT-061 — the v3 bid strategy (+ target CPA); `—` for a manual row -->
-                  <span class="whitespace-nowrap" data-testid="agt-goal">{{ bidCell(template) }}</span>
+                  <!-- FEAT-061 — the v3 bid strategy (+ target CPA); `—` for a manual row. The costCap label is
+                       long, so the cell wraps instead of pushing the table wider (title = the full text) -->
+                  <span class="line-clamp-2 max-w-40" :title="bidCell(template)" data-testid="agt-goal">{{ bidCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-2 py-2">
                   <span class="line-clamp-2 max-w-32" :title="targetingCell(template)" data-testid="agt-targeting">{{ targetingCell(template) }}</span>

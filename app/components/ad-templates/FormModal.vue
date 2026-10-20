@@ -519,7 +519,6 @@ const buttonImageSectionError = ref<string | null>(null)
 
 function clearServerErrors() {
   serverErrors.value = {}
-  adTextsError.value = null
   utmSectionError.value = null
   addOnImageServerError.value = null
   addOnSectionError.value = null
@@ -1020,6 +1019,10 @@ function syncExpanded() {
 function resetForm() {
   Object.assign(state, stateFrom(editing.value))
   resetCodeMode()
+  // FEAT-061 — not part of `clearServerErrors()`: that one runs on **every** state change (the deep watcher),
+  // which would wipe the message of a rejected tag before it could be read (the `tagErrors` precedent of the
+  // ad-group form). `onAdTextsUpdate` clears it itself as soon as a change is fully accepted.
+  adTextsError.value = null
   utmPaste.value = ''
   addOnPickerOpen.value = false
   buttonImagePickerOpen.value = false
