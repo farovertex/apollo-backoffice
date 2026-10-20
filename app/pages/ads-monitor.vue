@@ -24,12 +24,16 @@ import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
 import type {
   AdsMonitorResponse,
+  BudgetPendingView,
   DeleteAccepted,
   MonitorLevel,
   MonitorLinkedFilter,
   MonitorRange,
   MonitorRow,
   MonitorStatusFilter,
+  SetBudgetAccepted,
+  SetBudgetBody,
+  SetBudgetUnchanged,
   ToggleAccepted,
   ToggleTarget
 } from '#shared/types/ads-monitor'
@@ -140,6 +144,16 @@ let session = 0
  */
 type RowOverride = Partial<Pick<MonitorRow, 'optPending' | 'optError' | 'deletePending' | 'deleteError'>>
 const overrides = ref<Record<string, RowOverride>>({})
+
+/**
+ * FEAT-060 — the budget is per **advertiser** (spec A1), so its optimistic state is a *second* override map,
+ * keyed by `advertiser.id` rather than by row, merged into every row of that advertiser's `advertiserBudget`
+ * below. Dropped on every `load()` exactly like `overrides` — the API's own `pending`/`error` on the next
+ * response is then the truth again.
+ */
+type AdvertiserBudgetOverride = { pending: BudgetPendingView | null, error: string | null }
+const advertiserOverrides = ref<Record<string, AdvertiserBudgetOverride>>({})
+
 /** guards a double click from sending a second POST before the first one answered */
 const inFlight = new Set<string>()
 
@@ -150,7 +164,13 @@ function rowKey(row: Pick<MonitorRow, 'level' | 'id'>): string {
 const rows = computed<MonitorRow[]>(() =>
   (data.value?.rows ?? []).map((row) => {
     const override = overrides.value[rowKey(row)]
-    return override ? { ...row, ...override } : row
+    const next = override ? { ...row, ...override } : row
+    const budgetOverride = advertiserOverrides.value[row.advertiser.id]
+    if (!budgetOverride || !next.advertiserBudget) return next
+    return {
+      ...next,
+      advertiserBudget: { ...next.advertiserBudget, pending: budgetOverride.pending, error: budgetOverride.error }
+    }
   })
 )
 
@@ -223,6 +243,7 @@ async function load() {
     if (s !== session) return
     data.value = res
     overrides.value = {}
+    advertiserOverrides.value = {}
     rememberFromRows(res.rows)
     loaded.value = true
     forbidden.value = null
@@ -371,6 +392,63 @@ async function confirmDelete(row: MonitorRow) {
     }
   } finally {
     deleting.value = false
+    inFlight.delete(key)
+  }
+}
+
+// ── budget (FEAT-060 · `POST /advertisers/:advertiserId/budget`) ───────────────────────────────────────────────────
+/**
+ * Campaign tab only, opened from `AdsMonitorBudgetCell`'s wallet/retry button. The budget is per
+ * **advertiser** (spec A1), so the in-flight guard and the optimistic state are keyed by `advertiser.id`,
+ * never by row (contrast `toggle()` / `confirmDelete()`): **202** → close the modal and write
+ * `advertiserOverrides[advertiserId]` from the returned `budgetPending`, so every row of that advertiser
+ * renders `am-budget-pending-<id>` at once; **200 `unchanged`** (defensive — the modal already disables Save
+ * on this) → close + a neutral toast, no override written; **409** → close, a `ทำไม่ได้` toast with the API's
+ * sentence, then exactly one re-read of this tab, exactly like `toggle()` / `confirmDelete()`; any other
+ * error → an error toast and the modal stays open with the entered values (only `budgetSaving` resets).
+ */
+const budgetOpen = ref(false)
+const budgetRow = ref<MonitorRow | null>(null)
+const budgetSaving = ref(false)
+
+function askBudget(row: MonitorRow) {
+  budgetRow.value = row
+  budgetOpen.value = true
+}
+
+async function confirmBudget(row: MonitorRow, body: SetBudgetBody) {
+  const advertiserId = row.advertiser.id
+  const key = `budget:${advertiserId}`
+  if (inFlight.has(key)) return
+  inFlight.add(key)
+  budgetSaving.value = true
+  try {
+    const res = await api<SetBudgetAccepted | SetBudgetUnchanged>(`/advertisers/${advertiserId}/budget`, {
+      retry: 0,
+      method: 'POST',
+      body
+    })
+    budgetOpen.value = false
+    if ('unchanged' in res) {
+      toast.add({ title: 'ค่าเดิม', description: 'ไม่ได้ส่ง job', icon: 'i-lucide-circle-check', color: 'neutral' })
+    } else {
+      advertiserOverrides.value = {
+        ...advertiserOverrides.value,
+        [advertiserId]: { pending: res.budgetPending, error: null }
+      }
+    }
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const message = err.data?.error ?? err.message ?? 'ตั้งงบไม่สำเร็จ'
+    if ((err.response?.status ?? err.statusCode) === 409) {
+      budgetOpen.value = false
+      toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+      await load()
+    } else {
+      toast.add({ title: 'ตั้งงบไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
+    }
+  } finally {
+    budgetSaving.value = false
     inFlight.delete(key)
   }
 }
@@ -693,6 +771,7 @@ const intervalText = computed(() => {
               @toggle="toggle"
               @show-covers="showCovers"
               @delete="askDelete"
+              @budget="askBudget"
             />
 
             <div class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted">
@@ -720,5 +799,12 @@ const intervalText = computed(() => {
     :row="deleteRow"
     :deleting="deleting"
     @confirm="confirmDelete"
+  />
+
+  <AdsMonitorBudgetModal
+    v-model:open="budgetOpen"
+    :row="budgetRow"
+    :saving="budgetSaving"
+    @confirm="confirmBudget"
   />
 </template>
