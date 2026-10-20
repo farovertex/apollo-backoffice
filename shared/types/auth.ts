@@ -35,10 +35,14 @@ export interface AdminPreferencesBody {
   topupQrSound?: boolean
 }
 
-/** apollo-api error body: `{ error }`, plus `issues` for zod 400s */
+/**
+ * apollo-api error body: `{ error }`, plus `issues` for zod 400s and an optional machine-readable `reason`
+ * code on the other statuses (FEAT-061 api-contract §Conventions, e.g. 409 `alreadySmartPlus`).
+ */
 export interface ApiErrorBody {
   error: string
   issues?: { path: string, message: string }[]
+  reason?: string
 }
 
 /** GET /api/auth/me → 200 */

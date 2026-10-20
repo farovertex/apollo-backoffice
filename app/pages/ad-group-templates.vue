@@ -9,9 +9,18 @@
  * `GET /backend/ad-group-templates/options` is issued **once per page lifetime**; the form modal receives the
  * result as a prop and never re-fetches it. Every enum is rendered with the Thai label from that response —
  * the BO hard-codes no enum label.
- * FEAT-011 adds two read-only columns: **Targeting** (the saved audience name, or `Custom` when the template
- * uses its own targeting) and **Catalog** (the `v<N>` part of `catalogVersion`, `–` when the document predates
- * FEAT-011), with an `Older catalog` badge whenever the row's version differs from the one `/options` announces.
+ * FEAT-011 adds two read-only columns: **Targeting** and **Catalog** (the `v<N>` part of `catalogVersion`, `–`
+ * when the document predates FEAT-011).
+ *
+ * **FEAT-061** (api-contract v1 §1.2, §2.1, §2.2 · spec AC-18, AC-19): every row carries `kind`
+ * (`smartPlus` = authored against the version `/options` serves, `manual` = anything older, `null` included).
+ * A **manual** row shows the badge `agt-kind-manual` in the Catalog cell instead of the stale badge, cannot be
+ * edited any more (the API refuses the PATCH) and offers **`agt-migrate`** ("ปรับเป็น Smart+") in place of
+ * `agt-edit`: the same form modal in `mode="migrate"`, which reads `GET /:id/migration` and saves through
+ * `POST /:id/migrate`. The columns that used to read the removed v2 keys render both shapes — the Bid column
+ * shows the v3 bid strategy (+ target CPA) and `—` for a manual row, Targeting says `Custom` unless an old row
+ * still names a saved audience. Duplicate and Delete are unchanged (a duplicate of a manual row is created as
+ * Smart+ — AS-6, handled inside the modal).
  * A 403 on the list (a Payment-only admin that typed the URL) renders `agt-forbidden` with the API text; no
  * redirect, the sidebar item is hidden for that admin anyway (display-only, the API is the authority).
  * The table is plain markup (not `UTable`) so every `<tr>` can carry `data-id`.
@@ -41,6 +50,7 @@ import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type {
   AdGroupTemplate,
+  AdGroupTemplateKind,
   AdGroupTemplateOptions,
   AdGroupTemplatesResponse,
   Creator,
@@ -236,9 +246,9 @@ function shortDateTime(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** `<placement label> · <optimizationEvent label>` */
+/** `<placement label>` — FEAT-061 dropped `optimizationEvent` from the shape */
 function placementCell(template: AdGroupTemplate): string {
-  return `${labelOf(options.value?.placement, template.config.placement)} · ${labelOf(options.value?.optimizationEvent, template.config.optimizationEvent)}`
+  return labelOf(options.value?.placement, template.config?.placement)
 }
 
 /** `<amount 2 decimals> <currency label> / <budgetType label>` — e.g. `300.00 THB / รายวัน` */
@@ -259,10 +269,43 @@ function scheduleCell(template: AdGroupTemplate): string {
   return `${mode} · ${start} → ${shortDateTime(schedule.endTime)}`
 }
 
-/** Targeting cell: the saved audience name when one is named, else the English word `Custom` (A8) */
+/**
+ * Targeting cell: the English word `Custom` for a v3 row. A **manual** row may still store the v2 key
+ * `savedAudience` — then its name is shown, so an old row keeps reading the way it did (FEAT-011 A8).
+ */
 function targetingCell(template: AdGroupTemplate): string {
-  const saved = template.config?.savedAudience
-  return saved?.mode === 'named' ? saved.name : 'Custom'
+  const saved = (template.config as unknown as Record<string, unknown> | undefined)?.savedAudience as
+    { mode?: string, name?: string } | undefined
+  return saved?.mode === 'named' && saved.name ? saved.name : 'Custom'
+}
+
+/**
+ * FEAT-061 — the row's kind: the API's own `kind` when it serves one, else the FEAT-011 catalog comparison
+ * (an API that predates the feature). `null` while `/options` has not answered — never cry wolf.
+ */
+function kindOf(template: AdGroupTemplate): AdGroupTemplateKind | null {
+  if (template.kind) return template.kind
+  const current = options.value?.catalogVersion
+  if (!current) return null
+  return template.catalogVersion === current ? 'smartPlus' : 'manual'
+}
+
+function isManual(template: AdGroupTemplate): boolean {
+  return kindOf(template) === 'manual'
+}
+
+/**
+ * Bid cell (FEAT-061): the bid-strategy label of `config.campaign`, plus the target CPA for `costCap`.
+ * A manual row has no campaign section at all → `—`.
+ */
+function bidCell(template: AdGroupTemplate): string {
+  const campaign = template.config?.campaign
+  if (!campaign?.bidStrategy) return '—'
+  const label = labelOf(options.value?.bidStrategy, campaign.bidStrategy)
+  const targetCpa = template.config?.targetCpa
+  return campaign.bidStrategy === 'costCap' && Number.isFinite(targetCpa)
+    ? `${label} · ${(targetCpa as number).toFixed(2)}`
+    : label
 }
 
 /** Catalog cell: the part after `/` of `catalogVersion` (`v1`), `–` for a document written before FEAT-011 */
@@ -270,14 +313,6 @@ function catalogCell(template: AdGroupTemplate): string {
   const version = template.catalogVersion
   if (!version) return '–'
   return version.split('/')[1] ?? version
-}
-
-/** the row was authored against another catalog version than the one the API serves now (null included) */
-function isStaleCatalog(template: AdGroupTemplate): boolean {
-  const current = options.value?.catalogVersion
-  // without `/options` there is nothing to compare against — never cry wolf
-  if (!current) return false
-  return template.catalogVersion !== current
 }
 
 // row actions show their label only from `2xl` (1536 px); below that they are icon-only with a tooltip (FEAT-003)
@@ -289,18 +324,22 @@ const formOpen = ref(false)
 const formTarget = ref<AdGroupTemplate | null>(null)
 /** FEAT-057 — the row a Duplicate click starts from; `formTarget` stays null (the modal creates) */
 const duplicateTarget = ref<AdGroupTemplate | null>(null)
+/** FEAT-061 — `'migrate'` while the modal converts the manual row in `formTarget` */
+const formMode = ref<'form' | 'migrate'>('form')
 const deleteOpen = ref(false)
 const deleteTarget = ref<AdGroupTemplate | null>(null)
 
 function openCreate() {
   formTarget.value = null
   duplicateTarget.value = null
+  formMode.value = 'form'
   formOpen.value = true
 }
 
 function openEdit(template: AdGroupTemplate) {
   formTarget.value = template
   duplicateTarget.value = null
+  formMode.value = 'form'
   formOpen.value = true
 }
 
@@ -308,6 +347,18 @@ function openEdit(template: AdGroupTemplate) {
 function openDuplicate(template: AdGroupTemplate) {
   formTarget.value = null
   duplicateTarget.value = template
+  formMode.value = 'form'
+  formOpen.value = true
+}
+
+/**
+ * FEAT-061 — the same modal in migrate mode: the manual row's `/migration` draft, `POST /:id/migrate`.
+ * `updated` refreshes the list, so the row re-renders as Smart+ without a page reload.
+ */
+function openMigrate(template: AdGroupTemplate) {
+  formTarget.value = template
+  duplicateTarget.value = null
+  formMode.value = 'migrate'
   formOpen.value = true
 }
 
@@ -529,7 +580,7 @@ function onDeleted() {
                   Name
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                  Placement / event
+                  Placement
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Budget
@@ -538,7 +589,7 @@ function onDeleted() {
                   Schedule
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                  Goal
+                  Bid
                 </th>
                 <th class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Targeting
@@ -595,7 +646,8 @@ function onDeleted() {
                   <span data-testid="agt-schedule">{{ scheduleCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-3 py-2">
-                  <span class="whitespace-nowrap" data-testid="agt-goal">{{ labelOf(options?.optimizationGoal, template.config.optimizationGoal) }}</span>
+                  <!-- FEAT-061 — the v3 bid strategy (+ target CPA); `—` for a manual row -->
+                  <span class="whitespace-nowrap" data-testid="agt-goal">{{ bidCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-2 py-2">
                   <span class="line-clamp-2 max-w-32" :title="targetingCell(template)" data-testid="agt-targeting">{{ targetingCell(template) }}</span>
@@ -604,16 +656,17 @@ function onDeleted() {
                   <!-- stacked: the badge under the version keeps the two new columns inside the 1440 table width -->
                   <div class="flex flex-col items-start gap-1">
                     <span class="whitespace-nowrap" data-testid="agt-catalog">{{ catalogCell(template) }}</span>
+                    <!-- FEAT-061 — a manual row (any older catalog version, `null` included) says so -->
                     <UBadge
-                      v-if="isStaleCatalog(template)"
+                      v-if="isManual(template)"
                       color="warning"
                       variant="subtle"
                       size="sm"
                       icon="i-lucide-triangle-alert"
                       class="whitespace-nowrap"
-                      data-testid="agt-catalog-stale"
+                      data-testid="agt-kind-manual"
                     >
-                      Older catalog
+                      manual
                     </UBadge>
                   </div>
                 </td>
@@ -651,7 +704,22 @@ function onDeleted() {
                       />
                     </UTooltip>
                     <!-- FEAT-057 — only the creator (and GOD) may write: no disabled ghosts for anybody else (A10) -->
-                    <UTooltip v-if="template.canEdit" text="Edit" :disabled="wideActions">
+                    <!-- FEAT-061 — a manual row cannot be edited: the migrate action takes Edit's place -->
+                    <UTooltip v-if="template.canEdit && isManual(template)" text="ปรับเป็น Smart+" :disabled="wideActions">
+                      <UButton
+                        label="ปรับเป็น Smart+"
+                        icon="i-lucide-wand-sparkles"
+                        color="warning"
+                        variant="outline"
+                        size="xs"
+                        :ui="ACTION_LABEL_UI"
+                        :disabled="!options"
+                        aria-label="ปรับเป็น Smart+"
+                        data-testid="agt-migrate"
+                        @click="openMigrate(template)"
+                      />
+                    </UTooltip>
+                    <UTooltip v-else-if="template.canEdit" text="Edit" :disabled="wideActions">
                       <UButton
                         label="Edit"
                         icon="i-lucide-pencil"
@@ -707,6 +775,7 @@ function onDeleted() {
         v-model:open="formOpen"
         :template="formTarget"
         :duplicate-from="duplicateTarget"
+        :mode="formMode"
         :options="options"
         @created="onCreated"
         @updated="onUpdated"
