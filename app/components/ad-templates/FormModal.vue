@@ -108,11 +108,12 @@
  * 2026-10-16): it selects every option `/options` offers, and a second press clears the list again (the field
  * stays required, so an empty list still fails validation).
  *
- * **FEAT-061** (api-contract v1 §1.3 · spec AC-22): the 9th config key `adTexts` (0..`limits.adTextsMax`
- * trimmed, unique, non-empty strings ≤ `limits.textMaxLength`) gets its own collapsible section before Call to
- * action (`adt-sec-adtexts`, tag input `adt-ad-texts`, the API's own Thai messages); it is additive, so a
- * template saved before the feature reads as `[]` and an unrelated save sends no `adTexts` at all (the
- * `utm`/`addOn` precedent). The CTA picker marks every value the **Smart+ ad page** does not offer
+ * **FEAT-061** (api-contract v1 §1.3 · spec AC-22): the 9th config key `adTexts` (trimmed, unique, non-empty
+ * strings ≤ `limits.textMaxLength`) gets its own collapsible section before Call to action (`adt-sec-adtexts`,
+ * tag input `adt-ad-texts`, the API's own Thai messages). **2026-10-21 (human decision):** the form requires
+ * **1..`limits.adTextsMax`** texts — the aio ad page's "ข้อความ (n/5)" block must hold at least one or TikTok
+ * refuses to publish — so a template saved before the feature (reads as `[]`) cannot be saved again until a
+ * text is added; the body always carries `adTexts`. The CTA picker marks every value the **Smart+ ad page** does not offer
  * (`options.smartPlusCtaValues`) with the badge `adt-cta-not-smart` and warns once
  * (`adt-cta-smart-warning`) while such a value is selected — non-blocking, the build would fail at `checking`.
  * Without that options key (an older API) there are no badges and no warning.
@@ -1082,6 +1083,9 @@ const limits = computed<Required<AdTemplateLimits>>(() => ({
  * 400 read the same sentence.
  */
 const AD_TEXT_MESSAGES = {
+  // 2026-10-21 (human decision): the aio ad page needs at least one text in "ข้อความ (n/5)" or TikTok will not
+  // publish — the form requires 1..`adTextsMax` (the API still stores `[]`; the worker then fails at `checking`)
+  required: 'ต้องมีข้อความโฆษณาอย่างน้อย 1 ข้อความ',
   tooMany: (max: number) => `adTexts ได้ไม่เกิน ${max} รายการ`,
   empty: 'ข้อความโฆษณาว่างไม่ได้',
   tooLong: (max: number) => `ข้อความโฆษณายาวเกิน ${max} ตัว`,
@@ -1261,9 +1265,13 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
       })
     }
 
-    // FEAT-061 — the tag input already refuses these; zod is the backstop (`[]` is always valid)
+    // FEAT-061 — the tag input already refuses these; zod is the backstop
+    // 2026-10-21 — `[]` is no longer valid: TikTok needs at least one ad text (1..`adTextsMax`)
     const adTexts = data.config.adTexts
     const adTextsPath = ['config', 'adTexts']
+    if (adTexts.length === 0) {
+      ctx.addIssue({ code: 'custom', path: adTextsPath, message: AD_TEXT_MESSAGES.required })
+    }
     if (adTexts.length > max.adTextsMax) {
       ctx.addIssue({ code: 'custom', path: adTextsPath, message: AD_TEXT_MESSAGES.tooMany(max.adTextsMax) })
     }
@@ -2564,8 +2572,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <UFormField
               label="Ad texts"
               name="config.adTexts"
-              hint="Optional"
-              :help="`สูงสุด ${limits.adTextsMax} ข้อความ · ไม่เกิน ${limits.textMaxLength} ตัวต่อข้อความ`"
+              required
+              :help="`อย่างน้อย 1 · สูงสุด ${limits.adTextsMax} ข้อความ · ไม่เกิน ${limits.textMaxLength} ตัวต่อข้อความ`"
               :error="serverErrors['config.adTexts'] ?? adTextsError ?? undefined"
             >
               <!-- the test id lands on the inner `<input data-slot="input">` (UInputTags has
