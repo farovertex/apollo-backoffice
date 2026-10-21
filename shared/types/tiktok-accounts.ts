@@ -43,12 +43,23 @@
  * nothing of it is stored on the account view (decision D3), the BO reads its state from `latest` only.
  * TASK-bc-adv-create round 2 (brief `.ai/features/_queue/bc-adv-create-ui.prompt.md` "API contract") — the same
  * three-route shape one level down, behind the **per-org** button **สร้างบัญชีโฆษณา** of the FEAT-059 drill-down:
+ * (`JobType` also gained `bcAdvCreate` and `bcTtLink` — `runningJob.type` is the raw job type, so both can
+ * reach the BO now that it starts those jobs itself.)
  * `GET :id/organizations/:orgId/bc-adv-create/suggest` (`BcAdvSuggest`),
  * `POST :id/organizations/:orgId/bc-adv-create` (`BcAdvCreateBody` → 202 `BcAdvCreateAccepted`, 409
  * `BcAdvConflictBody`) and `GET :id/organizations/:orgId/bc-adv-create/latest` (`BcAdvCreateLatestResponse`).
  * The job is `jobs.type = 'bcAdvCreate'` and, unlike the sub one, its state is per **org** — nothing of it is
  * stored on the account or the org view (decision D3); the new advertiser appears as a row through the per-org
  * discover the API chains after a proven create.
+ * TASK-bc-tt-link round 2 (brief `.ai/features/_queue/bc-tt-link-ui.prompt.md` "สัญญา API") — the per-org button
+ * **เพิ่มบัญชี TikTok**: `POST :id/organizations/:orgId/bc-tt-link` (no body → 202 `BcTtLinkAccepted`, 409
+ * `BcTtLinkConflictBody`) issues an invitation **QR** inside the Business Center;
+ * `GET :id/organizations/:orgId/bc-tt-link/latest` (`BcTtLinkLatestResponse`) carries the job + its `qrImage` and
+ * the `linked` rows that appeared after a human scanned it, and
+ * `GET :id/organizations/:orgId/tiktok-accounts?missing=false|all` (`BcTikTokAccountsResponse`) lists the TikTok
+ * accounts (`BcTikTokAccount`, collection `bc_tiktok_accounts`) the BC has linked under that org. The job is
+ * `jobs.type = 'bcTtLink'`; nothing of it is stored on the account or the org view. The second step reuses the
+ * FEAT-059 per-org discover (`POST :id/discover { bcOrgId }`) — the system never links an account by itself.
  */
 
 import type { HumanTaskKind } from './human-tasks'
@@ -137,6 +148,7 @@ export interface OpenHumanTask {
 export type JobType
   = 'sessionCheck' | 'login' | 'discover' | 'build' | 'kpiFetch' | 'statusCheck' | 'topup' | 'provider'
     | 'utmFetch' | 'postInfoWarmup' | 'optToggle' | 'budget' | 'campaignDelete' | 'bcSubCreate'
+    | 'bcAdvCreate' | 'bcTtLink'
 
 /** Job of the account that is `waiting` or `active`, as embedded in the account view. */
 export interface RunningJob {
@@ -492,6 +504,126 @@ export interface BcAdvCreateJob {
 /** TASK-bc-adv-create — `GET …/organizations/:orgId/bc-adv-create/latest` 200 body; `job: null` = never ran. */
 export interface BcAdvCreateLatestResponse {
   job: BcAdvCreateJob | null
+}
+
+/**
+ * TASK-bc-tt-link — why "เพิ่มบัญชี TikTok" (issue a QR under one Business Center org) cannot be ordered right
+ * now. Same shape as `BcAdvConflictReason` and the same exception: `noOrg` is a **404** `{ error: 'ไม่พบ org' }`
+ * on the POST and on `GET …/tiktok-accounts`, never a 409 `reason`, so the key only carries the 404's fallback
+ * text. Checked in this order by the API's `preflight()`: `orgMissing` → `noProfile` → `inactive` → `running` →
+ * `needsHuman`. Human texts: `app/utils/bc-tt-link.ts` (copied from the API's `BC_TT_LINK_CONFLICT`).
+ */
+export type BcTtLinkConflictReason
+  = 'noOrg' | 'orgMissing' | 'noProfile' | 'inactive' | 'running' | 'needsHuman'
+
+/** TASK-bc-tt-link — 202 body of `POST …/organizations/:orgId/bc-tt-link` (no request body at all). */
+export interface BcTtLinkAccepted {
+  jobId: string
+  orgId: string
+}
+
+/** TASK-bc-tt-link — 409 body of that POST: the API's own Thai text plus the machine-readable reason. */
+export interface BcTtLinkConflictBody {
+  error: string
+  reason: BcTtLinkConflictReason
+}
+
+/**
+ * TASK-bc-tt-link — proof of a `bcTtLink` job that reached the QR screen (`jobs.payload.bcTtLink.result`);
+ * `null` while the job is still `waiting` / `active` and on a failure before the QR was visible.
+ * `qrImage` is a `data:image/png;base64,…` URL of the **invitation** QR (public: anybody who scans it links their
+ * TikTok account into this BC — shown to an admin only, never logged, never screenshotted into a report).
+ * `scanned` / `adPostingSelected` are the job's own bookkeeping; `assetsBefore` = how many TikTok accounts the BC
+ * saw **before** the QR was issued.
+ */
+export interface BcTtLinkResult {
+  qrImage: string | null
+  qrText: string | null
+  scanned: boolean
+  adPostingSelected: boolean
+  assetsBefore: number | null
+}
+
+/** TASK-bc-tt-link — status of the `bcTtLink` job (`jobs.status`); the BO polls until a terminal one. */
+export type BcTtLinkJobStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
+
+/**
+ * TASK-bc-tt-link — the latest `bcTtLink` job **of one org** as `GET …/bc-tt-link/latest` returns it (any
+ * status). `error` is a code (`tabMissing` | `addButtonMissing` | `stepStuck` | `qrMissing` |
+ * `permissionNotSelected` | `gate` | `notLoggedIn` | `profile locked` | …) and `lastLog` the Thai line that
+ * explains it (already redacted by the API). `permission` is `adPosting` this round.
+ */
+export interface BcTtLinkJob {
+  id: string
+  status: BcTtLinkJobStatus
+  error: string | null
+  step: string | null
+  orgId: string
+  permission: string
+  result: BcTtLinkResult | null
+  lastLog: string | null
+  createdAt: string
+  finishedAt: string | null
+}
+
+/**
+ * TASK-bc-tt-link — one row of `bc_tiktok_accounts`: a **TikTok account used to post clips / publish ads** that
+ * the Business Center has linked, per org (asset type 8). Not to be confused with `TikTokAccount`, which is the
+ * BC **login** this page lists. Written by discover only, so a row appears after the admin scanned the QR and
+ * somebody pressed Sync. `roles` are TikTok's permission codes (5011 = "แสดงเป็นโฆษณาเท่านั้น") and
+ * `relationStatus` 1 = "เชื่อมโยงอยู่" — texts in `app/utils/bc-tt-link.ts`.
+ */
+export interface BcTikTokAccount {
+  id: string
+  orgId: string
+  assetId: string
+  name: string | null
+  username: string | null
+  avatar: string | null
+  roles: number[]
+  relationStatus: number | null
+  relationType: number | null
+  ownerName: string | null
+  ownerType: number | null
+  verifiedStatus: number | null
+  accountStatus: number | null
+  canShare: boolean | null
+  bcOrder: number
+  firstSeenAt: string
+  lastSeenAt: string
+  missingSince: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * TASK-bc-tt-link — `GET …/organizations/:orgId/bc-tt-link/latest` 200 body. `job: null` = no QR was ever
+ * ordered for this org. `linked` = the TikTok accounts that appeared **after** that job issued its QR (so:
+ * somebody scanned it and a discover ran) — empty until then, which is exactly what "สแกนแล้ว ตรวจสอบ" waits for.
+ */
+export interface BcTtLinkLatestResponse {
+  job: BcTtLinkJob | null
+  linked: BcTikTokAccount[]
+}
+
+/** TASK-bc-tt-link — `missing` query of `GET …/organizations/:orgId/tiktok-accounts` (default `false`). */
+export type BcTikTokAccountsMissing = 'false' | 'all'
+
+/** TASK-bc-tt-link — `GET …/organizations/:orgId/tiktok-accounts` 200 body, sorted by `bcOrder`. */
+export interface BcTikTokAccountsResponse {
+  accounts: BcTikTokAccount[]
+}
+
+/**
+ * TASK-bc-tt-link (BO) — the linked-TikTok-accounts state of **one org** of the drill-down: the page owns the
+ * request and the cache (one GET per org per page lifetime, re-read when a discover of that account ends or a
+ * scan was just confirmed), `TiktokAccountsOrganizationRows` only renders the chip + its popover. Same shape as
+ * `OrganizationsState`, so `data` survives a re-read and the chip never blanks.
+ */
+export interface BcTikTokAccountsState {
+  pending: boolean
+  error: string | null
+  data: BcTikTokAccount[] | null
 }
 
 /**
