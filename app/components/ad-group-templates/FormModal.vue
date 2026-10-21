@@ -50,6 +50,23 @@
  *   unchanged in the POST, never in a PATCH unless `Reset to TikTok defaults` changed it (A8). No control edits
  *   it, it is not part of any section's badge keys, it has no client validation, and an API issue at
  *   `config.audiences.*` lands in `agt-form-error`. (`savedAudience` is gone from the shape altogether — v3.)
+ *
+ * **TASK-template-form-ux** (human request 2026-10-21, the same three changes as the ad-template form, same
+ * pattern, no value / request / test id touched):
+ * 1. **Width + two columns.** `max-w-3xl` → `lg:max-w-5xl` → `xl:max-w-6xl` (the unprefixed `max-w-3xl` stays so
+ *    tailwind-merge still drops the theme's own `max-w-lg` below `sm`), and every section body is a
+ *    `grid gap-4 xl:grid-cols-2`. Below `xl` it is a single column with the 1 rem rhythm `space-y-4` had, so
+ *    tablet and mobile are the old layout exactly. `xl:col-span-2` goes to the controls that need the width: the
+ *    description textarea, the placement radio, the age checkbox row, the advanced sub-heading, every nested
+ *    `sm:grid-cols-*` row (campaign budget, ad-group budget, start/end time, timezone + dayparting) and the
+ *    section-level `agt-form-error` / migration blocks.
+ * 2. **`agt-form-expand-all`** above the first section opens / collapses the four collapsible sections at once
+ *    and remembers it (`useLocalStorage('agt-form-expand-all', false)`). The default — nothing stored, `false` —
+ *    keeps `syncExpanded()` **exactly** as it was (collapsed while the section equals `options.systemDefault`);
+ *    the error paths (`expandSectionsOf`, `onFormError`, the API issues) are untouched and still win.
+ * 3. **`agt-sec-<id>-summary`** — a muted one-liner next to the heading of a **collapsed** section, computed from
+ *    the current state with the labels `/options` serves (never a hard-coded enum label). This form holds no
+ *    secret, but the same rule applies: a summary only ever repeats what the controls themselves show.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -588,11 +605,96 @@ const sectionIsDefault = computed<Record<string, boolean>>(() => {
   )
 })
 
-/** collapse every section that is at the system default, expand the others (open, reset, reset-to-defaults) */
+/**
+ * Collapse every section that is at the system default, expand the others (open, reset, reset-to-defaults) —
+ * unless the admin asked for everything to be open (`agt-form-expand-all`, remembered in `localStorage`).
+ * **The default (`false`, nothing stored) is the original behaviour, unchanged.**
+ */
 function syncExpanded() {
+  if (expandAllPref.value) {
+    setAllSections(true)
+    return
+  }
   const byDefault = sectionIsDefault.value
   for (const id of COLLAPSIBLE_IDS) expanded[id] = !byDefault[id]
 }
+
+// ── "กางทั้งหมด / ยุบทั้งหมด" (TASK-template-form-ux) ───────────────────────────────────────────────────────────────
+/**
+ * Whether the admin wants every collapsible section open when the modal opens. `false` is both the initial value
+ * and what "ยุบทั้งหมด" stores, so a browser that never pressed the button behaves exactly as before.
+ */
+const expandAllPref = useLocalStorage('agt-form-expand-all', false)
+
+function setAllSections(open: boolean) {
+  for (const id of COLLAPSIBLE_IDS) expanded[id] = open
+}
+
+/** what the button offers: the label / icon follow the **current** state, not the stored preference */
+const allSectionsExpanded = computed(() => COLLAPSIBLE_IDS.every(id => expanded[id] === true))
+
+function toggleExpandAll() {
+  const next = !allSectionsExpanded.value
+  expandAllPref.value = next
+  setAllSections(next)
+}
+
+// ── the one-line summary of a collapsed section (TASK-template-form-ux) ──────────────────────────────────────────────
+/** the label `/options` gives a value; the value itself when the list does not know it (an older API) */
+function labelOf(items: OptionItem[] | undefined, value: string): string {
+  if (value === '') return ''
+  return items?.find(item => item.value === value)?.label ?? value
+}
+
+/** `a · b · c` of the parts that have something to say, `null` when none of them does (then nothing is rendered) */
+function joinSummary(parts: (string | null | undefined)[]): string | null {
+  const kept = parts.filter((part): part is string => typeof part === 'string' && part.trim() !== '')
+  return kept.length ? kept.join(' · ') : null
+}
+
+/** at most `max` labels, the rest as `+n` — a summary is one line, never a full list */
+function someLabels(items: OptionItem[] | undefined, values: string[], max = 2): string {
+  if (values.length === 0) return ''
+  const labels = values.slice(0, max).map(value => labelOf(items, value))
+  const rest = values.length - labels.length
+  return rest > 0 ? `${labels.join(', ')} +${rest}` : labels.join(', ')
+}
+
+/** the words around the `/options` labels (the only Thai this feature adds) */
+const SUMMARY_TEXT = {
+  languages: (n: number) => `${n} ภาษา`,
+  advancedDefault: 'ตามค่าเริ่มต้น',
+  advancedSet: (n: number) => `ตั้งเอง ${n} รายการ`
+} as const
+
+/** by section id, for the collapsed header. `null` = nothing worth saying → no `<span>` at all */
+const sectionSummary = computed<Record<string, string | null>>(() => {
+  const c = state.config
+  const budget = joinSummary([
+    labelOf(props.options.budgetType, c.budget.type),
+    c.budget.amount.trim() === '' ? '' : `${c.budget.amount} ${c.budget.currency}`.trim()
+  ])
+  const customAdvanced = ADVANCED_KEYS.filter(key => (c.advancedPlacement[key] ?? TRI_INHERIT) !== TRI_INHERIT)
+  return {
+    placement: joinSummary([labelOf(props.options.placement, c.placement)]),
+    audience: joinSummary([
+      someLabels(props.options.locations, c.locations),
+      c.ageGroups.length === 0
+        ? props.options.ageGroupsUnlimitedLabel
+        : someLabels(props.options.ageGroups, c.ageGroups, 3),
+      labelOf(props.options.gender, c.gender),
+      c.languages.length === 0 ? '' : SUMMARY_TEXT.languages(c.languages.length)
+    ]),
+    budget: joinSummary([
+      budget,
+      labelOf(props.options.scheduleMode, c.schedule.mode),
+      labelOf(props.options.dayparting, c.dayparting)
+    ]),
+    bidding: customAdvanced.length === 0
+      ? SUMMARY_TEXT.advancedDefault
+      : SUMMARY_TEXT.advancedSet(customAdvanced.length)
+  }
+})
 
 function resetForm() {
   Object.assign(state, stateFrom(props.template))
@@ -1220,7 +1322,7 @@ const submitLabel = computed(() => {
     :title="modalTitle"
     :description="modalDescription"
     :dismissible="!submitting"
-    :ui="{ content: 'max-w-3xl' }"
+    :ui="{ content: 'max-w-3xl sm:max-w-3xl lg:max-w-5xl xl:max-w-6xl' }"
     :content="modalContent"
   >
     <template #body>
@@ -1249,9 +1351,26 @@ const submitLabel = computed(() => {
         </div>
 
         <template v-if="!migrateBusy">
+          <!--
+            TASK-template-form-ux — one button for the whole accordion, remembered in `localStorage`. It sits
+            above the first section and never touches `campaign` / `adgroup` (they have no toggle at all).
+          -->
+          <div class="flex justify-end">
+            <UButton
+              :label="allSectionsExpanded ? 'ยุบทั้งหมด' : 'กางทั้งหมด'"
+              :icon="allSectionsExpanded ? 'i-lucide-chevrons-down-up' : 'i-lucide-chevrons-up-down'"
+              color="neutral"
+              variant="ghost"
+              size="xs"
+              :aria-pressed="allSectionsExpanded"
+              data-testid="agt-form-expand-all"
+              @click="toggleExpandAll"
+            />
+          </div>
+
           <!-- 1. campaign (FEAT-061) — always open, no toggle -->
-          <section class="space-y-4" data-testid="agt-sec-campaign">
-            <h3 class="text-sm font-semibold text-highlighted">
+          <section class="grid gap-4 xl:grid-cols-2" data-testid="agt-sec-campaign">
+            <h3 class="text-sm font-semibold text-highlighted xl:col-span-2">
               {{ CAMPAIGN_HEADING }}
             </h3>
 
@@ -1285,8 +1404,8 @@ const submitLabel = computed(() => {
               />
             </UFormField>
 
-            <!-- CBO only: the campaign budget (sent as `null` for `adGroup`) -->
-            <div v-if="showCampaignBudget" class="grid gap-4 sm:grid-cols-2">
+            <!-- CBO only: the campaign budget (sent as `null` for `adGroup`); its own two columns at `sm` -->
+            <div v-if="showCampaignBudget" class="grid gap-4 sm:grid-cols-2 xl:col-span-2">
               <UFormField
                 label="Campaign budget type"
                 name="config.campaign.budget.type"
@@ -1363,8 +1482,8 @@ const submitLabel = computed(() => {
           </section>
 
           <!-- 2. ad group — always open, no toggle -->
-          <section class="space-y-4 border-t border-default pt-4" data-testid="agt-sec-adgroup">
-            <h3 class="text-sm font-semibold text-highlighted">
+          <section class="grid gap-4 border-t border-default pt-4 xl:grid-cols-2" data-testid="agt-sec-adgroup">
+            <h3 class="text-sm font-semibold text-highlighted xl:col-span-2">
               กลุ่มโฆษณา
             </h3>
 
@@ -1384,9 +1503,11 @@ const submitLabel = computed(() => {
               />
             </UFormField>
 
+            <!-- the only multi-line control of this section → full width on a wide screen -->
             <UFormField
               label="Description"
               name="description"
+              class="xl:col-span-2"
               :hint="isMigrate ? 'แก้ไม่ได้ในโหมดนี้' : 'Optional'"
               :error="serverErrors['description']"
             >
@@ -1442,19 +1563,26 @@ const submitLabel = computed(() => {
                 >
                   Default
                 </UBadge>
+                <span
+                  v-if="!expanded.placement && sectionSummary.placement"
+                  class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                  data-testid="agt-sec-placement-summary"
+                >{{ sectionSummary.placement }}</span>
               </button>
             </h3>
 
             <div
               v-show="expanded.placement"
               id="agt-sec-placement"
-              class="mt-4 space-y-4"
+              class="mt-4 grid gap-4 xl:grid-cols-2"
               data-testid="agt-sec-placement"
             >
+              <!-- the only control of this section, and its labels are long → full width -->
               <UFormField
                 label="Placement"
                 name="config.placement"
                 required
+                class="xl:col-span-2"
                 :error="serverErrors['config.placement']"
               >
                 <!-- FEAT-013: `website` is filtered out; a stored `website` value shows no selected radio -->
@@ -1494,13 +1622,18 @@ const submitLabel = computed(() => {
                 >
                   Default
                 </UBadge>
+                <span
+                  v-if="!expanded.audience && sectionSummary.audience"
+                  class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                  data-testid="agt-sec-audience-summary"
+                >{{ sectionSummary.audience }}</span>
               </button>
             </h3>
 
             <div
               v-show="expanded.audience"
               id="agt-sec-audience"
-              class="mt-4 space-y-4"
+              class="mt-4 grid gap-4 xl:grid-cols-2"
               data-testid="agt-sec-audience"
             >
               <UFormField
@@ -1521,9 +1654,11 @@ const submitLabel = computed(() => {
                 />
               </UFormField>
 
+              <!-- a horizontal row of seven checkboxes → full width on a wide screen -->
               <UFormField
                 label="Age"
                 name="config.ageGroups"
+                class="xl:col-span-2"
                 :error="serverErrors['config.ageGroups']"
               >
                 <UCheckboxGroup
@@ -1598,16 +1733,22 @@ const submitLabel = computed(() => {
                 >
                   Default
                 </UBadge>
+                <span
+                  v-if="!expanded.budget && sectionSummary.budget"
+                  class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                  data-testid="agt-sec-budget-summary"
+                >{{ sectionSummary.budget }}</span>
               </button>
             </h3>
 
             <div
               v-show="expanded.budget"
               id="agt-sec-budget"
-              class="mt-4 space-y-4"
+              class="mt-4 grid gap-4 xl:grid-cols-2"
               data-testid="agt-sec-budget"
             >
-              <div class="grid gap-4 sm:grid-cols-3">
+              <!-- type + amount + currency keep their own three columns → they span the section grid -->
+              <div class="grid gap-4 sm:grid-cols-3 xl:col-span-2">
                 <UFormField
                   label="Budget type"
                   name="config.budget.type"
@@ -1694,7 +1835,8 @@ const submitLabel = computed(() => {
                 />
               </UFormField>
 
-              <div class="grid gap-4 sm:grid-cols-2">
+              <!-- start / end time keep their own two columns → they span the section grid -->
+              <div class="grid gap-4 sm:grid-cols-2 xl:col-span-2">
                 <UFormField
                   v-if="showStartTime"
                   label="Start time"
@@ -1728,7 +1870,8 @@ const submitLabel = computed(() => {
                 </UFormField>
               </div>
 
-              <div class="grid gap-4 sm:grid-cols-2">
+              <!-- timezone + dayparting keep their own two columns → they span the section grid -->
+              <div class="grid gap-4 sm:grid-cols-2 xl:col-span-2">
                 <UFormField
                   label="Timezone"
                   name="config.timezone"
@@ -1789,18 +1932,23 @@ const submitLabel = computed(() => {
                 >
                   Default
                 </UBadge>
+                <span
+                  v-if="!expanded.bidding && sectionSummary.bidding"
+                  class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                  data-testid="agt-sec-bidding-summary"
+                >{{ sectionSummary.bidding }}</span>
               </button>
             </h3>
 
             <div
               v-show="expanded.bidding"
               id="agt-sec-bidding"
-              class="mt-4 space-y-4"
+              class="mt-4 grid gap-4 xl:grid-cols-2"
               data-testid="agt-sec-bidding"
             >
               <!-- FEAT-013: the former `advanced` section — five tri-state toggles under their TikTok sub-heading -->
               <h4
-                class="text-sm font-semibold text-highlighted"
+                class="text-sm font-semibold text-highlighted xl:col-span-2"
                 data-testid="agt-form-advanced-heading"
               >
                 {{ ADVANCED_HEADING }}
