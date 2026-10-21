@@ -547,6 +547,40 @@ function stepsLabel(build: BuildView): string {
 const budgetText = computed(() =>
   order.value?.budget ? formatBudgetAmount(order.value.budget.amount, order.value.budget) : '—'
 )
+
+/**
+ * FEAT-061 (spec AC-21) — the campaign block of a **v3** snapshot (`adGroupConfig.campaign`): strategy,
+ * campaign budget, bid strategy, target CPA and the campaign name. A v2 snapshot has no `campaign` key, so the
+ * row is simply not rendered (`od-agc-campaign` exists only for v3) and nothing in here throws.
+ * The four English words are page chrome, like the status labels of `utils/campaign-orders.ts` — this page
+ * never loads the ad-group templates' `/options`.
+ */
+const CAMPAIGN_STRATEGY_TEXT: Record<string, string> = {
+  cbo: 'CBO (campaign budget)',
+  adGroup: 'Ad group budget'
+}
+const CAMPAIGN_BID_TEXT: Record<string, string> = {
+  maxResults: 'Maximum results',
+  costCap: 'Cost cap'
+}
+
+const campaignSnapshot = computed(() => {
+  const campaign = order.value?.adGroupConfig?.campaign
+  if (!campaign || typeof campaign !== 'object') return null
+  const budget = campaign.budget ?? null
+  const targetCpa = order.value?.adGroupConfig?.targetCpa
+  const parts: string[] = [
+    CAMPAIGN_STRATEGY_TEXT[campaign.budgetStrategy ?? ''] ?? String(campaign.budgetStrategy ?? '—')
+  ]
+  if (budget && Number.isFinite(budget.amount)) parts.push(formatBudgetAmount(budget.amount, budget))
+  parts.push(CAMPAIGN_BID_TEXT[campaign.bidStrategy ?? ''] ?? String(campaign.bidStrategy ?? '—'))
+  if (Number.isFinite(targetCpa)) {
+    // `lifetime` only so the helper does not append " / day" — a target CPA is not a daily budget
+    const currency = budget?.currency ?? order.value?.budget?.currency ?? 'THB'
+    parts.push(`target CPA ${formatBudgetAmount(targetCpa as number, { type: 'lifetime', amount: 0, currency })}`)
+  }
+  return { text: parts.join(' · '), name: campaign.name ?? null }
+})
 /** cap = budget × copies × builds (the build rows are the advertisers the order really runs on) */
 const capText = computed(() => {
   const current = order.value
@@ -744,6 +778,18 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                 <dd class="text-highlighted" data-testid="od-agt">
                   {{ order.adGroupTemplate?.name ?? '—' }}
                 </dd>
+                <!-- FEAT-061 — only a v3 snapshot carries a campaign section -->
+                <template v-if="campaignSnapshot">
+                  <dt class="text-muted">
+                    Campaign
+                  </dt>
+                  <dd class="text-highlighted" data-testid="od-agc-campaign">
+                    {{ campaignSnapshot.text }}
+                    <span v-if="campaignSnapshot.name" class="text-muted" data-testid="od-agc-campaign-name">
+                      · {{ campaignSnapshot.name }}
+                    </span>
+                  </dd>
+                </template>
                 <dt class="text-muted">
                   Budget per ad group
                 </dt>

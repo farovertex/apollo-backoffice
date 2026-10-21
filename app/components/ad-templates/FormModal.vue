@@ -108,8 +108,17 @@
  * 2026-10-16): it selects every option `/options` offers, and a second press clears the list again (the field
  * stays required, so an empty list still fails validation).
  *
- * Layout: seven sections — `adname`, then **UTM**, then TikTok's four as an **accordion** in the TikTok page
- * order with `addon` in between: `identity`, `destination`, `cta`, `addon`, `tracking`.
+ * **FEAT-061** (api-contract v1 §1.3 · spec AC-22): the 9th config key `adTexts` (0..`limits.adTextsMax`
+ * trimmed, unique, non-empty strings ≤ `limits.textMaxLength`) gets its own collapsible section before Call to
+ * action (`adt-sec-adtexts`, tag input `adt-ad-texts`, the API's own Thai messages); it is additive, so a
+ * template saved before the feature reads as `[]` and an unrelated save sends no `adTexts` at all (the
+ * `utm`/`addOn` precedent). The CTA picker marks every value the **Smart+ ad page** does not offer
+ * (`options.smartPlusCtaValues`) with the badge `adt-cta-not-smart` and warns once
+ * (`adt-cta-smart-warning`) while such a value is selected — non-blocking, the build would fail at `checking`.
+ * Without that options key (an older API) there are no badges and no warning.
+ *
+ * Layout: eight sections — `adname`, then **UTM**, then TikTok's five as an **accordion** in the TikTok page
+ * order with `addon` in between: `identity`, `destination`, `adtexts` (FEAT-061), `cta`, `addon`, `tracking`.
  * `adname` and `utm` are always open and have no toggle (human decision 2026-10-11: UTM is ours and is set on
  * every template, so its "ผูก UTM" switch is visible at once and the section sits before ตัวตน; its live badge
  * `adt-sec-utm-default` still reads `ไม่ผูก` while the switch is off, AS-8). `identity` / `destination` / `cta` /
@@ -282,6 +291,8 @@ interface ConfigState {
   allowOnTiktokPlatforms: string
   /** selected call-to-action keys, in dropdown order */
   cta: { values: string[] }
+  /** FEAT-061 — the ad texts of the Smart+ ad page ("ข้อความ (n/5)"), trimmed and unique */
+  adTexts: string[]
   tracking: { impressionUrl: string, clickUrl: string }
   /** FEAT-038 — `enabled` is the UI encoding of `utm !== null`; the ids are never part of the form state */
   utm: UtmState
@@ -436,6 +447,8 @@ function configStateFrom(
     cta: {
       values: [...ctaValuesFrom(cta, props.options.systemDefault?.cta?.values ?? [])]
     },
+    // FEAT-061 — additive key: a template saved before the feature has none at all → `[]`
+    adTexts: [...(config?.adTexts ?? [])],
     tracking: {
       impressionUrl: config?.tracking?.impressionUrl ?? '',
       clickUrl: config?.tracking?.clickUrl ?? ''
@@ -476,6 +489,12 @@ const submitError = ref<{ title: string, description?: string } | null>(null)
 const serverErrors = ref<Record<string, string>>({})
 
 /**
+ * FEAT-061 — inline message of the ad-texts tag input: a rejected tag never reaches `state`, so zod would have
+ * nothing to complain about (the `agt-form-languages` precedent of the ad-group form).
+ */
+const adTextsError = ref<string | null>(null)
+
+/**
  * FEAT-038 — what the API said about the UTM **set** rather than about one of its fields: a 400 whose issue
  * path is exactly `config.utm` ("ไม่พบ UTM นี้ในระบบปลายทาง …") and the `{ error }` text of a 502. It is not a
  * `UFormField` name, so it gets its own place under the section (`adt-utm-error`).
@@ -514,7 +533,7 @@ watch(state, clearServerErrors, { deep: true })
 const formRef = useTemplateRef<Form<Schema>>('formRef')
 
 // ── accordion (TikTok's four sections collapse; adname and UTM are always open) ──────────────────────────────────────
-type SectionId = 'adname' | 'identity' | 'destination' | 'cta' | 'tracking' | 'addon' | 'utm'
+type SectionId = 'adname' | 'identity' | 'destination' | 'adtexts' | 'cta' | 'tracking' | 'addon' | 'utm'
 
 /**
  * The sections that own `config` keys (for `SECTION_OF_KEY` and the live badges) — every one but `utm` is
@@ -528,6 +547,7 @@ const SECTIONS = [
     heading: 'จุดหมายปลายทาง',
     keys: ['destination', 'allowOnTiktokPlatforms'] as const
   },
+  { id: 'adtexts' as const, heading: 'ข้อความโฆษณา', keys: ['adTexts'] as const },
   { id: 'cta' as const, heading: 'Call to action', keys: ['cta'] as const },
   { id: 'addon' as const, heading: 'Add-On เชิงโต้ตอบ', keys: ['addOn'] as const },
   { id: 'tracking' as const, heading: 'การตั้งค่าการติดตามของบริษัทอื่น', keys: ['tracking'] as const },
@@ -783,6 +803,32 @@ function toggleCtaAll() {
   state.config.cta.values = ctaAllSelected.value ? [] : props.options.ctaValue.map(item => item.value)
 }
 
+/**
+ * FEAT-061 (spec "UI behaviour → Ad-templates form") — the Smart+ ad page only offers 10 of the CTAs
+ * (`options.smartPlusCtaValues`). Every other value gets the badge "ไม่มีบน Smart+" in the picker, and a
+ * selected one raises the warning `adt-cta-smart-warning` (the build fails at `checking`). The key is absent on
+ * an API that predates the feature → `null`, and then there are no badges and no warning at all.
+ */
+const smartPlusCtaValues = computed<Set<string> | null>(() => {
+  const values = props.options.smartPlusCtaValues
+  return Array.isArray(values) ? new Set(values) : null
+})
+
+const SMART_PLUS_CTA_BADGE = 'ไม่มีบน Smart+'
+const SMART_PLUS_CTA_WARNING = 'ค่านี้ไม่มีบนหน้าโฆษณา Smart+ — build จะล้มที่ขั้น checking'
+
+function isSmartPlusCta(value: string): boolean {
+  const set = smartPlusCtaValues.value
+  return set === null || set.has(value)
+}
+
+/** the selected values the Smart+ ad page does not offer (empty while the API serves no list) */
+const nonSmartPlusSelected = computed(() =>
+  smartPlusCtaValues.value === null
+    ? []
+    : state.config.cta.values.filter(value => !isSmartPlusCta(value))
+)
+
 // ── the UTM section (FEAT-038 · spec U1) ─────────────────────────────────────────────────────────────────────────────
 /**
  * The prefixes offered by the select: the settings list from `/options`, plus the prefix this template is bound
@@ -973,6 +1019,10 @@ function syncExpanded() {
 function resetForm() {
   Object.assign(state, stateFrom(editing.value))
   resetCodeMode()
+  // FEAT-061 — not part of `clearServerErrors()`: that one runs on **every** state change (the deep watcher),
+  // which would wipe the message of a rejected tag before it could be read (the `tagErrors` precedent of the
+  // ad-group form). `onAdTextsUpdate` clears it itself as soon as a change is fully accepted.
+  adTextsError.value = null
   utmPaste.value = ''
   addOnPickerOpen.value = false
   buttonImagePickerOpen.value = false
@@ -1018,12 +1068,67 @@ function resetToDefaults() {
 }
 
 // ── validation (mirrors api-contract.md; an invalid form never reaches the network) ──────────────────────────────────
-const DEFAULT_LIMITS: AdTemplateLimits = { textMaxLength: 100, urlMaxLength: 2048 }
+const DEFAULT_LIMITS: Required<AdTemplateLimits> = { textMaxLength: 100, urlMaxLength: 2048, adTextsMax: 5 }
 /** the API's own numbers (spec A2) — never hard-coded when `/options` serves them */
-const limits = computed<AdTemplateLimits>(() => ({
+const limits = computed<Required<AdTemplateLimits>>(() => ({
   textMaxLength: props.options.limits?.textMaxLength ?? DEFAULT_LIMITS.textMaxLength,
-  urlMaxLength: props.options.limits?.urlMaxLength ?? DEFAULT_LIMITS.urlMaxLength
+  urlMaxLength: props.options.limits?.urlMaxLength ?? DEFAULT_LIMITS.urlMaxLength,
+  // FEAT-061 — `adTextsMax` is new; an API that predates it behaves like the contract's 5
+  adTextsMax: props.options.limits?.adTextsMax ?? DEFAULT_LIMITS.adTextsMax
 }))
+
+/**
+ * FEAT-061 (api-contract §1.3) — the `config.adTexts` messages are the API's own, so a client refusal and a
+ * 400 read the same sentence.
+ */
+const AD_TEXT_MESSAGES = {
+  tooMany: (max: number) => `adTexts ได้ไม่เกิน ${max} รายการ`,
+  empty: 'ข้อความโฆษณาว่างไม่ได้',
+  tooLong: (max: number) => `ข้อความโฆษณายาวเกิน ${max} ตัว`,
+  duplicate: 'adTexts ห้ามซ้ำ'
+} as const
+
+/**
+ * The ad texts the body carries: trimmed, empties dropped, duplicates dropped, at most `adTextsMax` — plus the
+ * message of the first rejection so the tag input can explain what it refused instead of swallowing it.
+ */
+function normalizeAdTexts(next: readonly string[] | null | undefined): { accepted: string[], message: string | null } {
+  const max = limits.value
+  const accepted: string[] = []
+  let message: string | null = null
+  for (const raw of next ?? []) {
+    const text = raw.trim()
+    if (text === '') {
+      message ??= AD_TEXT_MESSAGES.empty
+      continue
+    }
+    if (text.length > max.textMaxLength) {
+      message ??= AD_TEXT_MESSAGES.tooLong(max.textMaxLength)
+      continue
+    }
+    if (accepted.includes(text)) {
+      message ??= AD_TEXT_MESSAGES.duplicate
+      continue
+    }
+    if (accepted.length >= max.adTextsMax) {
+      message ??= AD_TEXT_MESSAGES.tooMany(max.adTextsMax)
+      continue
+    }
+    accepted.push(text)
+  }
+  return { accepted, message }
+}
+
+/**
+ * `UInputTags` is left permissive on purpose (`duplicate` allowed, no `max`) so every rejected entry can be
+ * explained; the accepted list replaces the model as a **new array** (`TagsInputRoot` keeps its own copy and
+ * only re-syncs on a new reference), so a rejected tag never stays on screen.
+ */
+function onAdTextsUpdate(next: string[] | null) {
+  const { accepted, message } = normalizeAdTexts(next)
+  state.config.adTexts = accepted
+  adTextsError.value = message
+}
 
 const HTTP_URL_RE = /^https?:\/\//i
 
@@ -1036,7 +1141,7 @@ function isHttpsUrl(value: string): boolean {
   }
 }
 
-function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
+function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
   return z.object({
     name: z.string().trim().min(1, 'Name is required').max(100, 'Name must be at most 100 characters'),
     description: z.string().trim().max(500, 'Description must be at most 500 characters'),
@@ -1079,6 +1184,7 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
       cta: z.object({
         values: z.array(z.string())
       }),
+      adTexts: z.array(z.string()),
       tracking: z.object({
         impressionUrl: z.string().trim(),
         clickUrl: z.string().trim()
@@ -1153,6 +1259,22 @@ function makeSchema(max: AdTemplateLimits, requireCode: boolean) {
         path: ['config', 'cta', 'values'],
         message: 'Select at least one call to action'
       })
+    }
+
+    // FEAT-061 — the tag input already refuses these; zod is the backstop (`[]` is always valid)
+    const adTexts = data.config.adTexts
+    const adTextsPath = ['config', 'adTexts']
+    if (adTexts.length > max.adTextsMax) {
+      ctx.addIssue({ code: 'custom', path: adTextsPath, message: AD_TEXT_MESSAGES.tooMany(max.adTextsMax) })
+    }
+    if (adTexts.some(text => text.trim() === '')) {
+      ctx.addIssue({ code: 'custom', path: adTextsPath, message: AD_TEXT_MESSAGES.empty })
+    }
+    if (adTexts.some(text => text.trim().length > max.textMaxLength)) {
+      ctx.addIssue({ code: 'custom', path: adTextsPath, message: AD_TEXT_MESSAGES.tooLong(max.textMaxLength) })
+    }
+    if (new Set(adTexts.map(text => text.trim())).size !== adTexts.length) {
+      ctx.addIssue({ code: 'custom', path: adTextsPath, message: AD_TEXT_MESSAGES.duplicate })
     }
 
     // both tracking URLs are optional; when filled they must be an http(s) URL within the API's limit
@@ -1263,6 +1385,9 @@ function configFromState(): AdConfigRequest {
       .filter((value): value is AdCtaValue => picked.has(value))
   }
 
+  // FEAT-061 — trimmed, no empties, no duplicates, at most `adTextsMax` (the tag input refuses these too)
+  const adTexts = normalizeAdTexts(c.adTexts).accepted
+
   const impressionUrl = c.tracking.impressionUrl.trim()
   const clickUrl = c.tracking.clickUrl.trim()
 
@@ -1305,7 +1430,8 @@ function configFromState(): AdConfigRequest {
       clickUrl: clickUrl === '' ? null : clickUrl
     },
     utm,
-    addOn
+    addOn,
+    adTexts
   }
 }
 
@@ -1327,7 +1453,8 @@ function deepEqual(a: unknown, b: unknown): boolean {
 
 /** the 8 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-050 api-contract.md v1 §1 rule 5) */
 const CONFIG_KEYS = [
-  'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking', 'utm', 'addOn'
+  'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking', 'utm', 'addOn',
+  'adTexts'
 ] as const satisfies readonly (keyof AdConfig)[]
 
 /**
@@ -1359,7 +1486,10 @@ function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
         : page
     },
     utm: utmBodyOf(config.utm),
-    addOn: config.addOn ?? null
+    addOn: config.addOn ?? null,
+    // FEAT-061 — a **missing** `adTexts` counts as `[]` (what `configFromState()` builds while the input is
+    // empty), so an unrelated save of an older template sends no `adTexts` at all (the `utm`/`addOn` precedent)
+    adTexts: config.adTexts ?? []
   } as unknown as Partial<AdConfigRequest>
   const post = config.identity?.post
   if (post?.selection !== POST_AUTH_CODE) return base
@@ -1426,6 +1556,7 @@ const FIELD_NAMES: ReadonlySet<string> = new Set([
   'config.destination.page.showHandCursor',
   'config.allowOnTiktokPlatforms',
   'config.cta.values',
+  'config.adTexts',
   'config.tracking.impressionUrl', 'config.tracking.clickUrl',
   'config.utm.prefix', 'config.utm.source', 'config.utm.medium', 'config.utm.campaign',
   'config.addOn.zoomClicks', 'config.addOn.displaySeconds'
@@ -2396,7 +2527,63 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
-        <!-- 5. call to action -->
+        <!-- 5. FEAT-061 — ad texts of the Smart+ ad page ("ข้อความ (n/5)") -->
+        <section class="border-t border-default pt-4">
+          <h3 class="text-sm font-semibold text-highlighted">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-2 py-1 text-left"
+              :aria-expanded="expanded.adtexts"
+              aria-controls="adt-sec-adtexts"
+              data-testid="adt-sec-adtexts-toggle"
+              @click="toggleSection('adtexts')"
+            >
+              <UIcon
+                :name="expanded.adtexts ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+                class="size-4 shrink-0 text-muted"
+              />
+              <span>ข้อความโฆษณา</span>
+              <UBadge
+                v-if="sectionIsDefault.adtexts"
+                color="neutral"
+                variant="subtle"
+                size="sm"
+                data-testid="adt-sec-adtexts-default"
+              >
+                Default
+              </UBadge>
+            </button>
+          </h3>
+
+          <div
+            v-show="expanded.adtexts"
+            id="adt-sec-adtexts"
+            class="mt-4 space-y-4"
+            data-testid="adt-sec-adtexts"
+          >
+            <UFormField
+              label="Ad texts"
+              name="config.adTexts"
+              hint="Optional"
+              :help="`สูงสุด ${limits.adTextsMax} ข้อความ · ไม่เกิน ${limits.textMaxLength} ตัวต่อข้อความ`"
+              :error="serverErrors['config.adTexts'] ?? adTextsError ?? undefined"
+            >
+              <!-- the test id lands on the inner `<input data-slot="input">` (UInputTags has
+                   inheritAttrs: false); the tags are `[data-slot="item"]` of its parent `[data-slot="root"]` -->
+              <UInputTags
+                :model-value="state.config.adTexts"
+                :duplicate="true"
+                placeholder="พิมพ์ข้อความแล้วกด Enter"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="adt-ad-texts"
+                @update:model-value="(v: string[]) => onAdTextsUpdate(v)"
+              />
+            </UFormField>
+          </div>
+        </section>
+
+        <!-- 6. call to action -->
         <section class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button
@@ -2445,7 +2632,24 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 class="w-full"
                 :disabled="submitting"
                 data-testid="adt-form-cta"
-              />
+              >
+                <!-- FEAT-061 — the values the Smart+ ad page does not offer are marked in the list -->
+                <template #item-label="{ item }">
+                  <span class="flex items-center gap-2">
+                    <span>{{ item.label }}</span>
+                    <UBadge
+                      v-if="!isSmartPlusCta(item.value)"
+                      color="warning"
+                      variant="subtle"
+                      size="sm"
+                      class="whitespace-nowrap"
+                      data-testid="adt-cta-not-smart"
+                    >
+                      {{ SMART_PLUS_CTA_BADGE }}
+                    </UBadge>
+                  </span>
+                </template>
+              </USelectMenu>
               <template #hint>
                 <UButton
                   :label="ctaAllSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'"
@@ -2460,11 +2664,22 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 />
               </template>
             </UFormField>
+
+            <!-- FEAT-061 — non-blocking: the template saves, the build fails at `checking` -->
+            <UAlert
+              v-if="nonSmartPlusSelected.length"
+              color="warning"
+              variant="subtle"
+              icon="i-lucide-triangle-alert"
+              :title="SMART_PLUS_CTA_WARNING"
+              :description="nonSmartPlusSelected.map(value => labelOf(options.ctaValue, value)).join(' · ')"
+              data-testid="adt-cta-smart-warning"
+            />
           </div>
         </section>
 
         <!--
-          6. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
+          7. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
           with the `Default` badge while there is no add-on, auto-expanded by `expandSectionsOf` on a 400.
         -->
         <section class="border-t border-default pt-4">
@@ -2612,7 +2827,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
-        <!-- 7. third-party tracking -->
+        <!-- 8. third-party tracking -->
         <section class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button

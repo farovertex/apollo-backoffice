@@ -1,9 +1,14 @@
 /**
- * FEAT-011 — `/ad-group-templates` **v2** (apollo-api, function 6.8). Mirrors
- * mission-control/.ai/features/FEAT-011-ad-group-template-v2-catalog-fields/api-contract.md v2
- * ("Template view", `GET /options`, `GET/POST/PATCH/DELETE /ad-group-templates`), which supersedes the
- * FEAT-008 contract v1: `config` grows from 13 to **19 keys**, `placement` gains `instantPage` and every
- * template carries the `catalogVersion` it was authored against (set by the API, never sent by the BO).
+ * FEAT-061 — `/ad-group-templates` **v3** ("Smart+" shape, apollo-api, function 6.8). Mirrors
+ * mission-control/.ai/features/FEAT-061-smart-campaign-template-campaign-section-in-ad-gro/api-contract.md v1
+ * (§1 shapes, §2 endpoints, §5 BO integration), which supersedes the FEAT-011 contract v2:
+ * - `config` goes from 19 to **15 keys**: the new `campaign` section (name / budget strategy / campaign budget /
+ *   bid strategy) and `targetCpa` replace `dataConnection`, `optimizationEvent`, `optimizationGoal`,
+ *   `savedAudience`, `spendingPower` and `costCap` (`costCap` → `targetCpa`).
+ * - `catalogVersion` moves to `advertisingGroup/v4` (the Smart+ unified wizard shape) and every template view
+ *   carries the derived `kind`: `smartPlus` for v4, **`manual`** for anything else (incl. `null`). A manual row
+ *   cannot be PATCHed or used for an order any more — it goes through the migration lane
+ *   (`GET /:id/migration` + `POST /:id/migrate`).
  *
  * The BO hard-codes **no** enum label: every human-readable string for a config value comes from
  * `GET /ad-group-templates/options` (`OptionItem { value, label }`), which is fetched once per page
@@ -17,7 +22,6 @@ export interface OptionItem {
 }
 
 export type Placement = 'website' | 'instantPage'
-export type OptimizationEvent = 'purchase'
 export type AgeGroup = '13-17' | '18-24' | '25-34' | '35-44' | '45-54' | '55+'
 export type Gender = 'all' | 'male' | 'female'
 export type BudgetType = 'daily' | 'lifetime'
@@ -26,15 +30,22 @@ export type ScheduleMode = 'continuous' | 'dateRange'
 export type StartTimeMode = 'now' | 'scheduled'
 export type Timezone = 'Asia/Bangkok'
 export type Dayparting = 'allDay'
-export type OptimizationGoal = 'conversion'
-export type DataConnectionMode = 'first' | 'named'
-export type SavedAudienceMode = 'none' | 'named'
-export type SpendingPower = 'all' | 'high'
+/** FEAT-061 — `config.campaign.budgetStrategy`: CBO (campaign budget) or one budget per ad group */
+export type BudgetStrategy = 'cbo' | 'adGroup'
+/** FEAT-061 — `config.campaign.bidStrategy`; `costCap` is the only one that uses `config.targetCpa` */
+export type BidStrategy = 'maxResults' | 'costCap'
 
-/** `config.dataConnection` — discriminated union, strict on the API side. */
-export type AdGroupDataConnection
-  = | { mode: 'first' }
-    | { mode: 'named', name: string }
+/**
+ * FEAT-061 — `config.campaign`: the campaign-page choices of the Smart+ wizard, stored inside the ad-group
+ * template (there is no campaign template collection). `budget` is required (non-null) for `cbo` and must be
+ * `null` for `adGroup`; `name` is trimmed and `''` is sent as `null` (= let TikTok name the campaign).
+ */
+export interface AdGroupCampaign {
+  name: string | null
+  budgetStrategy: BudgetStrategy
+  budget: AdGroupBudget | null
+  bidStrategy: BidStrategy
+}
 
 /**
  * `config.schedule` — `startTime` is the literal `'now'` or an absolute ISO-8601 (UTC) string;
@@ -49,14 +60,6 @@ export interface AdGroupBudget {
   amount: number
   currency: Currency
 }
-
-/**
- * `config.savedAudience` — discriminated union, strict on the API side (`{ mode: 'none', name }` → 400).
- * `named` means the job picks that saved audience on TikTok and ignores the custom targeting keys.
- */
-export type AdGroupSavedAudience
-  = | { mode: 'none' }
-    | { mode: 'named', name: string }
 
 /** `config.audiences` — both keys required; plain TikTok audience names (no ids, no enum). */
 export interface AdGroupAudiences {
@@ -79,51 +82,68 @@ export interface AdGroupAdvancedPlacement {
 /** The keys of `config.advancedPlacement`, in `options.advancedPlacementKey` order. */
 export type AdvancedPlacementKey = keyof AdGroupAdvancedPlacement
 
-/** The 19 config keys of an ad group template v2 (strict on the API side). */
+/**
+ * The 15 config keys of an ad group template **v3** (strict on the API side, in `CONFIG_KEYS` order —
+ * FEAT-061 api-contract §1.1). A **manual** row (`kind: 'manual'`) still carries its old 13/19 keys as stored,
+ * so a reader of an arbitrary row treats this type as the v3 shape only (see `AdGroupConfigSnapshot` of
+ * `campaign-orders.ts` for the permissive reader).
+ */
 export interface AdGroupConfig {
-  /** null = let TikTok auto-name the ad group */
+  /** null = let TikTok auto-name the ad group (the worker skips the prefix since 2026-10-08) */
   adGroupNamePrefix: string | null
-  /** `instantPage` → the BO hides data connection + optimization event, the job asks the human */
+  /** FEAT-061 — the campaign page of the Smart+ wizard, stored with the ad group */
+  campaign: AdGroupCampaign
+  /**
+   * FEAT-061 — target cost per result, filled on the aio ad-group page. Required (non-null) when
+   * `campaign.bidStrategy === 'costCap'` and must be `null` for `maxResults`. Replaces v2's `costCap`.
+   */
+  targetCpa: number | null
+  /** `instantPage` is the only placement the Smart+ worker supports (`website` → preflight refuses the build) */
   placement: Placement
-  dataConnection: AdGroupDataConnection
-  optimizationEvent: OptimizationEvent
   /** ISO-3166 alpha-2, at least one, no duplicates */
   locations: string[]
   /** empty array = unlimited (`options.ageGroupsUnlimitedLabel`) */
   ageGroups: AgeGroup[]
   gender: Gender
+  /** the **ad group** budget (`options.minBudget`); the campaign budget is `campaign.budget` */
   budget: AdGroupBudget
   schedule: AdGroupSchedule
   timezone: Timezone
   dayparting: Dayparting
-  optimizationGoal: OptimizationGoal
-  /** null = no cost cap */
-  costCap: number | null
-  /** v2: `named` replaces the custom targeting keys when the job runs */
-  savedAudience: AdGroupSavedAudience
-  /** v2: audience names to include / exclude (≤ `listLimits.maxItems` each) */
+  /** audience names to include / exclude (≤ `listLimits.maxItems` each) — pass-through, no control edits it */
   audiences: AdGroupAudiences
-  /** v2: interest & behaviour names (≤ `listLimits.maxItems`) */
+  /** interest & behaviour names (≤ `listLimits.maxItems`) */
   interests: string[]
-  /** v2: language names; `[]` = unlimited (`options.unlimitedLabel`) */
+  /** language names; `[]` = unlimited (`options.unlimitedLabel`) */
   languages: string[]
-  /** v2 */
-  spendingPower: SpendingPower
-  /** v2: five tri-state toggles */
+  /** five tri-state toggles */
   advancedPlacement: AdGroupAdvancedPlacement
 }
 
-/** Exact key set of the API's template view v2 (`catalogVersion` after `config`). */
+/**
+ * FEAT-061 (api-contract §1.2) — derived from `catalogVersion`, never stored: `smartPlus` when the row was
+ * authored against the version `/options` serves (`advertisingGroup/v4`), `manual` for every older version and
+ * for `null`. A `manual` row can only be read, duplicated, deleted or **migrated**.
+ */
+export type AdGroupTemplateKind = 'manual' | 'smartPlus'
+
+/** Exact key set of the API's template view v3 — 11 keys (`kind` after `catalogVersion`). */
 export interface AdGroupTemplate {
   id: string
   name: string
   description: string | null
   config: AdGroupConfig
   /**
-   * The catalog version the template was authored against (`advertisingGroup/v1`), written by the API.
-   * `null` for documents written before FEAT-011 → the table shows the `Older catalog` badge.
+   * The catalog version the template was authored against (`advertisingGroup/v4` since FEAT-061), written by
+   * the API. `null` for documents written before FEAT-011 → `kind: 'manual'`.
    */
   catalogVersion: string | null
+  /**
+   * FEAT-061 — `smartPlus` / `manual`, computed per request from `catalogVersion`. Optional in this type only
+   * so a BO page can still read a response of an API that predates the feature (then fall back to comparing
+   * `catalogVersion` with `options.catalogVersion`).
+   */
+  kind?: AdGroupTemplateKind
   /** `name` is null when the workspace row is gone */
   workspace: { id: string, name: string | null }
   /** `username` is null when the admin row is gone */
@@ -170,13 +190,12 @@ export interface AdGroupListLimits {
 }
 
 /**
- * `GET /ad-group-templates/options` 200 body — the 17 label lists plus the BO helpers
- * (`ageGroupsUnlimitedLabel`, `unlimitedLabel`, `minBudget`, `systemDefault`, `catalogVersion`, `listLimits`).
+ * `GET /ad-group-templates/options` 200 body — the **14** label lists plus the BO helpers
+ * (`ageGroupsUnlimitedLabel`, `unlimitedLabel`, `minBudget`, `campaignMinBudget`, `systemDefault`,
+ * `catalogVersion`, `listLimits`) — FEAT-061 api-contract §2.0, 21 top-level keys.
  */
 export interface AdGroupTemplateOptions {
   placement: OptionItem[]
-  dataConnectionMode: OptionItem[]
-  optimizationEvent: OptionItem[]
   locations: OptionItem[]
   ageGroups: OptionItem[]
   gender: OptionItem[]
@@ -186,30 +205,35 @@ export interface AdGroupTemplateOptions {
   startTimeMode: OptionItem[]
   timezone: OptionItem[]
   dayparting: OptionItem[]
-  optimizationGoal: OptionItem[]
-  /** v2 */
-  savedAudienceMode: OptionItem[]
-  /** v2 */
-  spendingPower: OptionItem[]
-  /** v2: `inherit` ↔ `null`, `on` ↔ `true`, `off` ↔ `false` */
+  /** `inherit` ↔ `null`, `on` ↔ `true`, `off` ↔ `false` */
   advancedPlacementState: OptionItem[]
-  /** v2: the five `config.advancedPlacement` keys, in the order the advanced section renders them */
+  /** the five `config.advancedPlacement` keys, in the order the advanced section renders them */
   advancedPlacementKey: OptionItem[]
+  /** FEAT-061 — `cbo` / `adGroup` labels of `config.campaign.budgetStrategy` */
+  budgetStrategy: OptionItem[]
+  /** FEAT-061 — `maxResults` / `costCap` labels of `config.campaign.bidStrategy` */
+  bidStrategy: OptionItem[]
   /** shown when no age group is selected */
   ageGroupsUnlimitedLabel: string
-  /** v2: shown when a free-text list (Languages) is empty */
+  /** shown when a free-text list (Languages) is empty */
   unlimitedLabel: string
-  /** minimum `budget.amount` per currency (env `AD_GROUP_MIN_BUDGET`) */
+  /** minimum ad-group `budget.amount` per currency (env `AD_GROUP_MIN_BUDGET`) */
   minBudget: Record<string, number>
+  /**
+   * FEAT-061 — minimum `campaign.budget.amount` per currency (env `CAMPAIGN_MIN_BUDGET`, default
+   * `{ THB: 200 }`). Optional in this type only so the form still renders against an API that predates the
+   * feature (then no minimum is enforced client-side and the API's 400 is shown).
+   */
+  campaignMinBudget?: Record<string, number>
   /** TikTok's values on a fresh page — the create form's starting point, never stored */
   systemDefault: AdGroupConfig
-  /** v2: the catalog version the API writes on every save (`advertisingGroup/v1`) */
+  /** the catalog version the API writes on every save (`advertisingGroup/v4` since FEAT-061) */
   catalogVersion: string
-  /** v2: the limits the BO validates the four tag inputs with */
+  /** the limits the BO validates the tag inputs with */
   listLimits: AdGroupListLimits
 }
 
-/** `POST /ad-group-templates` body — `config` is complete (all 19 keys), never `catalogVersion`. */
+/** `POST /ad-group-templates` body — `config` is complete (all 15 keys), never `catalogVersion`. */
 export interface CreateAdGroupTemplateBody {
   name: string
   description?: string | null
@@ -236,4 +260,53 @@ export interface PatchAdGroupTemplateBody {
 /** `DELETE /ad-group-templates/:id` 200 body. */
 export interface DeleteAdGroupTemplateResponse {
   ok: boolean
+}
+
+/**
+ * FEAT-061 (api-contract §2.1) — the v3 draft the API computed from a **manual** template: the v3 shape where
+ * `campaign.budgetStrategy` can be `null` (nothing to map it from) and `campaign.budget` always starts `null`.
+ * Everything else is carried as stored, with the system default (and a `notes[]` line) for a key the old
+ * document did not have.
+ */
+export interface MigrationDraft extends Omit<AdGroupConfig, 'campaign'> {
+  campaign: {
+    name: string | null
+    budgetStrategy: BudgetStrategy | null
+    budget: AdGroupBudget | null
+    bidStrategy: BidStrategy
+  }
+}
+
+/** FEAT-061 — one entry of `dropped[]`: a v2 key that v3 has no place for, with its **stored** value. */
+export interface MigrationDroppedKey {
+  key: string
+  value: unknown
+}
+
+/**
+ * `GET /ad-group-templates/:id/migration` 200 body (api-contract §2.1) — read-only, writes nothing.
+ * A Smart+ row answers 409 `{ error, reason: 'alreadySmartPlus' }`, an unknown id 404.
+ */
+export interface MigrationResponse {
+  kind: 'manual'
+  /** the row's old `catalogVersion` (`null` for a pre-FEAT-011 document) */
+  from: string | null
+  draft: MigrationDraft
+  /** v3 paths the draft leaves empty and the admin has to fill (e.g. `campaign.budgetStrategy`) */
+  required: string[]
+  /** the v2 keys that will be lost, with their stored values */
+  dropped: MigrationDroppedKey[]
+  /** `costCap → targetCpa` when a non-null `costCap` existed */
+  renamed: { from: string, to: string }[]
+  /** human-readable notes of what the mapper changed (placement, past start time, defaulted keys) */
+  notes: string[]
+}
+
+/**
+ * `POST /ad-group-templates/:id/migrate` body (api-contract §2.2) — the **complete** 15-key v3 config,
+ * strict: no `name`, no `description`, no `catalogVersion`. 200 answers the template view with
+ * `kind: 'smartPlus'`.
+ */
+export interface MigrateBody {
+  config: AdGroupConfig
 }

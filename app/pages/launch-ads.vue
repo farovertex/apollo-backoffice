@@ -40,8 +40,13 @@
  *   `la-acc-show-all` turns both switches off (so does `la-acc-clear-search`). Launching is **not** a
  *   readiness reason: a launching account stays `available` and can be launched again when the switch is off.
  * Step 2 · Templates — the existing list endpoints (`?limit=100`) + their `/options`, requested **once per
- *   page lifetime** when the step is first opened. A card whose `catalogVersion` differs from the one
- *   `/options` serves is disabled with the re-save message (spec A8) — the API refuses it anyway (400).
+ *   page lifetime** when the step is first opened. An **ad-template** card whose `catalogVersion` differs from
+ *   the one `/options` serves is disabled with the re-save message (spec A8) — the API refuses it anyway (400).
+ *   **FEAT-061** (spec AC-20): an **ad-group-template** card is disabled when the row is `kind: 'manual'`
+ *   (fallback: that same catalog comparison while an older API serves no `kind`) and says `la-agt-manual`
+ *   "ต้องปรับเป็น Smart+ ก่อน" — the template has to go through "ปรับเป็น Smart+" on its own page first; the
+ *   API's own 400 (`issues[].path = adGroupTemplateId`) is still shown verbatim at this step. A v3 card also
+ *   shows its campaign strategy (`la-agt-campaign`: CBO + amount, or the ad-group-budget label).
  *   Copies = 1..`limits.maxAdGroupCopies`, one value for the whole order. The campaign block is fixed
  *   (no campaign templates yet): campaign name on TikTok = order name.
  * Step 3 · Review — order name (default `<ad group template name> · <YYYY-MM-DD>` in local time, max 100),
@@ -65,6 +70,7 @@ import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type {
   AdGroupTemplate,
+  AdGroupTemplateKind,
   AdGroupTemplateOptions,
   AdGroupTemplatesResponse,
   OptionItem
@@ -477,11 +483,20 @@ function labelOf(list: OptionItem[] | undefined, value: string | null | undefine
   return list?.find(item => item.value === value)?.label ?? value
 }
 
-function isAgtStale(template: AdGroupTemplate): boolean {
+/**
+ * FEAT-061 — the row's kind: the API's own `kind` when it serves one, else the FEAT-011 catalog comparison
+ * (an API that predates the feature). `null` while `/options` has not answered — never cry wolf.
+ */
+function agtKindOf(template: AdGroupTemplate): AdGroupTemplateKind | null {
+  if (template.kind) return template.kind
   const current = agtOptions.value?.catalogVersion
-  // without `/options` there is nothing to compare against — never cry wolf
-  if (!current) return false
-  return template.catalogVersion !== current
+  if (!current) return null
+  return template.catalogVersion === current ? 'smartPlus' : 'manual'
+}
+
+/** FEAT-061 — a manual ad-group template cannot create an order any more (the API answers 400) */
+function isAgtManual(template: AdGroupTemplate): boolean {
+  return agtKindOf(template) === 'manual'
 }
 
 function isAdtStale(template: AdTemplate): boolean {
@@ -491,7 +506,7 @@ function isAdtStale(template: AdTemplate): boolean {
 }
 
 function selectAdGroupTemplate(template: AdGroupTemplate) {
-  if (isAgtStale(template)) return
+  if (isAgtManual(template)) return
   adGroupTemplateId.value = template.id
   templateFieldError.value = null
 }
@@ -500,6 +515,22 @@ function selectAdTemplate(template: AdTemplate) {
   if (isAdtStale(template)) return
   adTemplateId.value = template.id
   templateFieldError.value = null
+}
+
+/**
+ * FEAT-061 — the campaign-level budget line of a v3 card: `CBO <amount> <currency label>/<type label>` under
+ * CBO, else the `adGroup` label of `/options.budgetStrategy` (the ad group's own budget is the line above).
+ * `''` for a manual row — it has no campaign section at all.
+ */
+function campaignCell(template: AdGroupTemplate): string {
+  const campaign = template.config?.campaign
+  if (!campaign?.budgetStrategy) return ''
+  if (campaign.budgetStrategy !== 'cbo') {
+    return labelOf(agtOptions.value?.budgetStrategy, 'adGroup')
+  }
+  const budget = campaign.budget
+  const amount = Number.isFinite(budget?.amount) ? budget!.amount.toFixed(2) : '—'
+  return `CBO ${amount} ${labelOf(agtOptions.value?.currency, budget?.currency)}/${labelOf(agtOptions.value?.budgetType, budget?.type)}`
 }
 
 /** `<amount 2 decimals> <currency label> / <budgetType label>` — labels from `/options` */
@@ -1373,8 +1404,9 @@ onUnmounted(() => {
                       type="button"
                       :data-id="template.id"
                       :data-selected="template.id === adGroupTemplateId ? 'true' : 'false'"
-                      :data-stale="isAgtStale(template) ? 'true' : 'false'"
-                      :disabled="isAgtStale(template)"
+                      :data-stale="isAgtManual(template) ? 'true' : 'false'"
+                      :data-kind="agtKindOf(template) ?? undefined"
+                      :disabled="isAgtManual(template)"
                       data-testid="la-agt-card"
                       class="flex flex-col gap-1 rounded-lg border p-3 text-left disabled:opacity-60"
                       :class="template.id === adGroupTemplateId
@@ -1384,24 +1416,31 @@ onUnmounted(() => {
                     >
                       <span class="flex items-center gap-2">
                         <span class="min-w-0 truncate font-medium text-highlighted">{{ template.name }}</span>
+                        <!-- FEAT-061 — a manual row cannot be launched; it has to be migrated first -->
                         <UBadge
-                          v-if="isAgtStale(template)"
+                          v-if="isAgtManual(template)"
                           color="warning"
                           variant="subtle"
                           size="sm"
                           class="whitespace-nowrap"
                         >
-                          Older catalog
+                          manual
                         </UBadge>
                       </span>
                       <span class="text-xs text-muted">{{ budgetCell(template) }}</span>
+                      <!-- FEAT-061 — the campaign-level strategy/budget of a v3 template -->
+                      <span
+                        v-if="campaignCell(template)"
+                        class="text-xs text-muted"
+                        data-testid="la-agt-campaign"
+                      >{{ campaignCell(template) }}</span>
                       <span class="text-xs text-muted">{{ scheduleCell(template) }}</span>
                       <span class="line-clamp-2 text-xs text-muted">{{ targetingCell(template) }}</span>
                       <span class="text-xs text-dimmed">
                         catalog {{ catalogCell(template.catalogVersion) }} · updated {{ timeAgo(template.updatedAt) }}
                       </span>
-                      <span v-if="isAgtStale(template)" class="text-xs text-warning" data-testid="la-card-stale">
-                        Built from an older catalog — open it in Ad group templates and save it again
+                      <span v-if="isAgtManual(template)" class="text-xs text-warning" data-testid="la-agt-manual">
+                        ต้องปรับเป็น Smart+ ก่อน
                       </span>
                     </button>
                   </div>

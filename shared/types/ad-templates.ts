@@ -219,11 +219,11 @@ export interface AdAddOnImage {
 }
 
 /**
- * The 8 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
+ * The 9 config keys of an ad template **as served by the API** (strict, in `CONFIG_KEYS` order).
  * `identity.post` of an `authCode` template includes the stored Spark `code`.
  * FEAT-038: `utm` is the 7th key — optional in this type because a document saved before that feature has no
  * such key (F2); every reader treats a missing key as `null`. FEAT-050 adds `addOn` as the 8th key under the
- * same rule (api-contract §1 rule 1).
+ * same rule (api-contract §1 rule 1), FEAT-061 `adTexts` as the 9th (absent = `[]`).
  */
 export interface AdConfig {
   /** null = let TikTok auto-name the ad; the job appends the date to the prefix */
@@ -238,10 +238,17 @@ export interface AdConfig {
   utm?: UtmRef | null
   /** FEAT-050 — the interactive add-on of the ad; `null` / absent = none */
   addOn?: AdAddOn | null
+  /**
+   * FEAT-061 (api-contract §1.3) — the ad texts the Smart+ ad page offers ("ข้อความ (n/5)"): 0..
+   * `options.limits.adTextsMax` trimmed, unique, non-empty strings of at most `limits.textMaxLength`
+   * characters. Additive (`.default([])`): a template saved before the feature has no such key at all —
+   * every reader treats absence the same as `[]`, and `[]` means the worker never touches the control.
+   */
+  adTexts?: string[]
 }
 
 /**
- * The same 8 keys **as sent to the API** (`identity.post` carries the code, never `hasCode`/`codeLast4`;
+ * The same 9 keys **as sent to the API** (`identity.post` carries the code, never `hasCode`/`codeLast4`;
  * `utm` carries the four body strings, never the ids; `addOn` is the same four-key blob that is served).
  */
 export interface AdConfigRequest extends Omit<AdConfig, 'identity' | 'utm'> {
@@ -442,11 +449,17 @@ export interface AdTemplateLimits {
   textMaxLength: number
   /** `tracking.impressionUrl`, `tracking.clickUrl` and `destination.page.url` */
   urlMaxLength: number
+  /**
+   * FEAT-061 — how many `config.adTexts` entries the API accepts (5). Optional in this type only so the form
+   * still renders against an API that predates the feature (then the BO falls back to 5).
+   */
+  adTextsMax?: number
 }
 
 /**
- * `GET /ad-templates/options` 200 body — exactly 14 keys (FEAT-038 api-contract §2.4): the 9 label lists plus
- * the BO helpers (`allowOnTiktokPlatformsLabel`, `systemDefault`, `catalogVersion`, `limits`, `utmPrefixes`).
+ * `GET /ad-templates/options` 200 body (FEAT-038 api-contract §2.4, FEAT-061 §1.3): the 9 label lists plus the
+ * BO helpers (`allowOnTiktokPlatformsLabel`, `systemDefault`, `catalogVersion`, `limits`, `utmPrefixes`,
+ * `smartPlusCtaValues`).
  */
 export interface AdTemplateOptions {
   /** 1 item (`spark`) — rendered as a one-item radio group, never hard-coded (spec A3) */
@@ -485,6 +498,12 @@ export interface AdTemplateOptions {
    * set any). An older API that does not serve the key yet behaves like `[]`.
    */
   utmPrefixes?: string[]
+  /**
+   * FEAT-061 (api-contract §1.3) — the subset of `ctaValue` the **Smart+ ad page** really offers (10 values,
+   * combobox order). A selected value outside this set makes the build fail at `checking`, so the form marks
+   * it. Absent (an API that predates the feature) = no hints at all, never a wrong warning.
+   */
+  smartPlusCtaValues?: string[]
 }
 
 /**
