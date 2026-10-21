@@ -128,6 +128,18 @@
  * chains a per-org discover, whose poll re-reads the drill-down when it ends), `failed`/`cancelled` toasts and
  * leaves `ta-adv-create-failed-<orgId>` (tooltip = `lastLog`) until the next attempt. An account with 0 or 1 org
  * has no drill-down and therefore no button this round.
+ * TASK-bc-tt-link round 2 (brief `.ai/features/_queue/bc-tt-link-ui.prompt.md`) — the per-org button
+ * **เพิ่มบัญชี TikTok** (`ta-tt-link-<orgId>`, right of สร้างบัญชีโฆษณา, none on a missing org) adds a **TikTok
+ * account that posts clips** to the Business Center by inviting an existing one with a QR. Two beats: the click
+ * reads `GET …/organizations/<orgId>/bc-tt-link/latest` once and POSTs `…/bc-tt-link` (202 `{ jobId, orgId }`,
+ * 409 → toast only) **only** when that org has no QR to show, then `TiktokAccountsTtLinkModal`
+ * (`ta-tt-link-modal`) owns the rest: it polls `latest` every 2 s, shows the QR, and **สแกนแล้ว ตรวจสอบ** posts
+ * the FEAT-059 per-org discover and waits for `latest.linked` to fill — the system never links an account by
+ * itself. While a QR job of an org is unfinished the row shows `ta-tt-link-pending-<orgId>` and both per-org
+ * create buttons are disabled (one job per login). Each org row also carries the chip
+ * `ta-tt-count-<orgId>` ("บัญชี TikTok N" + a popover listing them) from one
+ * `GET …/organizations/<orgId>/tiktok-accounts` per org, read when the drill-down opens and re-read on Refresh,
+ * after a discover and after a proven scan.
  * 2026-10-20 (human request, TASK-ta-org-redesign) — two things, both to make the table narrower and the
  * drill-down readable:
  *   · **Label** merged into **Account** (8 columns now). The cell is label (bold, `ta-label`, absent when the
@@ -158,6 +170,12 @@ import type {
   BcSubCreateJobResponse,
   BcSubCreateLatestResponse,
   BcSubCreateSuggest,
+  BcTikTokAccount,
+  BcTikTokAccountsResponse,
+  BcTikTokAccountsState,
+  BcTtLinkAccepted,
+  BcTtLinkConflictBody,
+  BcTtLinkLatestResponse,
   DiscoverOrgBody,
   JobType,
   LoginConflictBody,
@@ -523,7 +541,8 @@ function startDiscoverPoll(id: string) {
     const label = next.label ?? next.loginEmail
     // FEAT-059 — the job wrote `advertiserCount` / `lastDiscoverAt` / `lastDiscoverError` per org: re-read the
     // drill-down of this account (only when it was opened at least once, i.e. it has a cache entry)
-    if (orgsById.value[id]) void loadOrgs(id)
+    // TASK-bc-tt-link — a discover also syncs `bc_tiktok_accounts`, so the per-org counts are re-read too
+    if (orgsById.value[id]) void loadOrgs(id, true)
     if (next.lastDiscoverError) {
       toast.add({ title: 'Advertiser sync failed', description: `${label}: ${discoverErrorText(next.lastDiscoverError)}`, color: 'error' })
     } else {
@@ -769,13 +788,19 @@ function setOrgsState(id: string, state: OrganizationsState) {
   orgsById.value = { ...orgsById.value, [id]: state }
 }
 
-/** one `GET …/organizations` per call; the previous rows stay visible while it is in flight */
-async function loadOrgs(id: string) {
+/**
+ * one `GET …/organizations` per call; the previous rows stay visible while it is in flight.
+ * TASK-bc-tt-link — every successful read also fills the per-org "บัญชี TikTok N" chips: one
+ * `GET …/organizations/:orgId/tiktok-accounts` per org, memoised unless `force` (Refresh / a finished discover /
+ * a proven scan re-read them, a plain collapse+expand does not).
+ */
+async function loadOrgs(id: string, force = false) {
   setOrgsState(id, { pending: true, error: null, data: orgsById.value[id]?.data ?? null })
   try {
     // retry: 0 — one request, ofetch must not re-issue it on 5xx (the error row offers Retry)
     const res = await api<OrganizationsResponse>(`/tiktok-accounts/${encodeURIComponent(id)}/organizations`, { retry: 0 })
     setOrgsState(id, { pending: false, error: null, data: res.organizations })
+    loadTtAccountsForOrgs(id, res.organizations, force)
   } catch (e) {
     const err = e as FetchError<Partial<ApiErrorBody>>
     setOrgsState(id, { pending: false, error: err.data?.error ?? err.message ?? 'Unexpected error', data: null })
@@ -789,9 +814,9 @@ function toggleOrgs(id: string) {
   if (open && !orgsById.value[id]) void loadOrgs(id)
 }
 
-/** Refresh re-reads the orgs of every row that is open right now (AC-13) */
+/** Refresh re-reads the orgs of every row that is open right now (AC-13), counts included */
 function reloadOpenOrgs() {
-  for (const id of expandedOrgIds.value) void loadOrgs(id)
+  for (const id of expandedOrgIds.value) void loadOrgs(id, true)
 }
 
 async function onRefresh() {
@@ -1071,6 +1096,9 @@ function advCreateBlockedReason(account: TikTokAccount): string | null {
   if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
   // one create job per login: while this account has one running, every org of it would get a 409 `running`
   if (advCreatePendingOrgs(account.id).length) return 'กำลังสร้างบัญชีโฆษณาอยู่'
+  // TASK-bc-tt-link — a QR job of this login is one job too (`running` for both buttons), and the account
+  // snapshot may not carry it as `runningJob` yet
+  if (ttLinkPendingOrgs(account.id).length) return 'กำลังออก QR เพิ่มบัญชี TikTok อยู่'
   if (account.runningJob) {
     if (account.runningJob.type === 'discover') return 'Sync in progress'
     if (account.runningJob.type === 'login') return 'Login in progress'
@@ -1191,6 +1219,177 @@ function onAdvCreated(job: BcAdvCreateAccepted) {
 onUnmounted(() => {
   for (const key of [...advCreatePolls.keys()]) stopAdvCreatePoll(key)
 })
+
+// ── TASK-bc-tt-link — add a TikTok account to one Business Center org (QR) ───────────────────────────────────────────
+/**
+ * Two beats (brief "การทำงานสองจังหวะ", decided with the human): the per-org button `ta-tt-link-<orgId>` orders an
+ * invitation **QR** and the modal closes nothing — the QR lives ~6 months, so there is nothing to wait for; then a
+ * human scans it and **สแกนแล้ว ตรวจสอบ** proves it through the FEAT-059 per-org discover.
+ * Unlike the two create flows above, the page does **not** own the poll: `TiktokAccountsTtLinkModal` is the whole
+ * flow and keeps itself alive, so this block only
+ *   1. answers the button with the **one** `GET …/bc-tt-link/latest` of the click, and POSTs a new QR only when
+ *      that org has none to show (an existing job — even one still `waiting` — reopens as it is, brief step 4),
+ *   2. remembers which orgs have an unfinished QR job (`ttLinkPending`, the row chip + the disabled reason) and
+ *   3. re-reads the org rows and the linked-account counts once a scan is proven.
+ * The linked-account counts of the drill-down live here too (`ttAccountsByKey`): one
+ * `GET …/organizations/:orgId/tiktok-accounts` per org, made when the drill-down opens and re-made when a
+ * discover of that account ends or a scan was just proven — never on a plain collapse/expand.
+ */
+const ttLinkOpen = ref(false)
+const ttLinkAccount = ref<TikTokAccount | null>(null)
+const ttLinkOrg = ref<BcOrganization | null>(null)
+/** the `latest` answer the click read, handed to the modal so it renders without a request of its own */
+const ttLinkInitial = ref<BcTtLinkLatestResponse | null>(null)
+/** `orgId` whose click (GET latest [+ POST]) is in flight (button spinner + no double click) */
+const ttLinkAsking = ref<string | null>(null)
+/** `<accountId>:<orgId>` of every org whose QR job has not finished yet → chip `ta-tt-link-pending-<orgId>` */
+const ttLinkPending = ref(new Set<string>())
+
+function setTtLinkPending(key: string, on: boolean) {
+  const next = new Set(ttLinkPending.value)
+  if (on) next.add(key)
+  else next.delete(key)
+  ttLinkPending.value = next
+}
+
+/** org ids of this account whose QR job is still open (prop of `OrganizationRows`) */
+function ttLinkPendingOrgs(accountId: string): string[] {
+  const prefix = `${accountId}:`
+  return [...ttLinkPending.value].filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length))
+}
+
+/**
+ * Why every "เพิ่มบัญชี TikTok" button of this account is disabled — the same rule as สร้างบัญชีโฆษณา
+ * (`advCreateBlockedReason` already names a running QR job of this login, see there), plus nothing of its own:
+ * the per-org part (this org's own job, a missing org) is decided inside `OrganizationRows`.
+ */
+function ttLinkBlockedReason(account: TikTokAccount): string | null {
+  return advCreateBlockedReason(account)
+}
+
+/**
+ * One click = one `GET …/bc-tt-link/latest`. A job that can still produce (or already shows) a QR is reopened as
+ * it is; only an org with no job, a terminal one without a QR (`failed` / `cancelled` / no image) gets the POST.
+ * 409 → toast with the API's own Thai text and **no** modal (brief step 2); 404/5xx the same.
+ */
+async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
+  if (ttLinkAsking.value || ttLinkBlockedReason(account)) return
+  const base = `/tiktok-accounts/${encodeURIComponent(account.id)}/organizations/${encodeURIComponent(org.orgId)}/bc-tt-link`
+  ttLinkAsking.value = org.orgId
+  try {
+    // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
+    let latest = await api<BcTtLinkLatestResponse>(`${base}/latest`, { retry: 0 })
+    const job = latest.job
+    const reusable = !!job && (job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
+    if (!reusable) {
+      // retry: 0 — exactly one POST per click (ofetch would otherwise queue a second job on 5xx)
+      const res = await api<BcTtLinkAccepted>(base, { method: 'POST', retry: 0 })
+      toast.add({ title: 'กำลังออก QR เพิ่มบัญชี TikTok', description: org.name || `…${org.orgId.slice(-4)}`, color: 'info' })
+      // `res.orgId` is the id as the API normalised it — the same one its `latest` answers will carry
+      setTtLinkPending(advKey(account.id, res.orgId), true)
+      // the new job has no state yet: the modal starts at "กำลังเปิด Business Center…" and polls from there
+      latest = { job: null, linked: [] }
+      void refresh()
+    } else if (job && (job.status === 'waiting' || job.status === 'active')) {
+      setTtLinkPending(advKey(account.id, org.orgId), true)
+    }
+    ttLinkAccount.value = account
+    ttLinkOrg.value = org
+    ttLinkInitial.value = latest
+    ttLinkOpen.value = true
+  } catch (e) {
+    const err = e as FetchError<Partial<BcTtLinkConflictBody & ApiErrorBody>>
+    const reason = err.data?.reason
+    toast.add({
+      // 404 is the contract's answer for an org that is not (or no longer) part of this account
+      title: err.statusCode === 404 ? 'ไม่พบ org' : 'เพิ่มบัญชี TikTok ไม่ได้ตอนนี้',
+      description: err.data?.error ?? (reason ? bcTtLinkReasonText(reason) : null) ?? err.message ?? 'Unexpected error',
+      color: 'error'
+    })
+  } finally {
+    ttLinkAsking.value = null
+  }
+}
+
+/** the modal ordered another QR ("ออก QR ใหม่" / "ลองใหม่") — it stays open, the row shows the pending chip */
+function onTtLinkRequested(job: BcTtLinkAccepted) {
+  const account = ttLinkAccount.value
+  if (!account) return
+  toast.add({ title: 'กำลังออก QR เพิ่มบัญชี TikTok', description: ttLinkOrg.value?.name ?? undefined, color: 'info' })
+  setTtLinkPending(advKey(account.id, job.orgId), true)
+  void refresh()
+}
+
+/** the followed QR job reached a terminal status: drop the chip and re-read the row (its `runningJob` is gone) */
+function onTtLinkSettled() {
+  const account = ttLinkAccount.value
+  const org = ttLinkOrg.value
+  if (!account || !org) return
+  setTtLinkPending(advKey(account.id, org.orgId), false)
+  void refresh()
+}
+
+/** a scan is proven: the new rows are in `bc_tiktok_accounts` → re-read this org's count and the org rows */
+function onTtLinked(accounts: BcTikTokAccount[]) {
+  const account = ttLinkAccount.value
+  const org = ttLinkOrg.value
+  if (!account || !org) return
+  setTtLinkPending(advKey(account.id, org.orgId), false)
+  const first = accounts[0]
+  toast.add({
+    title: `เชื่อมโยงบัญชี TikTok สำเร็จ (${accounts.length})`,
+    description: first ? bcTtAccountName(first) : undefined,
+    color: 'success'
+  })
+  void loadTtAccounts(account.id, org.orgId, true)
+  if (orgsById.value[account.id]) void loadOrgs(account.id)
+}
+
+/**
+ * Linked TikTok accounts per org, keyed `<accountId>:<orgId>` like the create jobs above. `force` is what
+ * separates "the drill-down was opened" (memo: one request per org per page lifetime) from "something changed"
+ * (Refresh, a finished discover, a proven scan).
+ */
+const ttAccountsByKey = ref<Record<string, BcTikTokAccountsState>>({})
+
+function setTtAccountsState(key: string, state: BcTikTokAccountsState) {
+  ttAccountsByKey.value = { ...ttAccountsByKey.value, [key]: state }
+}
+
+async function loadTtAccounts(accountId: string, orgId: string, force = false) {
+  const key = advKey(accountId, orgId)
+  const cached = ttAccountsByKey.value[key]
+  if (cached && !force) return
+  setTtAccountsState(key, { pending: true, error: null, data: cached?.data ?? null })
+  try {
+    // retry: 0 — one request per org; the chip's popover shows the error and clicking it asks again
+    const res = await api<BcTikTokAccountsResponse>(
+      `/tiktok-accounts/${encodeURIComponent(accountId)}/organizations/${encodeURIComponent(orgId)}/tiktok-accounts`,
+      { retry: 0 }
+    )
+    setTtAccountsState(key, { pending: false, error: null, data: res.accounts })
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    setTtAccountsState(key, { pending: false, error: err.data?.error ?? err.message ?? 'Unexpected error', data: cached?.data ?? null })
+  }
+}
+
+/** counts of every org of one account that can have them (a missing org renders no chip) */
+function loadTtAccountsForOrgs(accountId: string, orgs: readonly BcOrganization[], force = false) {
+  for (const org of orgs) {
+    if (!org.missingSince) void loadTtAccounts(accountId, org.orgId, force)
+  }
+}
+
+/** `orgId` → state, for this account only (prop of `OrganizationRows`) */
+function ttAccountsFor(accountId: string): Record<string, BcTikTokAccountsState> {
+  const prefix = `${accountId}:`
+  const out: Record<string, BcTikTokAccountsState> = {}
+  for (const [key, state] of Object.entries(ttAccountsByKey.value)) {
+    if (key.startsWith(prefix)) out[key.slice(prefix.length)] = state
+  }
+  return out
+}
 
 // ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
 // FEAT-051 — saved cards of one account (GOD/Payment only; the column is not rendered for anybody else)
@@ -1853,12 +2052,18 @@ const showTable = computed(() => !error.value && !isEmpty.value)
                 :adv-create-asking="advCreateAsking"
                 :adv-create-pending="advCreatePendingOrgs(row.original.id)"
                 :adv-create-failed="advCreateFailedFor(row.original.id)"
-                @retry="loadOrgs(row.original.id)"
+                :tt-link-blocked="ttLinkBlockedReason(row.original)"
+                :tt-link-asking="ttLinkAsking"
+                :tt-link-pending="ttLinkPendingOrgs(row.original.id)"
+                :tt-accounts="ttAccountsFor(row.original.id)"
+                @retry="loadOrgs(row.original.id, true)"
                 @sync="org => onSync(row.original, org.orgId)"
                 @advertisers="org => openAdvertisers(row.original, org)"
                 @copy="org => copyText(org.orgId, 'BC org id copied')"
                 @set-parent="payload => onSetOrgParent(row.original.id, payload)"
                 @adv-create="org => onAskAdvCreate(row.original, org)"
+                @tt-link="org => onAskTtLink(row.original, org)"
+                @tt-accounts-retry="org => loadTtAccounts(row.original.id, org.orgId, true)"
               />
             </template>
           </UTable>
@@ -1914,6 +2119,15 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         :account="advCreateTarget"
         :suggest="advCreateSuggest"
         @created="onAdvCreated"
+      />
+      <TiktokAccountsTtLinkModal
+        v-model:open="ttLinkOpen"
+        :account="ttLinkAccount"
+        :org="ttLinkOrg"
+        :initial="ttLinkInitial"
+        @requested="onTtLinkRequested"
+        @settled="onTtLinkSettled"
+        @linked="onTtLinked"
       />
       <TopupsPayModal
         v-model:open="modalOpen"
