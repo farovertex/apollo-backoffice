@@ -295,12 +295,20 @@ export interface AdTemplatePostCover {
 }
 
 /**
- * FEAT-042 — `postInfo` of a **list row** (api-contract §1.2 `PostInfoSummaryView`): exactly these 6 keys.
+ * FEAT-042 — `postInfo` of a **list row** (api-contract §1.2 `PostInfoSummaryView`): exactly these 7 keys.
  * It is also the common denominator of the full view below, so every reader that only needs the chip, the
  * thumbnail flag, the owner, the validity date or the reason can accept this type and be handed either shape.
+ *
+ * **BUG-061** — `checkedAt` is one of them since 2026-10-21. It is the cover cache key of `useCoverImage`, so
+ * without it every list row asked for the bytes under the constant key `<id>|` and kept showing the cover of
+ * the **previous** post after a re-verify (while the form modal, which gets the full view, showed the new one).
+ * It stays optional on the wire: an older API that does not serve it falls back to that old behaviour instead
+ * of breaking the page.
  */
 export interface AdTemplatePostInfoSummary {
   status: AdTemplatePostInfoStatus
+  /** set on every terminal state (`verified`, `invalid`, `failed`) · part of the cover cache key */
+  checkedAt?: string | null
   /** `0` video · `1` images · other values are passed through by the API */
   itemType: number | null
   ownerName: string | null

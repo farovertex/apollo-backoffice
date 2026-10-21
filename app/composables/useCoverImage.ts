@@ -7,7 +7,10 @@
  * - the request is issued **only** while `postInfo.cover.ok === true` (`enabled`), so a page never produces
  *   an expected 404 — pass `hasPostCover(postInfo)`;
  * - the bytes/URL are cached per **template id + `checkedAt`** in a module-level map, so a table row, the form
- *   modal and the launch-ads card share one request and a re-verify (new `checkedAt`) fetches again;
+ *   modal and the launch-ads card share one request and a re-verify (new `checkedAt`) fetches again.
+ *   **BUG-061**: this only works because `checkedAt` is in the **list** summary as well — while it was served
+ *   on the single view only, every list row keyed on `<id>|` and a re-verify could never evict that entry, so
+ *   the table kept the cover of the previous post for the whole life of the page (a full reload cleared it);
  * - a cached `url` entry whose `expiresAt` is less than 60 s away counts as missing, so the next consumer of
  *   that key refetches the endpoint instead of handing out a URL that is about to 403.
  *

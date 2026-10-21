@@ -69,9 +69,15 @@ export function hasPostCover(postInfo: PostInfoLike): boolean {
   return postInfo?.cover?.ok === true
 }
 
-/** `checkedAt` is part of the cover cache key (a re-verify replaces the bytes); summaries do not carry it */
+/**
+ * `checkedAt` is part of the cover cache key (a re-verify replaces the bytes).
+ *
+ * **BUG-061** — list rows carry it too since the API serves it in the summary (7 keys). An API that does not
+ * yet answer with it still yields `null` here, which is the pre-fix behaviour (one constant key per template)
+ * rather than a broken page.
+ */
 export function postInfoCheckedAt(postInfo: PostInfoLike): string | null {
-  return postInfo && 'checkedAt' in postInfo ? postInfo.checkedAt : null
+  return postInfo?.checkedAt ?? null
 }
 
 /** the full single-template view (the post card needs `caption`, `durationSec`, `imageCount`, …) */
