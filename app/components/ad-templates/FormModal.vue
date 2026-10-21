@@ -130,6 +130,26 @@
  * be rendered the moment its section opens — `UCollapsible`'s `unmountOnHide: false` only sets
  * `hidden="until-found"`, which is not reliably "hidden" for a test runner, and unmounting would drop the field an
  * error has to land on.
+ *
+ * **TASK-template-form-ux** (human request 2026-10-21) — three things make the long form readable on a wide
+ * screen, none of which changes a single value, request or test id:
+ * 1. **Width + two columns.** The dialog grows with the viewport (`max-w-3xl` → `lg:max-w-5xl` → `xl:max-w-6xl`;
+ *    the unprefixed `max-w-3xl` stays so tailwind-merge still drops the theme's own `max-w-lg` below `sm`), and
+ *    every section body is a `grid gap-4 xl:grid-cols-2`. Below `xl` that grid is a single column with the same
+ *    1 rem rhythm `space-y-4` had, so tablet and mobile are byte-for-byte the old layout. Fields that must stay
+ *    full width carry `xl:col-span-2`: the ad-texts tag input, the CTA multi-select and its warning, every
+ *    image/preview block (CTA button image, add-on card), the description textarea, the long consent radio, the
+ *    nested `sm:grid-cols-*` rows (tone/language, zoom/seconds, the whole UTM block) and every section-level
+ *    error (`adt-utm-error`, `adt-addon-error`, `adt-cta-image-section-error`).
+ * 2. **`adt-form-expand-all`** above the first section opens / collapses all five collapsible sections at once
+ *    and remembers the choice in `localStorage` (`useLocalStorage('adt-form-expand-all', false)`). The default —
+ *    no stored value, i.e. `false` — leaves `syncExpanded()` **exactly** as it was (collapsed while the section
+ *    equals `options.systemDefault`, AS-8); only an explicit "กางทั้งหมด" makes every open on the next open.
+ *    The error paths (`expandSectionsOf`, `onFormError`, the API issues) are untouched and still win.
+ * 3. **`adt-sec-<id>-summary`** — a muted one-liner next to the heading of a **collapsed** section, computed from
+ *    the current state with the labels `/options` serves (never a hard-coded enum label). ★ It never carries a
+ *    secret: the `identity` summary only says *whether* a Spark code is bound
+ *    (`ผูกโพสต์ด้วยรหัสแล้ว` / `ยังไม่ได้ใส่รหัส`), never the code, its mask or its last 4 characters.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -1011,11 +1031,105 @@ const sectionIsDefault = computed<Record<string, boolean>>(() => {
   )
 })
 
-/** collapse every section that is at the system default, expand the others (open, reset, reset-to-defaults) */
+/**
+ * Collapse every section that is at the system default, expand the others (open, reset, reset-to-defaults) —
+ * unless the admin asked for everything to be open (`adt-form-expand-all`, remembered in `localStorage`).
+ * **The default (`false`, nothing stored) is the original behaviour, unchanged** (spec AS-8).
+ */
 function syncExpanded() {
+  if (expandAllPref.value) {
+    setAllSections(true)
+    return
+  }
   const byDefault = sectionIsDefault.value
   for (const id of COLLAPSIBLE_IDS) expanded[id] = !byDefault[id]
 }
+
+// ── "กางทั้งหมด / ยุบทั้งหมด" (TASK-template-form-ux) ───────────────────────────────────────────────────────────────
+/**
+ * Whether the admin wants every collapsible section open when the modal opens. `false` is both the initial value
+ * and what "ยุบทั้งหมด" stores, so a browser that never pressed the button behaves exactly as before.
+ */
+const expandAllPref = useLocalStorage('adt-form-expand-all', false)
+
+function setAllSections(open: boolean) {
+  for (const id of COLLAPSIBLE_IDS) expanded[id] = open
+}
+
+/** what the button offers: the label / icon follow the **current** state, not the stored preference */
+const allSectionsExpanded = computed(() => COLLAPSIBLE_IDS.every(id => expanded[id] === true))
+
+function toggleExpandAll() {
+  const next = !allSectionsExpanded.value
+  expandAllPref.value = next
+  setAllSections(next)
+}
+
+// ── the one-line summary of a collapsed section (TASK-template-form-ux) ──────────────────────────────────────────────
+/** `a · b · c` of the parts that have something to say, `null` when none of them does (then nothing is rendered) */
+function joinSummary(parts: (string | null | undefined)[]): string | null {
+  const kept = parts.filter((part): part is string => typeof part === 'string' && part.trim() !== '')
+  return kept.length ? kept.join(' · ') : null
+}
+
+/**
+ * The Thai texts of the summaries. Everything that names a TikTok value reads its label from `options`; these are
+ * only the words around them.
+ * ★ `codeSet` / `codeMissing` are deliberately a yes/no: the Spark authorization code (and its mask) is a secret
+ * and never appears in a summary (AGENTS.md §5).
+ */
+const SUMMARY_TEXT = {
+  codeSet: 'ผูกโพสต์ด้วยรหัสแล้ว',
+  codeMissing: 'ยังไม่ได้ใส่รหัส',
+  buttonText: 'ปุ่มข้อความ',
+  buttonImage: 'ปุ่มเป็นรูป',
+  adTexts: (n: number) => `${n} ข้อความ`,
+  adTextsNone: 'ยังไม่มีข้อความ',
+  cta: (n: number) => `${n} ปุ่ม`,
+  ctaNone: 'ยังไม่เลือก',
+  addOnOn: 'เปิด',
+  addOnOff: 'ปิด',
+  addOnZoom: (n: number) => `ซูม ${n}`,
+  addOnSeconds: (n: number) => `${n} วินาที`,
+  trackingNone: 'ไม่ได้ตั้ง'
+} as const
+
+/** is a Spark code bound right now? (the stored one is kept, or one was typed) — never *which* code */
+const hasPostCode = computed(() =>
+  codeMode.value === 'keep' ? hasStoredCode.value : state.config.identity.post.code.trim() !== ''
+)
+
+/** by section id, for the collapsed header. `null` = nothing worth saying → no `<span>` at all */
+const sectionSummary = computed<Record<string, string | null>>(() => {
+  const c = state.config
+  const page = c.destination.page
+  const tracking = [
+    c.tracking.impressionUrl.trim() ? 'impression' : '',
+    c.tracking.clickUrl.trim() ? 'click' : ''
+  ]
+  return {
+    identity: joinSummary([
+      labelOf(props.options.identityMode, c.identity.mode),
+      labelOf(props.options.identitySource, c.identity.source),
+      hasPostCode.value ? SUMMARY_TEXT.codeSet : SUMMARY_TEXT.codeMissing
+    ]),
+    destination: joinSummary([
+      labelOf(props.options.destinationMode, c.destination.mode),
+      page.buttonMode === 'image' ? SUMMARY_TEXT.buttonImage : SUMMARY_TEXT.buttonText,
+      labelOf(props.options.triState, c.allowOnTiktokPlatforms)
+    ]),
+    adtexts: c.adTexts.length ? SUMMARY_TEXT.adTexts(c.adTexts.length) : SUMMARY_TEXT.adTextsNone,
+    cta: c.cta.values.length ? SUMMARY_TEXT.cta(c.cta.values.length) : SUMMARY_TEXT.ctaNone,
+    addon: c.addOn.enabled
+      ? joinSummary([
+          SUMMARY_TEXT.addOnOn,
+          c.addOn.zoomClicks === null ? '' : SUMMARY_TEXT.addOnZoom(c.addOn.zoomClicks),
+          c.addOn.displaySeconds === null ? '' : SUMMARY_TEXT.addOnSeconds(c.addOn.displaySeconds)
+        ])
+      : SUMMARY_TEXT.addOnOff,
+    tracking: joinSummary(tracking) ?? SUMMARY_TEXT.trackingNone
+  }
+})
 
 function resetForm() {
   Object.assign(state, stateFrom(editing.value))
@@ -1811,7 +1925,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     :title="modalTitle"
     :description="modalDescription"
     :dismissible="!submitting"
-    :ui="{ content: 'max-w-3xl' }"
+    :ui="{ content: 'max-w-3xl sm:max-w-3xl lg:max-w-5xl xl:max-w-6xl' }"
     :content="modalContent"
   >
     <template #body>
@@ -1834,9 +1948,26 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           data-testid="adt-legacy-notice"
         />
 
+        <!--
+          TASK-template-form-ux — one button for the whole accordion, remembered in `localStorage`. It sits above
+          the first section and never touches `adname` / `utm` (they have no toggle at all).
+        -->
+        <div class="flex justify-end">
+          <UButton
+            :label="allSectionsExpanded ? 'ยุบทั้งหมด' : 'กางทั้งหมด'"
+            :icon="allSectionsExpanded ? 'i-lucide-chevrons-down-up' : 'i-lucide-chevrons-up-down'"
+            color="neutral"
+            variant="ghost"
+            size="xs"
+            :aria-pressed="allSectionsExpanded"
+            data-testid="adt-form-expand-all"
+            @click="toggleExpandAll"
+          />
+        </div>
+
         <!-- 1. ad name — always open, no toggle -->
-        <section class="space-y-4" data-testid="adt-sec-adname">
-          <h3 class="text-sm font-semibold text-highlighted">
+        <section class="grid gap-4 xl:grid-cols-2" data-testid="adt-sec-adname">
+          <h3 class="text-sm font-semibold text-highlighted xl:col-span-2">
             ชื่อโฆษณา
           </h3>
 
@@ -1855,10 +1986,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             />
           </UFormField>
 
+          <!-- the only multi-line control of this section → full width on a wide screen -->
           <UFormField
             label="Description"
             name="description"
             hint="Optional"
+            class="xl:col-span-2"
             :error="serverErrors['description']"
           >
             <UTextarea
@@ -1903,9 +2036,13 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             </UBadge>
           </h3>
 
+          <!--
+            The UTM block keeps its own `sm:grid-cols-2` / `sm:grid-cols-3` rows, so every child spans both
+            columns of the section grid: at `xl` it looks exactly as it does below it.
+          -->
           <div
             id="adt-sec-utm"
-            class="mt-4 space-y-4"
+            class="mt-4 grid gap-4 xl:grid-cols-2 xl:*:col-span-2"
             data-testid="adt-sec-utm"
           >
             <p class="text-xs text-muted" data-testid="adt-sec-utm-hint">
@@ -2067,13 +2204,19 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               >
                 Default
               </UBadge>
+              <!-- ★ never the Spark code itself, only whether one is bound (AGENTS.md §5) -->
+              <span
+                v-if="!expanded.identity && sectionSummary.identity"
+                class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                data-testid="adt-sec-identity-summary"
+              >{{ sectionSummary.identity }}</span>
             </button>
           </h3>
 
           <div
             v-show="expanded.identity"
             id="adt-sec-identity"
-            class="mt-4 space-y-4"
+            class="mt-4 grid gap-4 xl:grid-cols-2"
             data-testid="adt-sec-identity"
           >
             <UFormField
@@ -2185,9 +2328,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               (including one that was never checked) and right after a save that started a lookup; never for a
               create that has not been saved yet. The code itself is not part of it.
             -->
+            <!-- the post card (cover + caption) is a preview → full width on a wide screen -->
             <div
               v-if="isEdit"
-              class="space-y-2 rounded-lg border border-default bg-elevated/30 p-3"
+              class="space-y-2 rounded-lg border border-default bg-elevated/30 p-3 xl:col-span-2"
               data-testid="adt-post-info"
               :data-polling="postPolling ? 'true' : 'false'"
               :data-status="postInfoStatusAttr(postInfo)"
@@ -2288,13 +2432,18 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               >
                 Default
               </UBadge>
+              <span
+                v-if="!expanded.destination && sectionSummary.destination"
+                class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                data-testid="adt-sec-destination-summary"
+              >{{ sectionSummary.destination }}</span>
             </button>
           </h3>
 
           <div
             v-show="expanded.destination"
             id="adt-sec-destination"
-            class="mt-4 space-y-4"
+            class="mt-4 grid gap-4 xl:grid-cols-2"
             data-testid="adt-sec-destination"
           >
             <UFormField
@@ -2335,6 +2484,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               :items="BUTTON_MODE_ITEMS"
               value-key="value"
               orientation="horizontal"
+              class="xl:col-span-2"
               :disabled="submitting"
               data-testid="adt-cta-image-mode"
             />
@@ -2357,7 +2507,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </UFormField>
 
-            <div v-show="state.config.destination.page.buttonMode === 'image'" class="space-y-2">
+            <!-- image + preview + its own error → full width on a wide screen -->
+            <div v-show="state.config.destination.page.buttonMode === 'image'" class="space-y-2 xl:col-span-2">
               <div class="flex flex-wrap items-start gap-3">
                 <!-- the thumbnail of the picked / stored image -->
                 <img
@@ -2441,7 +2592,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <!-- the blob as a whole was refused (a path one level deeper than `buttonImageId`, kept defensively) -->
             <p
               v-if="buttonImageSectionError"
-              class="text-sm break-words text-error"
+              class="text-sm break-words text-error xl:col-span-2"
               role="alert"
               data-testid="adt-cta-image-section-error"
             >
@@ -2466,7 +2617,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </UFormField>
 
-            <div class="grid gap-4 sm:grid-cols-2">
+            <!-- its own two columns at `sm` already → it spans both columns of the section grid -->
+            <div class="grid gap-4 sm:grid-cols-2 xl:col-span-2">
               <UFormField
                 label="Tone"
                 name="config.destination.page.tone"
@@ -2513,10 +2665,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               />
             </UFormField>
 
+            <!-- the consent sentence from `/options` is long → full width on a wide screen -->
             <UFormField
               label="TikTok platforms consent"
               name="config.allowOnTiktokPlatforms"
               required
+              class="xl:col-span-2"
               :error="serverErrors['config.allowOnTiktokPlatforms']"
             >
               <URadioGroup
@@ -2560,19 +2714,26 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               >
                 Default
               </UBadge>
+              <span
+                v-if="!expanded.adtexts && sectionSummary.adtexts"
+                class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                data-testid="adt-sec-adtexts-summary"
+              >{{ sectionSummary.adtexts }}</span>
             </button>
           </h3>
 
           <div
             v-show="expanded.adtexts"
             id="adt-sec-adtexts"
-            class="mt-4 space-y-4"
+            class="mt-4 grid gap-4 xl:grid-cols-2"
             data-testid="adt-sec-adtexts"
           >
+            <!-- a tag input of whole sentences → full width on a wide screen -->
             <UFormField
               label="Ad texts"
               name="config.adTexts"
               required
+              class="xl:col-span-2"
               :help="`อย่างน้อย 1 · สูงสุด ${limits.adTextsMax} ข้อความ · ไม่เกิน ${limits.textMaxLength} ตัวต่อข้อความ`"
               :error="serverErrors['config.adTexts'] ?? adTextsError ?? undefined"
             >
@@ -2616,19 +2777,26 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               >
                 Default
               </UBadge>
+              <span
+                v-if="!expanded.cta && sectionSummary.cta"
+                class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                data-testid="adt-sec-cta-summary"
+              >{{ sectionSummary.cta }}</span>
             </button>
           </h3>
 
           <div
             v-show="expanded.cta"
             id="adt-sec-cta"
-            class="mt-4 space-y-4"
+            class="mt-4 grid gap-4 xl:grid-cols-2"
             data-testid="adt-sec-cta"
           >
+            <!-- a multi-select that can hold every CTA at once → full width on a wide screen -->
             <UFormField
               label="Call to action"
               name="config.cta.values"
               required
+              class="xl:col-span-2"
               :error="serverErrors['config.cta.values']"
             >
               <USelectMenu
@@ -2679,6 +2847,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               color="warning"
               variant="subtle"
               icon="i-lucide-triangle-alert"
+              class="xl:col-span-2"
               :title="SMART_PLUS_CTA_WARNING"
               :description="nonSmartPlusSelected.map(value => labelOf(options.ctaValue, value)).join(' · ')"
               data-testid="adt-cta-smart-warning"
@@ -2714,24 +2883,33 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               >
                 Default
               </UBadge>
+              <span
+                v-if="!expanded.addon && sectionSummary.addon"
+                class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                data-testid="adt-sec-addon-summary"
+              >{{ sectionSummary.addon }}</span>
             </button>
           </h3>
 
           <div
             v-show="expanded.addon"
             id="adt-sec-addon"
-            class="mt-4 space-y-4"
+            class="mt-4 grid gap-4 xl:grid-cols-2"
             data-testid="adt-sec-addon"
           >
             <USwitch
               v-model="state.config.addOn.enabled"
               label="เพิ่ม Add-On บัตรดิสเพลย์"
+              class="xl:col-span-2"
               :disabled="submitting"
               data-testid="adt-addon-enabled"
             />
 
-            <!-- `v-show`, like every other section body: the values stay mounted while the switch is off -->
-            <div v-show="state.config.addOn.enabled" class="space-y-4">
+            <!--
+              `v-show`, like every other section body: the values stay mounted while the switch is off. The card
+              (thumbnail + the two numbers) keeps its own grid, so it spans both columns of the section grid.
+            -->
+            <div v-show="state.config.addOn.enabled" class="space-y-4 xl:col-span-2">
               <div class="flex flex-wrap items-start gap-3">
                 <!-- the thumbnail of the picked / stored image; `max-h-24` = the 96 px of the spec -->
                 <img
@@ -2826,7 +3004,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <!-- the blob as a whole was refused (400 `config.addOn` or a path under it that is not a field) -->
             <p
               v-if="addOnSectionError"
-              class="text-sm break-words text-error"
+              class="text-sm break-words text-error xl:col-span-2"
               role="alert"
               data-testid="adt-addon-error"
             >
@@ -2860,13 +3038,18 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               >
                 Default
               </UBadge>
+              <span
+                v-if="!expanded.tracking && sectionSummary.tracking"
+                class="min-w-0 flex-1 truncate text-xs font-normal text-muted"
+                data-testid="adt-sec-tracking-summary"
+              >{{ sectionSummary.tracking }}</span>
             </button>
           </h3>
 
           <div
             v-show="expanded.tracking"
             id="adt-sec-tracking"
-            class="mt-4 space-y-4"
+            class="mt-4 grid gap-4 xl:grid-cols-2"
             data-testid="adt-sec-tracking"
           >
             <UFormField
