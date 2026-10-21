@@ -33,11 +33,13 @@
  * the ISO value of the `datetime-local` picker (assumption A9, browser-local time).
  *
  * Layout (FEAT-061, TikTok's Smart+ order): **six** sections, the first two always open and without a toggle —
- * **`campaign`** (`agt-sec-campaign`: campaign name, budget strategy, campaign budget under `cbo`, bid strategy,
- * `targetCpa` under `costCap`) and `adgroup` — then the four collapsible ones behind `agt-sec-<id>-toggle`:
+ * **`campaign`** (`agt-sec-campaign`: campaign name, budget strategy, campaign budget under `cbo`, bid strategy
+ * **under `cbo` only**) and **`adgroup`** (`agt-sec-adgroup`: template name / description / prefix, then the
+ * `agt-adgroup-bidding` block: the bid strategy radio **under `adGroup`**, a read-only line under `cbo`, and
+ * `targetCpa` under `costCap`) — then the four collapsible ones behind `agt-sec-<id>-toggle`:
  * `placement` (the optimisation-location radio only), `audience` (locations / age / gender / languages),
- * `budget` (ad-group budget, schedule, timezone, dayparting) and `bidding` (the five tri-state
- * advanced-placement toggles under their TikTok sub-heading). A collapsed section is hidden with `v-show`
+ * `budget` (ad-group budget — hidden under `cbo`, see below — schedule, timezone, dayparting) and `bidding` (the
+ * five tri-state advanced-placement toggles under their TikTok sub-heading). A collapsed section is hidden with `v-show`
  * (never unmounted) so every value is still submitted and an error can be rendered the moment its section opens,
  * it shows the live badge `agt-sec-<id>-default` while every control in it equals `options.systemDefault`, and it
  * auto-expands when one of its fields carries a client or API error.
@@ -67,6 +69,19 @@
  * 3. **`agt-sec-<id>-summary`** — a muted one-liner next to the heading of a **collapsed** section, computed from
  *    the current state with the labels `/options` serves (never a hard-coded enum label). This form holds no
  *    secret, but the same rule applies: a summary only ever repeats what the controls themselves show.
+ *
+ * **TASK-smart-plus-publish** (human request 2026-10-21, after a live survey of the Smart+ wizard on draft
+ * 1879661858900065): the form now shows every control **on the TikTok page where the worker sets it**, because the
+ * budget strategy of the campaign page decides what the ad-group page offers:
+ * - `cbo` → the bid strategy is chosen on the **campaign page**; the ad-group page shows it read-only
+ *   (`components-BidStrategyRender-*`), asks for the target cost only under `costCap`, and has **no ad-group
+ *   budget** at all (`maxResults` → nothing to fill there).
+ * - `adGroup` → the campaign page has no bid select; the ad-group page offers the bid dropdown, the target cost
+ *   under `costCap` and the budget + schedule block.
+ * The stored config does not change (`campaign.bidStrategy` stays one key, `budget` is still sent under `cbo` —
+ * the API requires it, AS-3); only where the controls render does: the bid radio moves between the two always-open
+ * sections (one `UFormField` name, one test id, rendered in one place at a time), `targetCpa` lives in the ad-group
+ * block, and the ad-group budget inputs are replaced by a note under `cbo` unless an error points at them.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -382,6 +397,7 @@ const tagErrors = ref<Record<string, string>>({})
 
 function clearServerErrors() {
   serverErrors.value = {}
+  budgetClientError.value = false
 }
 
 // any edit invalidates what the server said about the form
@@ -537,8 +553,21 @@ const SECTIONS = [
   }
 ] satisfies readonly { id: SectionId, heading: string, keys: readonly (keyof AdGroupConfig)[] }[]
 
-/** FEAT-061 — the campaign section's TikTok title (always open, like `adgroup`) */
-const CAMPAIGN_HEADING = 'แผนการโฆษณา'
+/** FEAT-061 — the campaign section's title (always open, like `adgroup`) — TASK-smart-plus-publish: named by TikTok page */
+const CAMPAIGN_HEADING = 'หน้าแคมเปญ (แผนการโฆษณา)'
+const CAMPAIGN_CAPTION = 'ค่าในส่วนนี้ worker ตั้งบนหน้าแคมเปญของ TikTok — กลยุทธ์งบประมาณเป็นตัวกำหนดว่าหน้ากลุ่มโฆษณาจะมีช่องอะไร'
+const ADGROUP_HEADING = 'หน้ากลุ่มโฆษณา'
+const ADGROUP_CAPTION = 'ค่าในส่วนนี้และส่วนที่พับอยู่ด้านล่าง worker ตั้งบนหน้ากลุ่มโฆษณาของ TikTok'
+/** the words next to the controls that move between the two pages (survey 2026-10-21 · draft 1879661858900065) */
+const PAGE_TEXT = {
+  budgetStrategyHelp: 'งบประมาณแผนการโฆษณา (CBO): เลือกกลยุทธ์การเสนอราคาที่หน้านี้ และหน้ากลุ่มโฆษณาจะไม่มีช่องงบ · งบประมาณกลุ่มโฆษณา: กลยุทธ์การเสนอราคาและงบไปตั้งที่หน้ากลุ่มโฆษณา',
+  bidOnCampaignHelp: 'ค่าใช้จ่ายต่อผลลัพธ์เป้าหมาย: ต้องกรอกตัวเลขในส่วนหน้ากลุ่มโฆษณาด้านล่าง · ผลลัพธ์สูงสุด: หน้ากลุ่มโฆษณาไม่มีช่องให้กรอก',
+  bidOnAdGroupHelp: 'ภายใต้งบประมาณกลุ่มโฆษณา TikTok ให้เลือกกลยุทธ์การเสนอราคาที่หน้ากลุ่มโฆษณา',
+  bidReadonly: (label: string) => `กลยุทธ์การเสนอราคา: ${label} — ตั้งจากหน้าแคมเปญ (TikTok แสดงแบบอ่านอย่างเดียวบนหน้ากลุ่มโฆษณา)`,
+  bidReadonlyNothing: 'ไม่มีช่องให้กรอกบนหน้ากลุ่มโฆษณา',
+  budgetCboNote: 'ใช้งบประมาณแผนการโฆษณา (CBO) — หน้ากลุ่มโฆษณาไม่มีช่องงบ',
+  budgetCboSummary: 'งบที่แผนการโฆษณา (CBO)'
+} as const
 /** FEAT-013 — the removed section's TikTok title, kept as the sub-heading of the toggles inside `bidding` (A9) */
 const ADVANCED_HEADING = 'ตำแหน่งโฆษณาที่เข้าเกณฑ์ › การตั้งค่าขั้นสูง'
 
@@ -550,7 +579,8 @@ const SECTION_OF_KEY: Record<string, SectionId> = {
     SECTIONS.flatMap(section => section.keys.map(key => [key, section.id] as [string, SectionId]))
   ),
   campaign: 'campaign',
-  targetCpa: 'campaign'
+  // TASK-smart-plus-publish: the target cost is filled on the ad-group page → rendered in the (always open) adgroup block
+  targetCpa: 'adgroup'
 }
 
 const expanded = reactive<Record<string, boolean>>(
@@ -584,6 +614,30 @@ const showEndTime = computed(() => state.config.schedule.mode === 'dateRange')
 const showCampaignBudget = computed(() => state.config.campaign.budgetStrategy === 'cbo')
 /** FEAT-061 — `targetCpa` exists only for `costCap`; `maxResults` sends `targetCpa: null` */
 const showTargetCpa = computed(() => state.config.campaign.bidStrategy === 'costCap')
+/**
+ * TASK-smart-plus-publish — where the one bid-strategy radio renders: on the campaign block under `cbo` (TikTok's
+ * campaign page owns it), on the ad-group block under `adGroup` (the campaign page has no bid select then).
+ * An empty strategy (migration draft) keeps it in the campaign block until the admin picks one.
+ */
+const showBidOnAdGroup = computed(() => state.config.campaign.budgetStrategy === 'adGroup')
+const showBidOnCampaign = computed(() => !showBidOnAdGroup.value)
+/** the read-only line of the ad-group block under `cbo`: the `/options` label of the campaign's choice (+ "nothing to fill" for maxResults) */
+const bidReadonlyText = computed(() => {
+  const line = PAGE_TEXT.bidReadonly(labelOf(props.options.bidStrategy, state.config.campaign.bidStrategy))
+  return showTargetCpa.value ? line : `${line} · ${PAGE_TEXT.bidReadonlyNothing}`
+})
+/** a client-side zod issue on `config.budget.*` (set by `onFormError`) — brings the hidden inputs back under `cbo` */
+const budgetClientError = ref(false)
+/**
+ * TASK-smart-plus-publish — the ad-group budget inputs exist on TikTok's page only under `adGroup`; under `cbo` a note
+ * replaces them. The values are still sent (the API requires `budget`, AS-3), so an API or zod issue at
+ * `config.budget.*` re-shows the inputs instead of pointing at nothing.
+ */
+const showAdGroupBudget = computed(() =>
+  state.config.campaign.budgetStrategy === 'adGroup'
+  || budgetClientError.value
+  || ['type', 'amount', 'currency'].some(key => serverErrors.value[`config.budget.${key}`] !== undefined)
+)
 /**
  * FEAT-013 — the `website` choice is hidden in the BO (the API still accepts and stores it, A4/A5). Filtered by
  * **value**, never by index, so any other item `/options` serves still renders. A stored `website` row therefore
@@ -686,7 +740,8 @@ const sectionSummary = computed<Record<string, string | null>>(() => {
       c.languages.length === 0 ? '' : SUMMARY_TEXT.languages(c.languages.length)
     ]),
     budget: joinSummary([
-      budget,
+      // TASK-smart-plus-publish: under `cbo` the ad-group page has no budget — say so instead of repeating a hidden value
+      c.campaign.budgetStrategy === 'cbo' ? PAGE_TEXT.budgetCboSummary : budget,
       labelOf(props.options.scheduleMode, c.schedule.mode),
       labelOf(props.options.dayparting, c.dayparting)
     ]),
@@ -1220,7 +1275,10 @@ function showApiError(e: unknown, fallback: string) {
 
 /** client validation failed — open every section that holds an errored field before the messages are read */
 function onFormError(event: FormErrorEvent) {
-  expandSectionsOf((event.errors ?? []).map(issue => issue.name))
+  const names = (event.errors ?? []).map(issue => issue.name)
+  // TASK-smart-plus-publish: a zod issue on the ad-group budget must be visible even under `cbo` (inputs hidden)
+  if (names.some(name => name?.startsWith('config.budget.'))) budgetClientError.value = true
+  expandSectionsOf(names)
 }
 
 // ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1368,11 +1426,16 @@ const submitLabel = computed(() => {
             />
           </div>
 
-          <!-- 1. campaign (FEAT-061) — always open, no toggle -->
+          <!-- 1. campaign (FEAT-061) — always open, no toggle · TASK-smart-plus-publish: what TikTok's campaign page owns -->
           <section class="grid gap-4 xl:grid-cols-2" data-testid="agt-sec-campaign">
-            <h3 class="text-sm font-semibold text-highlighted xl:col-span-2">
-              {{ CAMPAIGN_HEADING }}
-            </h3>
+            <div class="xl:col-span-2">
+              <h3 class="text-sm font-semibold text-highlighted">
+                {{ CAMPAIGN_HEADING }}
+              </h3>
+              <p class="mt-1 text-xs text-muted" data-testid="agt-sec-campaign-caption">
+                {{ CAMPAIGN_CAPTION }}
+              </p>
+            </div>
 
             <UFormField
               label="Campaign name"
@@ -1393,6 +1456,7 @@ const submitLabel = computed(() => {
               label="Budget strategy"
               name="config.campaign.budgetStrategy"
               required
+              :help="PAGE_TEXT.budgetStrategyHelp"
               :error="fieldError('config.campaign.budgetStrategy')"
             >
               <URadioGroup
@@ -1445,10 +1509,13 @@ const submitLabel = computed(() => {
               </UFormField>
             </div>
 
+            <!-- CBO only: TikTok's campaign page owns the bid select; under `adGroup` the same radio renders in the ad-group block -->
             <UFormField
+              v-if="showBidOnCampaign"
               label="Bid strategy"
               name="config.campaign.bidStrategy"
               required
+              :help="PAGE_TEXT.bidOnCampaignHelp"
               :error="fieldError('config.campaign.bidStrategy')"
             >
               <URadioGroup
@@ -1459,33 +1526,18 @@ const submitLabel = computed(() => {
                 data-testid="agt-campaign-bid-strategy"
               />
             </UFormField>
-
-            <!-- costCap only: the target cost per result (sent as `null` for `maxResults`) -->
-            <UFormField
-              v-if="showTargetCpa"
-              label="Target cost per result"
-              name="config.targetCpa"
-              required
-              :help="targetCpaSuffix"
-              :error="fieldError('config.targetCpa')"
-            >
-              <UInput
-                v-model="state.config.targetCpa"
-                type="text"
-                inputmode="decimal"
-                placeholder="120"
-                class="w-full sm:max-w-xs"
-                :disabled="submitting"
-                data-testid="agt-target-cpa"
-              />
-            </UFormField>
           </section>
 
-          <!-- 2. ad group — always open, no toggle -->
+          <!-- 2. ad group — always open, no toggle · TASK-smart-plus-publish: what TikTok's ad-group page owns -->
           <section class="grid gap-4 border-t border-default pt-4 xl:grid-cols-2" data-testid="agt-sec-adgroup">
-            <h3 class="text-sm font-semibold text-highlighted xl:col-span-2">
-              กลุ่มโฆษณา
-            </h3>
+            <div class="xl:col-span-2">
+              <h3 class="text-sm font-semibold text-highlighted">
+                {{ ADGROUP_HEADING }}
+              </h3>
+              <p class="mt-1 text-xs text-muted" data-testid="agt-sec-adgroup-caption">
+                {{ ADGROUP_CAPTION }}
+              </p>
+            </div>
 
             <UFormField
               label="Name"
@@ -1536,6 +1588,57 @@ const submitLabel = computed(() => {
                 data-testid="agt-form-prefix"
               />
             </UFormField>
+
+            <!--
+              TASK-smart-plus-publish — the bidding controls of TikTok's ad-group page ("การเพิ่มประสิทธิภาพและการเสนอราคา"):
+              `adGroup` → the bid dropdown lives here (same key / test id as the campaign block, one place at a time);
+              `cbo` → TikTok shows the campaign choice read-only, so does the form; `costCap` → the target cost is typed here.
+            -->
+            <div class="grid gap-4 sm:grid-cols-2 xl:col-span-2" data-testid="agt-adgroup-bidding">
+              <UFormField
+                v-if="showBidOnAdGroup"
+                label="Bid strategy"
+                name="config.campaign.bidStrategy"
+                required
+                :help="PAGE_TEXT.bidOnAdGroupHelp"
+                :error="fieldError('config.campaign.bidStrategy')"
+              >
+                <URadioGroup
+                  v-model="state.config.campaign.bidStrategy"
+                  :items="options.bidStrategy"
+                  value-key="value"
+                  :disabled="submitting"
+                  data-testid="agt-campaign-bid-strategy"
+                />
+              </UFormField>
+              <p
+                v-else
+                class="text-sm text-muted sm:col-span-2"
+                data-testid="agt-adgroup-bid-readonly"
+              >
+                {{ bidReadonlyText }}
+              </p>
+
+              <!-- costCap only: the target cost per result (sent as `null` for `maxResults`) — filled on the ad-group page under both strategies -->
+              <UFormField
+                v-if="showTargetCpa"
+                label="Target cost per result"
+                name="config.targetCpa"
+                required
+                :help="targetCpaSuffix"
+                :error="fieldError('config.targetCpa')"
+              >
+                <UInput
+                  v-model="state.config.targetCpa"
+                  type="text"
+                  inputmode="decimal"
+                  placeholder="120"
+                  class="w-full sm:max-w-xs"
+                  :disabled="submitting"
+                  data-testid="agt-target-cpa"
+                />
+              </UFormField>
+            </div>
           </section>
 
           <!-- 3. placement / optimization location -->
@@ -1747,8 +1850,17 @@ const submitLabel = computed(() => {
               class="mt-4 grid gap-4 xl:grid-cols-2"
               data-testid="agt-sec-budget"
             >
+              <!-- TASK-smart-plus-publish: under `cbo` TikTok's ad-group page has no budget inputs — a note instead (values still sent) -->
+              <p
+                v-if="!showAdGroupBudget"
+                class="text-sm text-muted xl:col-span-2"
+                data-testid="agt-form-budget-cbo-note"
+              >
+                {{ PAGE_TEXT.budgetCboNote }}
+              </p>
+
               <!-- type + amount + currency keep their own three columns → they span the section grid -->
-              <div class="grid gap-4 sm:grid-cols-3 xl:col-span-2">
+              <div v-if="showAdGroupBudget" class="grid gap-4 sm:grid-cols-3 xl:col-span-2">
                 <UFormField
                   label="Budget type"
                   name="config.budget.type"
