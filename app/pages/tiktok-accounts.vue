@@ -682,8 +682,23 @@ function runningJobReason(type: JobType): string {
   return RUNNING_JOB_REASON[type] ?? 'Job in progress'
 }
 
+/**
+ * TASK-sync-queue-wait — text of the `ta-job-running` badge next to Sync/Login while `runningJob` exists. The
+ * API now queues a sync/login click behind whatever already runs instead of 409ing, so `discover`/`login` keep
+ * exactly their old wording (a second click just catches up to the same job) and every other type says the
+ * click will wait its turn rather than fail.
+ */
+function runningJobQueueHint(type: JobType): string {
+  if (type === 'discover' || type === 'login') return runningJobReason(type)
+  return `${runningJobReason(type)} · Sync/Login will queue behind it`
+}
+
+/**
+ * TASK-sync-queue-wait — Sync no longer greys out while a job runs (the API queues a click behind it instead of
+ * answering 409); `runningJob` is now purely informational, shown as the `ta-job-running` badge. The button is
+ * disabled only for reasons the API will still refuse outright: an open OTP task or a disabled account.
+ */
 function syncBlockedReason(account: TikTokAccount): string | null {
-  if (account.runningJob) return runningJobReason(account.runningJob.type)
   if (account.sessionStatus === 'needsHuman') return 'Needs OTP — finish the login first'
   if (!account.isActive) return 'Account is disabled'
   return null
@@ -701,18 +716,24 @@ async function onSync(account: TikTokAccount, bcOrgId: string | null = null) {
   else syncStarting.value = account.id
   try {
     // retry: 0 — exactly one POST per click (ofetch would otherwise re-issue it on 5xx)
-    await api<DiscoverJobResponse>(
+    const res = await api<DiscoverJobResponse>(
       `/tiktok-accounts/${encodeURIComponent(account.id)}/discover`,
       bcOrgId
         ? { method: 'POST', retry: 0, body: { bcOrgId } satisfies DiscoverOrgBody }
         : { method: 'POST', retry: 0 }
     )
-    toast.add({ title: 'Syncing advertisers…', description: label, color: 'info' })
+    // TASK-sync-queue-wait: the API dedupes into the same `jobId` when one is already `waiting` for this
+    // account — that is not a new job the click just started, so no second "Syncing…" toast for it (the
+    // `ta-job-running` badge already said so); `startDiscoverPoll` is itself a no-op if the loop already runs.
+    if (account.runningJob?.id !== res.jobId) {
+      toast.add({ title: 'Syncing advertisers…', description: label, color: 'info' })
+    }
     startDiscoverPoll(account.id)
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
     if (err.statusCode === 409) {
-      // a login / discover job or a human task already exists for this account → follow it anyway
+      // TASK-sync-queue-wait: 409 now means only an open human task (a waiting/active job dedupes into a 200
+      // instead of 409ing) → follow the account until the task is resolved and any job finishes
       toast.add({ title: 'Already running', description: err.data?.error ?? label, color: 'info' })
       startDiscoverPoll(account.id)
     } else {
@@ -1544,8 +1565,25 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       // BUG-028: never disabled — a running job only annotates the tooltip (named by `runningJobReason`, so a
       // build / top-up / sub-create job is no longer announced as a login)
       const loginHint = running ? `${runningJobReason(job.type)} — login again anyway` : null
+      // TASK-sync-queue-wait: Sync/Login never grey out for `runningJob` any more (the API queues a click
+      // behind it instead of 409ing) — this badge is what used to be the grey button's tooltip, now shown
+      // unconditionally so the row still says a job runs without blocking the buttons.
+      const jobReasonText = job ? runningJobReason(job.type) : null
+      const jobQueueHint = job ? runningJobQueueHint(job.type) : null
+      const jobType = job?.type ?? ''
+      const jobBadge = jobReasonText
+        ? h(UTooltip, { text: jobQueueHint ?? jobReasonText }, () => h('span', {
+            'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted',
+            'data-testid': 'ta-job-running',
+            'data-type': jobType
+          }, [
+            h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
+            jobReasonText
+          ]))
+        : null
       const wide = wideActions.value
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
+        jobBadge,
         // 2026-10-12 — Edit credentials (never disabled: the modal only writes the four credential fields)
         h(UTooltip, { text: 'Edit', disabled: wide }, () => h('span', { class: 'inline-flex' }, [
           h(UButton, {
