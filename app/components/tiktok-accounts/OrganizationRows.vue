@@ -36,8 +36,24 @@
  * on purpose: the FEAT-003 specs read **every** `thead th` under `ta-table` to find the account table's column
  * indexes, and a nested `<th>` would appear in that list. Every `ta-org-*` test id, every `data-*` attribute, the
  * row order and every text (`root` / `sub` / `ไม่ทราบแม่`, `ยังไม่เคย`, "Syncing…", the id tail) are unchanged.
+ *
+ * TASK-bc-tt-link round 2 — two more things per row, both as plain props (the page owns every request):
+ *   · the icon button **เพิ่มบัญชี TikTok** (`ta-tt-link-<orgId>`, right of สร้างบัญชีโฆษณา): same visibility rule
+ *     as that button (nothing on a row with `missingSince`) and the same disabled rule (`ttLinkBlocked`, plus
+ *     this org's own QR job while it is being followed). It only emits `tt-link`; the page reads `latest`,
+ *     POSTs when needed and owns `TtLinkModal`.
+ *   · the chip **บัญชี TikTok N** (`ta-tt-count-<orgId>`) under the org name: how many TikTok accounts (the ones
+ *     that post clips / publish ads, collection `bc_tiktok_accounts`) the Business Center has linked under this
+ *     org. Its popover lists them (name · @username · roles · relationStatus). The count comes from
+ *     `ttAccounts[orgId]` — one `GET …/organizations/:orgId/tiktok-accounts` per org, made by the page when the
+ *     drill-down opens; while it is in flight the chip shows a spinner, an error keeps the chip with `?`.
  */
-import type { BcOrganization, OrganizationsState, TikTokAccount } from '#shared/types/tiktok-accounts'
+import type {
+  BcOrganization,
+  BcTikTokAccountsState,
+  OrganizationsState,
+  TikTokAccount
+} from '#shared/types/tiktok-accounts'
 
 const props = defineProps<{
   account: TikTokAccount
@@ -58,6 +74,14 @@ const props = defineProps<{
   advCreatePending?: readonly string[]
   /** `orgId` → failure text of its last attempt → chip `ta-adv-create-failed-<orgId>` */
   advCreateFailed?: Record<string, string>
+  /** TASK-bc-tt-link — why every "เพิ่มบัญชี TikTok" button of this account is disabled; `null` = enabled */
+  ttLinkBlocked?: string | null
+  /** `orgId` whose `GET …/bc-tt-link/latest` (+ the POST of a first QR) is in flight (button spinner) */
+  ttLinkAsking?: string | null
+  /** `orgId`s whose `bcTtLink` job is being followed → chip `ta-tt-link-pending-<orgId>` */
+  ttLinkPending?: readonly string[]
+  /** `orgId` → linked TikTok accounts of that org (count chip + popover list); missing key = not loaded yet */
+  ttAccounts?: Record<string, BcTikTokAccountsState>
 }>()
 
 const emit = defineEmits<{
@@ -69,6 +93,10 @@ const emit = defineEmits<{
   'set-parent': [payload: { org: BcOrganization, parentOrgId: string | null }]
   /** TASK-bc-adv-create — the page answers with one suggest request and opens `AdvCreateModal` */
   'adv-create': [org: BcOrganization]
+  /** TASK-bc-tt-link — the page reads `…/bc-tt-link/latest`, POSTs if needed and opens `TtLinkModal` */
+  'tt-link': [org: BcOrganization]
+  /** TASK-bc-tt-link — the chip's popover was opened on an org whose count request failed: read it again */
+  'tt-accounts-retry': [org: BcOrganization]
 }>()
 
 /** the relative "synced" text follows the clock like the Advertisers column of the account row */
@@ -174,6 +202,32 @@ function advCreateFailedText(org: BcOrganization): string | null {
 function advCreateReason(org: BcOrganization): string | null {
   if (isAdvCreatePending(org)) return 'กำลังสร้างบัญชีโฆษณาอยู่'
   return props.advCreateBlocked ?? null
+}
+
+/**
+ * TASK-bc-tt-link — the QR button follows the create button exactly: no button at all on a missing org, and
+ * disabled while this org's own QR job is followed or while the account-level reason is set.
+ */
+function isTtLinkPending(org: BcOrganization): boolean {
+  return props.ttLinkPending?.includes(org.orgId) ?? false
+}
+
+function ttLinkReason(org: BcOrganization): string | null {
+  if (isTtLinkPending(org)) return 'กำลังออก QR เพิ่มบัญชี TikTok อยู่'
+  return props.ttLinkBlocked ?? null
+}
+
+/** TASK-bc-tt-link — state of this org's `GET …/tiktok-accounts`; `undefined` = the page has not asked yet */
+function ttState(org: BcOrganization): BcTikTokAccountsState | undefined {
+  return props.ttAccounts?.[org.orgId]
+}
+
+/** chip label: the count once it is known, `?` after an error, `…` while the first request is in flight */
+function ttCountLabel(org: BcOrganization): string {
+  const state = ttState(org)
+  if (state?.data) return String(state.data.length)
+  if (state?.error) return '?'
+  return '…'
 }
 
 /** cell chrome shared by the caption row and the data rows (one place, so the two can never drift apart) */
@@ -351,6 +405,82 @@ const CELL = 'block sm:table-cell sm:px-3'
                     </UBadge>
                   </div>
 
+                  <!--
+                    TASK-bc-tt-link — how many TikTok accounts (clip posting / ad publishing) the BC has linked
+                    under this org; the popover lists them. The chip is a button so it is reachable by keyboard,
+                    and it is hidden on a missing org (nothing is read for those rows).
+                  -->
+                  <UPopover v-if="!org.missingSince" :content="{ align: 'start' }">
+                    <UButton
+                      :label="`บัญชี TikTok ${ttCountLabel(org)}`"
+                      icon="i-lucide-at-sign"
+                      color="neutral"
+                      variant="subtle"
+                      size="xs"
+                      class="w-fit tabular-nums"
+                      :loading="ttState(org)?.pending && !ttState(org)?.data"
+                      :data-testid="`ta-tt-count-${org.orgId}`"
+                      :data-org-id="org.orgId"
+                      :data-count="ttState(org)?.data ? ttState(org)?.data?.length : ''"
+                      @click="ttState(org)?.error ? emit('tt-accounts-retry', org) : undefined"
+                    />
+                    <template #content>
+                      <div class="max-h-80 w-72 overflow-y-auto p-2 text-sm">
+                        <p
+                          v-if="ttState(org)?.error"
+                          class="px-1 py-2 text-xs text-error"
+                          :data-testid="`ta-tt-count-error-${org.orgId}`"
+                        >
+                          {{ ttState(org)?.error }}
+                        </p>
+                        <p
+                          v-else-if="!ttState(org)?.data"
+                          class="px-1 py-2 text-xs text-muted"
+                        >
+                          กำลังโหลด…
+                        </p>
+                        <p
+                          v-else-if="ttState(org)?.data?.length === 0"
+                          class="px-1 py-2 text-xs text-muted"
+                          :data-testid="`ta-tt-count-empty-${org.orgId}`"
+                        >
+                          ยังไม่มีบัญชี TikTok ใต้ org นี้ — กด "เพิ่มบัญชี TikTok" เพื่อออก QR
+                        </p>
+                        <ul v-else class="flex flex-col gap-1" :data-testid="`ta-tt-count-list-${org.orgId}`">
+                          <li
+                            v-for="tt in ttState(org)?.data ?? []"
+                            :key="tt.id"
+                            class="flex items-center gap-2 rounded-md px-1 py-1"
+                            data-testid="ta-tt-count-row"
+                            :data-asset-id="tt.assetId"
+                          >
+                            <UAvatar :src="tt.avatar ?? undefined" :alt="bcTtAccountName(tt)" size="2xs" />
+                            <span class="flex min-w-0 flex-col">
+                              <span class="truncate text-highlighted">{{ bcTtAccountName(tt) }}</span>
+                              <span class="text-xs break-words text-muted" :title="bcTtRolesTitle(tt.roles)">
+                                {{ bcTtAccountHandle(tt) }} · {{ bcTtRolesText(tt.roles) }}
+                                <template v-if="bcTtRelationText(tt.relationStatus)">
+                                  · {{ bcTtRelationText(tt.relationStatus) }}
+                                </template>
+                              </span>
+                            </span>
+                          </li>
+                        </ul>
+                      </div>
+                    </template>
+                  </UPopover>
+
+                  <!-- TASK-bc-tt-link — live state of this org's QR job, under its name -->
+                  <div
+                    v-if="isTtLinkPending(org)"
+                    class="flex items-center gap-1 whitespace-nowrap text-xs text-muted"
+                    :data-testid="`ta-tt-link-pending-${org.orgId}`"
+                    :data-org-id="org.orgId"
+                  >
+                    <UIcon name="i-lucide-loader-circle" class="size-3.5 shrink-0 animate-spin text-primary" />
+                    กำลังออก QR เพิ่มบัญชี TikTok…
+                  </div>
+
                   <!-- TASK-bc-adv-create — live state of this org's create job, under its name -->
                   <div
                     v-if="isAdvCreatePending(org)"
@@ -481,6 +611,23 @@ const CELL = 'block sm:table-cell sm:px-3'
                       :data-testid="`ta-adv-create-${org.orgId}`"
                       :data-org-id="org.orgId"
                       @click="emit('adv-create', org)"
+                    />
+                  </span>
+                </UTooltip>
+                <!-- TASK-bc-tt-link — icon-only for the same reason as the create button above -->
+                <UTooltip v-if="!org.missingSince" :text="ttLinkReason(org) ?? 'เพิ่มบัญชี TikTok (ออก QR ให้สแกน)'">
+                  <span class="inline-flex">
+                    <UButton
+                      icon="i-lucide-qr-code"
+                      color="neutral"
+                      variant="outline"
+                      size="xs"
+                      :disabled="!!ttLinkReason(org)"
+                      :loading="ttLinkAsking === org.orgId"
+                      aria-label="เพิ่มบัญชี TikTok"
+                      :data-testid="`ta-tt-link-${org.orgId}`"
+                      :data-org-id="org.orgId"
+                      @click="emit('tt-link', org)"
                     />
                   </span>
                 </UTooltip>
