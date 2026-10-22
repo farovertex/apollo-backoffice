@@ -1472,7 +1472,8 @@ onUnmounted(() => {
                       :data-kind="agtKindOf(template) ?? undefined"
                       data-testid="la-agt-card"
                       class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 text-left
-                        hover:bg-elevated"
+                        hover:bg-elevated focus-visible:inset-ring-2 focus-visible:inset-ring-primary
+                        focus-visible:outline-none"
                       :class="template.id === adGroupTemplateId
                         ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
                         : 'bg-default'"
@@ -1628,7 +1629,8 @@ onUnmounted(() => {
                       data-stale="false"
                       data-testid="la-adt-card"
                       class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 text-left
-                        hover:bg-elevated"
+                        hover:bg-elevated focus-visible:inset-ring-2 focus-visible:inset-ring-primary
+                        focus-visible:outline-none"
                       :class="template.id === adTemplateId
                         ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
                         : 'bg-default'"
