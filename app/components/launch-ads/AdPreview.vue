@@ -135,7 +135,14 @@ watch(templateId, () => {
   reread.value = 'idle'
 })
 
-async function onImageError(which: 'button' | 'addon') {
+async function onImageError(which: 'button' | 'addon', event: Event) {
+  const img = event.target as HTMLImageElement | null
+  // The error of a URL that has meanwhile been replaced (the re-read resolved while this event was queued)
+  // must not count against the fresh one: after a tick a stale event's element is loading the new `src`
+  // (`complete === false`) or already shows it (`naturalWidth > 0`). Only a still-broken element is a failure.
+  await nextTick()
+  if (img && (!img.complete || img.naturalWidth > 0)) return
+
   imgFails.value = { ...imgFails.value, [which]: imgFails.value[which] + 1 }
   // first failure of this image while nothing has been re-read yet → exactly one GET /ad-templates/:id
   if (imgFails.value[which] === 1 && reread.value === 'idle') {
@@ -146,6 +153,9 @@ async function onImageError(which: 'button' | 'addon') {
       // retry: 0 — one request; the `<img>` reloads from the URL of the view the page swaps in
       const fresh = await api<AdTemplate>(`/ad-templates/${encodeURIComponent(id)}`, { retry: 0 })
       reread.value = 'done'
+      // both images reload from the fresh view, so their failure history restarts — the **next** failure of
+      // either one is the second for that image and is final (no further request, `imageState` → `error`)
+      imgFails.value = { button: 0, addon: 0 }
       emit('updated', fresh)
     } catch {
       // 404 = the image is gone, anything else = not readable right now; both end on the placeholder,
@@ -156,10 +166,15 @@ async function onImageError(which: 'button' | 'addon') {
   // the other cases need no request: `pending` waits for the fresh URL, every later failure is final
 }
 
-/** `ready` while an `<img>` may still show, `error` once it failed for good, `none` when there is no URL */
+/**
+ * `ready` while an `<img>` may still show, `error` once it failed for good, `none` when there is no URL.
+ * A failure is final as soon as the one re-read of this template is over (`done` — the URL **is** the fresh one —
+ * or `failed`); a single failure while the re-read is still `pending` keeps the box `ready`, because the `<img>`
+ * is about to be handed the new `src`. `fails >= 2` covers a second failure that arrives during `pending`.
+ */
 function imageState(which: 'button' | 'addon', url: string | null | undefined) {
   const fails = imgFails.value[which]
-  if (fails >= 2 || (fails >= 1 && reread.value === 'failed')) return 'error'
+  if (fails >= 2 || (fails >= 1 && reread.value !== 'idle' && reread.value !== 'pending')) return 'error'
   return url ? 'ready' : 'none'
 }
 
@@ -273,7 +288,7 @@ const IMAGE_ERROR_TITLE = 'โหลดรูปไม่ได้'
               class="h-5 w-auto max-w-16 rounded-full border border-default object-contain"
               :data-testid="`${testid}-page-image`"
               :data-state="buttonImageState"
-              @error="onImageError('button')"
+              @error="onImageError('button', $event)"
             >
             <span
               v-else
@@ -318,7 +333,7 @@ const IMAGE_ERROR_TITLE = 'โหลดรูปไม่ได้'
               class="h-10 w-auto max-w-16 rounded border border-default object-contain"
               :data-testid="`${testid}-addon-image`"
               :data-state="addOnImageState"
-              @error="onImageError('addon')"
+              @error="onImageError('addon', $event)"
             >
             <span
               v-else
