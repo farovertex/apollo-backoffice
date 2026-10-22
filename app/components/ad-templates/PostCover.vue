@@ -21,7 +21,8 @@ const props = withDefaults(defineProps<{
   checkedAt?: string | null
   /** `postInfo.cover.ok === true` */
   ok?: boolean
-  size?: 'thumb' | 'row' | 'card'
+  /** FEAT-062 — `preview` (112×200, 9:16, ≈1.4× `card`) is the Summary/Review preview of `/launch-ads` */
+  size?: 'thumb' | 'row' | 'card' | 'preview'
   testid?: string
 }>(), {
   checkedAt: null,
@@ -36,8 +37,8 @@ const { src, loading, error, retry } = useCoverImage(
   () => props.ok
 )
 
-const BOX_CLASS = { thumb: 'size-8', row: 'h-14 w-10', card: 'h-28 w-20' } as const
-const ICON_CLASS = { thumb: 'size-3.5', row: 'size-4', card: 'size-6' } as const
+const BOX_CLASS = { thumb: 'size-8', row: 'h-14 w-10', card: 'h-28 w-20', preview: 'h-50 w-28' } as const
+const ICON_CLASS = { thumb: 'size-3.5', row: 'size-4', card: 'size-6', preview: 'size-8' } as const
 
 /** `<img>` load-failure guard — keyed on identity, not on `src` (which churns on retry itself). */
 const cacheKey = computed(() => `${props.templateId ?? ''}|${props.checkedAt ?? ''}`)

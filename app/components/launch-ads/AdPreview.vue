@@ -211,14 +211,14 @@ const IMAGE_ERROR_TITLE = 'โหลดรูปไม่ได้'
       เลือก ad template แล้วจะเห็นโพสต์ อินสแตนท์เพจ และ add-on ที่จะถูกสร้าง
     </p>
 
-    <div v-else class="grid grid-cols-[80px_1fr] items-start gap-3">
+    <div v-else class="grid grid-cols-[7rem_1fr] items-start gap-3">
       <!-- cover + kind tag; the same cache key as the row thumb (BUG-061) -->
       <div class="relative">
         <AdTemplatesPostCover
           :template-id="template.id"
           :checked-at="postInfoCheckedAt(postInfo)"
           :ok="hasPostCover(postInfo)"
-          size="card"
+          size="preview"
           :testid="`${testid}-cover`"
         />
         <span

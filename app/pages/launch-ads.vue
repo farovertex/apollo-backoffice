@@ -1014,9 +1014,10 @@ onUnmounted(() => {
             </template>
           </UAlert>
 
-          <div class="grid flex-1 grid-cols-1 items-start gap-4 lg:grid-cols-3">
+          <!-- FEAT-062 round 4 — 3/5 + 2/5 at `lg+`: a wider Summary (AC-15) -->
+          <div class="grid flex-1 grid-cols-1 items-start gap-4 lg:grid-cols-5">
             <!-- ── step content ─────────────────────────────────────────────────────────────────────── -->
-            <div class="flex min-w-0 flex-col gap-4 lg:col-span-2">
+            <div class="flex min-w-0 flex-col gap-4 lg:col-span-3">
               <!-- step 1 · accounts -->
               <div v-if="step === 1" class="flex flex-col gap-3">
                 <div class="flex flex-wrap items-center gap-1.5">
@@ -1453,9 +1454,10 @@ onUnmounted(() => {
                   <p v-if="!templatesPending && agtItems.length === 0" class="text-sm text-muted" data-testid="la-agt-empty">
                     No ad group template yet — create one under Ad group templates first.
                   </p>
+                  <!-- exactly 5 rows (5 × 52 px + the frame's own 2 px borders), the rest scrolls (AC-13) -->
                   <div
                     v-else
-                    class="max-h-60 divide-y divide-default overflow-y-auto rounded-lg border border-default"
+                    class="max-h-[262px] divide-y divide-default overflow-y-auto rounded-lg border border-default"
                     role="radiogroup"
                     aria-label="Ad group template"
                     data-testid="la-agt-list"
@@ -1471,9 +1473,9 @@ onUnmounted(() => {
                       data-stale="false"
                       :data-kind="agtKindOf(template) ?? undefined"
                       data-testid="la-agt-card"
-                      class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 text-left
-                        hover:bg-elevated focus-visible:inset-ring-2 focus-visible:inset-ring-primary
-                        focus-visible:outline-none"
+                      class="grid h-13 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden
+                        px-2 py-1.5 text-left hover:bg-elevated focus-visible:inset-ring-2
+                        focus-visible:inset-ring-primary focus-visible:outline-none"
                       :class="template.id === adGroupTemplateId
                         ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
                         : 'bg-default'"
@@ -1530,8 +1532,8 @@ onUnmounted(() => {
                         :data-kind="agtKindOf(template) ?? undefined"
                         disabled
                         data-testid="la-agt-card"
-                        class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 bg-default px-2
-                          py-1.5 text-left opacity-60"
+                        class="grid h-13 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2
+                          overflow-hidden bg-default px-2 py-1.5 text-left opacity-60"
                         @click="selectAdGroupTemplate(template)"
                       >
                         <span class="flex size-4 items-center justify-center rounded-full border border-accented" />
@@ -1588,7 +1590,7 @@ onUnmounted(() => {
                   />
                 </section>
 
-                <!-- ad template -->
+                <!-- ad template — its frame takes what is left of the panel body at `lg+` (AC-14) -->
                 <section class="flex flex-col gap-2">
                   <div class="flex flex-wrap items-center gap-2">
                     <h2 class="text-sm font-semibold text-highlighted">
@@ -1611,9 +1613,18 @@ onUnmounted(() => {
                   <p v-if="!templatesPending && adtItems.length === 0" class="text-sm text-muted" data-testid="la-adt-empty">
                     No ad template yet — create one under Ad templates first.
                   </p>
+                  <!--
+                    below `lg`: exactly 5 rows (5 × 60 px + the frame's 2 px borders) like the ad-group frame;
+                    at `lg+`: the rest of the panel body — `100vh` minus the measured 596 px above/below this
+                    frame (navbar + stepper + ad-group section + both headers + the fold link + the body's own
+                    bottom padding), never shorter than those 5 rows (AC-13 / AC-14). A pure flex chain cannot
+                    do it here: the page body is the scroll container and `la-page` is content-sized, so no
+                    ancestor has a definite height to distribute (see bo.md round 4).
+                  -->
                   <div
                     v-else
-                    class="max-h-60 divide-y divide-default overflow-y-auto rounded-lg border border-default"
+                    class="max-h-[302px] divide-y divide-default overflow-y-auto rounded-lg border border-default
+                      lg:h-[calc(100vh-596px)] lg:max-h-none lg:min-h-[302px]"
                     role="radiogroup"
                     aria-label="Ad template"
                     data-testid="la-adt-list"
@@ -1628,9 +1639,9 @@ onUnmounted(() => {
                       :data-selected="template.id === adTemplateId ? 'true' : 'false'"
                       data-stale="false"
                       data-testid="la-adt-card"
-                      class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 text-left
-                        hover:bg-elevated focus-visible:inset-ring-2 focus-visible:inset-ring-primary
-                        focus-visible:outline-none"
+                      class="grid h-15 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden
+                        px-2 py-1.5 text-left hover:bg-elevated focus-visible:inset-ring-2
+                        focus-visible:inset-ring-primary focus-visible:outline-none"
                       :class="template.id === adTemplateId
                         ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
                         : 'bg-default'"
@@ -1689,8 +1700,8 @@ onUnmounted(() => {
                         data-stale="true"
                         disabled
                         data-testid="la-adt-card"
-                        class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 bg-default px-2
-                          py-1.5 text-left opacity-60"
+                        class="grid h-15 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2
+                          overflow-hidden bg-default px-2 py-1.5 text-left opacity-60"
                         @click="selectAdTemplate(template)"
                       >
                         <span class="flex size-4 items-center justify-center rounded-full border border-accented" />
@@ -1868,7 +1879,7 @@ onUnmounted(() => {
 
             <!-- ── summary ───────────────────────────────────────────────────────────────────────────── -->
             <aside
-              class="flex flex-col gap-2 rounded-lg border border-default p-3 lg:sticky lg:top-4"
+              class="flex flex-col gap-2 rounded-lg border border-default p-3 lg:sticky lg:top-4 lg:col-span-2"
               data-testid="la-summary"
             >
               <h2 class="text-sm font-semibold text-highlighted">
