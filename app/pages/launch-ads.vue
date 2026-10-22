@@ -948,7 +948,7 @@ onUnmounted(() => {
         :data-pending="targetsPending ? 'true' : 'false'"
         :data-funded="fundedOnly ? 'true' : 'false'"
         :data-idle-only="idleOnly ? 'true' : 'false'"
-        class="flex flex-1 flex-col gap-4 pb-20 lg:pb-0"
+        class="flex flex-1 flex-col gap-4 pb-28 sm:pb-20 lg:pb-0"
       >
         <UAlert
           v-if="forbidden"

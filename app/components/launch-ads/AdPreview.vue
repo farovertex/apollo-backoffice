@@ -125,45 +125,46 @@ const addOnImage = computed<AdAddOnImage | null>(() => props.template?.addOnImag
 const addOnText = computed(() => (addOn.value ? adAddOnSummaryText(addOn.value) : ''))
 
 // ── image failure (AS-9) ─────────────────────────────────────────────────────────────────────────────────────
-const buttonImgFailed = ref(false)
-const addOnImgFailed = ref(false)
-/** at most one `GET /ad-templates/:id` per template id, for either image (the guard of PostCover.vue) */
-const rereadDone = ref(false)
+/** how often each `<img>` has failed for the **current** template id */
+const imgFails = ref({ button: 0, addon: 0 })
+/** the one re-read of this template id: `idle` → `pending` → `done` (fresh view emitted) / `failed` */
+const reread = ref<'idle' | 'pending' | 'done' | 'failed'>('idle')
 
 watch(templateId, () => {
-  buttonImgFailed.value = false
-  addOnImgFailed.value = false
-  rereadDone.value = false
+  imgFails.value = { button: 0, addon: 0 }
+  reread.value = 'idle'
 })
 
 async function onImageError(which: 'button' | 'addon') {
-  if (!rereadDone.value) {
-    rereadDone.value = true
+  imgFails.value = { ...imgFails.value, [which]: imgFails.value[which] + 1 }
+  // first failure of this image while nothing has been re-read yet → exactly one GET /ad-templates/:id
+  if (imgFails.value[which] === 1 && reread.value === 'idle') {
     const id = templateId.value
-    if (id) {
-      try {
-        // retry: 0 — exactly one re-read; its failure is swallowed (the placeholder is the answer)
-        const fresh = await api<AdTemplate>(`/ad-templates/${encodeURIComponent(id)}`, { retry: 0 })
-        emit('updated', fresh)
-        return
-      } catch {
-        // 404 = the image is gone, anything else = not readable right now; both end on the placeholder,
-        // silently (the image is decoration, never an error the user must act on)
-      }
+    if (!id) return
+    reread.value = 'pending'
+    try {
+      // retry: 0 — one request; the `<img>` reloads from the URL of the view the page swaps in
+      const fresh = await api<AdTemplate>(`/ad-templates/${encodeURIComponent(id)}`, { retry: 0 })
+      reread.value = 'done'
+      emit('updated', fresh)
+    } catch {
+      // 404 = the image is gone, anything else = not readable right now; both end on the placeholder,
+      // silently (the image is decoration, never an error the user must act on) and without a second request
+      reread.value = 'failed'
     }
   }
-  if (which === 'button') buttonImgFailed.value = true
-  else addOnImgFailed.value = true
+  // the other cases need no request: `pending` waits for the fresh URL, every later failure is final
 }
 
-const buttonImageState = computed(() => {
-  if (buttonImgFailed.value) return 'error'
-  return buttonImage.value?.url ? 'ready' : 'none'
-})
-const addOnImageState = computed(() => {
-  if (addOnImgFailed.value) return 'error'
-  return addOnImage.value?.url ? 'ready' : 'none'
-})
+/** `ready` while an `<img>` may still show, `error` once it failed for good, `none` when there is no URL */
+function imageState(which: 'button' | 'addon', url: string | null | undefined) {
+  const fails = imgFails.value[which]
+  if (fails >= 2 || (fails >= 1 && reread.value === 'failed')) return 'error'
+  return url ? 'ready' : 'none'
+}
+
+const buttonImageState = computed(() => imageState('button', buttonImage.value?.url))
+const addOnImageState = computed(() => imageState('addon', addOnImage.value?.url))
 const buttonImageSrc = computed(() =>
   buttonImageState.value === 'ready' && buttonImage.value ? mediaSrc(buttonImage.value.url) : null
 )
