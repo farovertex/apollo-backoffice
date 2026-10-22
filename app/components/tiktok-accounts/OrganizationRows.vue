@@ -47,6 +47,12 @@
  *     org. Its popover lists them (name · @username · roles · relationStatus). The count comes from
  *     `ttAccounts[orgId]` — one `GET …/organizations/:orgId/tiktok-accounts` per org, made by the page when the
  *     drill-down opens; while it is in flight the chip shows a spinner, an error keeps the chip with `?`.
+ *
+ * TASK-bc-panel-always (2026-10-22) — the page now opens this panel for `organizationCount >= 1` instead of
+ * `> 1` (a login admin of exactly one Business Center still needs the per-org Sync / create-advertiser /
+ * link-QR actions below). Nothing here changed to support that: a single root org renders as a one-row tree
+ * exactly like any other root, with every button reachable; only the title-strip badge switches to the
+ * singular "1 org" instead of "1 orgs".
  */
 import type {
   BcOrganization,
@@ -111,6 +117,12 @@ const roots = computed(() => orgs.value.filter(org => org.isRoot))
 
 /** the panel title names the account the way the rest of the page does (label first, email as the fallback) */
 const accountName = computed(() => props.account.label ?? props.account.loginEmail)
+
+/**
+ * TASK-bc-panel-always — the panel now opens for a single-org account too (the chevron rule widened to
+ * `organizationCount >= 1`), so the title-strip badge needs the singular form instead of "1 orgs".
+ */
+const orgsCountLabel = computed(() => `${orgs.value.length} ${orgs.value.length === 1 ? 'org' : 'orgs'}`)
 
 /** sentinel of the "clear the parent" item — `PATCH { parentOrgId: null }` (an empty string is not a valid id) */
 const NO_PARENT_VALUE = '__none__'
@@ -260,7 +272,7 @@ const CELL = 'block sm:table-cell sm:px-3'
           size="sm"
           class="ms-auto tabular-nums"
         >
-          {{ orgs.length }} orgs
+          {{ orgsCountLabel }}
         </UBadge>
       </div>
 

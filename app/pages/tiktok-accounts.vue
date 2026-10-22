@@ -97,14 +97,17 @@
  * two cells by column index; they address `ta-account*` now.
  * `ta-edit`, `ta-sync`, `ta-login`, `ta-balance*`, `ta-topup*`, `ta-adv-*` and `ta-bc-org*` are untouched.
  * FEAT-059 (api-contract.md v1 §5/§7/§8, spec "UI behaviour", AC-13..17) — one login may be admin of several
- * Business Center orgs. An account with `organizationCount > 1` gets a chevron **inside** the existing BC org
- * cell (`ta-org-expand`; a new column would move every `ta-*` cell index the specs rely on) and the cell text
- * becomes `<bcOrgName> · N orgs`; expanding renders `TiktokAccountsOrganizationRows` in `UTable`'s `#expanded`
- * row with one `<tr data-testid="ta-org-row">` per org. `GET /tiktok-accounts/:id/organizations` runs **once
- * per account per page lifetime** (`orgsById` is the memo), and again when a discover job of that account ends
- * (the existing poll's `onDone`) or when Refresh is pressed while the row is open — collapse/expand alone never
- * re-requests. The per-org Sync posts `{ bcOrgId }` to the **same** discover endpoint; the account-level Sync
- * still sends no body at all. An account with 0 or 1 org renders exactly as before the feature.
+ * Business Center orgs. An account with `organizationCount >= 1` gets a chevron **inside** the existing BC org
+ * cell (`ta-org-expand`; a new column would move every `ta-*` cell index the specs rely on); expanding renders
+ * `TiktokAccountsOrganizationRows` in `UTable`'s `#expanded` row with one `<tr data-testid="ta-org-row">` per
+ * org. `GET /tiktok-accounts/:id/organizations` runs **once per account per page lifetime** (`orgsById` is the
+ * memo), and again when a discover job of that account ends (the existing poll's `onDone`) or when Refresh is
+ * pressed while the row is open — collapse/expand alone never re-requests. The per-org Sync posts `{ bcOrgId }`
+ * to the **same** discover endpoint; the account-level Sync still sends no body at all. TASK-bc-panel-always
+ * (2026-10-22, decided by the human: a single-BC login still needs the per-org Sync/create-advertiser/link-QR
+ * actions) widened the chevron rule from `> 1` to `>= 1`; only the cell *text* keeps `organizationCount > 1`
+ * (`<bcOrgName> · N orgs`) so a single-org row's cell width is unchanged — it shows `shortId(org)` and still
+ * expands into a one-root-node tree. An account with 0 orgs renders exactly as before the feature (no chevron).
  * TASK-bc-sub-create round 2 (brief `.ai/features/_queue/bc-sub-create-ui.prompt.md`) — row action
  * **สร้าง Sub BC** (`ta-sub-create-<accountId>`, icon-only, right after Sync): one `GET …/bc-sub-create/suggest`
  * per click → `TiktokAccountsSubCreateModal` (`ta-sub-create-modal`) with the prefilled name and the currency →
@@ -1510,12 +1513,15 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
     cell: ({ row }) => {
       const a = row.original
       const org = a.bcOrgId
-      // FEAT-059 — the drill-down exists only for a login that really is admin of several orgs (A9); with 0 or 1
-      // org this cell is byte-identical to FEAT-005/FEAT-010 (no chevron, no count, same text).
+      // TASK-bc-panel-always (2026-10-22) — the drill-down is reachable for every account that has at least one
+      // org to sync: `canExpand` (count >= 1) drives the chevron/expand; `multi` (count > 1) still drives only
+      // the cell *text* (`· N orgs`) and `data-orgs`, so a single-org cell keeps its pre-FEAT-059 width. Only
+      // `organizationCount === 0` (never synced / all orgs missing) renders with no chevron at all.
       const count = a.organizationCount
+      const canExpand = count >= 1
       const multi = count > 1
       const expanded = expandedOrgs.value[a.id] === true
-      const chevron = multi
+      const chevron = canExpand
         ? h(UButton, {
             'icon': expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right',
             'color': 'neutral',
@@ -1537,8 +1543,8 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
         : node
       if (!org) {
         const dash = h('span', { 'class': 'text-muted', 'data-testid': 'ta-bc-org' }, '—')
-        // no root org id but several org rows: keep the drill-down reachable instead of hiding the orgs
-        return withChip(multi ? h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [chevron, dash]) : dash)
+        // no root org id but at least one org row: keep the drill-down reachable instead of hiding the orgs
+        return withChip(canExpand ? h('div', { class: 'flex items-center gap-0.5 whitespace-nowrap' }, [chevron, dash]) : dash)
       }
       // > 1 org: the name says which Business Center the balance belongs to, the count that there are subs
       const label = multi ? `${a.bcOrgName || shortId(org)} · ${count} orgs` : shortId(org)
