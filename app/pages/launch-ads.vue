@@ -40,12 +40,12 @@
  *   `la-acc-show-all` turns both switches off (so does `la-acc-clear-search`). Launching is **not** a
  *   readiness reason: a launching account stays `available` and can be launched again when the switch is off.
  * Step 2 · Templates — the existing list endpoints (`?limit=100`) + their `/options`, requested **once per
- *   page lifetime** when the step is first opened. An **ad-template** card whose `catalogVersion` differs from
+ *   page lifetime** when the step is first opened. An **ad-template** row whose `catalogVersion` differs from
  *   the one `/options` serves is disabled with the re-save message (spec A8) — the API refuses it anyway (400).
- *   **FEAT-061** (spec AC-20): an **ad-group-template** card is disabled when the row is `kind: 'manual'`
+ *   **FEAT-061** (spec AC-20): an **ad-group-template** row is disabled when the row is `kind: 'manual'`
  *   (fallback: that same catalog comparison while an older API serves no `kind`) and says `la-agt-manual`
  *   "ต้องปรับเป็น Smart+ ก่อน" — the template has to go through "ปรับเป็น Smart+" on its own page first; the
- *   API's own 400 (`issues[].path = adGroupTemplateId`) is still shown verbatim at this step. A v3 card also
+ *   API's own 400 (`issues[].path = adGroupTemplateId`) is still shown verbatim at this step. A v3 row also
  *   shows its campaign strategy (`la-agt-campaign`: CBO + amount, or the ad-group-budget label).
  *   Copies = 1..`limits.maxAdGroupCopies`, one value for the whole order. The campaign block is fixed
  *   (no campaign templates yet): campaign name on TikTok = order name.
@@ -60,6 +60,23 @@
  * modal) and the status chip (`la-adt-post-status`). Picking a template whose post is `invalid`, `failed` or
  * was never checked shows the **non-blocking** warning `la-adt-post-warning`: selection and submit are
  * untouched (only the stale-catalog rule disables a card), the order may simply fail at the ad stage.
+ *
+ * **FEAT-062** — the page's height no longer grows with the number of templates (spec "UI behaviour"):
+ * the step actions live in one `la-actions` container, the **last block of the sticky Summary aside** at `lg+`
+ * and the **fixed bottom bar** below it (same DOM element, responsive classes only — no duplicated button; the
+ * body carries `pb-20 lg:pb-0` so nothing hides behind the bar). Each template is one compact row
+ * (`<button role="radio">`, two truncated lines + the catalog/updated meta at `sm+`) inside a `max-h-60`
+ * scroll frame (`la-agt-list` / `la-adt-list`, `role="radiogroup"`); rows that cannot be launched (manual
+ * ad-group templates / older-catalog ad templates) sit **after** the usable ones inside `la-agt-hidden` /
+ * `la-adt-hidden`, `hidden` until `la-agt-more` / `la-adt-more` opens them — they stay in the DOM, so the
+ * counts (`la-agt-count` / `la-adt-count`, computed on the **search-filtered** list) and `data-stale` keep
+ * meaning the same thing. Both search inputs are always rendered, Copies moved into the ad-group section
+ * header and the fixed campaign block (`la-campaign-fixed`) into the Summary, where it shows on every step.
+ * Once an ad template is picked the Summary also shows `LaunchAdsAdPreview` (`la-preview`: post cover, ad
+ * texts, CTA, instant-page button, add-on) — and step 3 renders the same component as `la-review-preview`
+ * under "What will be built" instead (the aside drops it there). Its one-shot `GET /ad-templates/:id` after an
+ * image load error comes back through `@updated` → `replaceAdTemplate()`, so the row, the Summary and the
+ * Review all use the fresh URL.
  *
  * A 403 on the targets request (a Payment-only admin that typed the URL) renders `la-forbidden` with the API
  * text and nothing else; no redirect (the nav item is hidden for that admin, but the API is the authority).
@@ -465,11 +482,12 @@ watch(maxCopies, (max) => {
 const adGroupTemplate = computed(() => agtItems.value.find(t => t.id === adGroupTemplateId.value) ?? null)
 const adTemplate = computed(() => adtItems.value.find(t => t.id === adTemplateId.value) ?? null)
 
-/** a client-side filter inside the section, needed only when the API has more rows than the one page we read */
+/**
+ * FEAT-062 — the client-side filter of a section; the input is **always** rendered now (AS-4): the frame is
+ * five rows tall, so the filter is the way to find a row, not a fallback for "more than 8".
+ */
 const agtFiltered = computed(() => filterByName(agtItems.value, agtSearch.value))
 const adtFiltered = computed(() => filterByName(adtItems.value, adtSearch.value))
-const showAgtSearch = computed(() => agtTotal.value > agtItems.value.length || agtItems.value.length > 8)
-const showAdtSearch = computed(() => adtTotal.value > adtItems.value.length || adtItems.value.length > 8)
 
 function filterByName<T extends { name: string, description: string | null }>(items: T[], term: string): T[] {
   const q = term.trim().toLowerCase()
@@ -505,6 +523,42 @@ function isAdtStale(template: AdTemplate): boolean {
   return template.catalogVersion !== current
 }
 
+/**
+ * FEAT-062 — the two groups of a section, computed on the **search-filtered** list: the rows that can be
+ * launched, and the ones that cannot (manual ad-group templates / older-catalog ad templates). The second
+ * group is rendered after the first, inside a `hidden` wrapper, so it stays in the DOM (counts and
+ * `data-stale` assertions keep working) while taking no space until the fold link opens it (AS-1).
+ */
+const agtUsable = computed(() => agtFiltered.value.filter(t => !isAgtManual(t)))
+const agtFolded = computed(() => agtFiltered.value.filter(isAgtManual))
+const adtUsable = computed(() => adtFiltered.value.filter(t => !isAdtStale(t)))
+const adtFolded = computed(() => adtFiltered.value.filter(isAdtStale))
+
+const agtFoldOpen = ref(false)
+const adtFoldOpen = ref(false)
+
+const AGT_FOLD_REASON = 'ต้องปรับเป็น Smart+'
+const ADT_FOLD_REASON = 'older catalog'
+
+/** `N ใช้ได้` + ` · M <reason>` while something is folded away */
+function countText(usable: number, folded: number, reason: string): string {
+  return folded > 0 ? `${usable} ใช้ได้ · ${folded} ${reason}` : `${usable} ใช้ได้`
+}
+
+const agtCountText = computed(() => countText(agtUsable.value.length, agtFolded.value.length, AGT_FOLD_REASON))
+const adtCountText = computed(() => countText(adtUsable.value.length, adtFolded.value.length, ADT_FOLD_REASON))
+
+const agtMoreText = computed(() =>
+  agtFoldOpen.value
+    ? 'ซ่อนรายการที่ต้องปรับเป็น Smart+ ก่อน'
+    : `แสดงอีก ${agtFolded.value.length} รายการที่ต้องปรับเป็น Smart+ ก่อน`
+)
+const adtMoreText = computed(() =>
+  adtFoldOpen.value
+    ? 'ซ่อนรายการที่เป็น older catalog'
+    : `แสดงอีก ${adtFolded.value.length} รายการที่เป็น older catalog`
+)
+
 function selectAdGroupTemplate(template: AdGroupTemplate) {
   if (isAgtManual(template)) return
   adGroupTemplateId.value = template.id
@@ -515,6 +569,15 @@ function selectAdTemplate(template: AdTemplate) {
   if (isAdtStale(template)) return
   adTemplateId.value = template.id
   templateFieldError.value = null
+}
+
+/**
+ * FEAT-062 (spec AS-9 / AC-9) — the preview re-read one ad template because an image URL had expired: swap
+ * that row in the list so the row thumb, the Summary preview and the Review preview all use the fresh view.
+ * A view of a template that is no longer in the list is ignored (nothing to update).
+ */
+function replaceAdTemplate(view: AdTemplate) {
+  adtItems.value = adtItems.value.map(row => (row.id === view.id ? { ...row, ...view } : row))
 }
 
 /**
@@ -885,7 +948,7 @@ onUnmounted(() => {
         :data-pending="targetsPending ? 'true' : 'false'"
         :data-funded="fundedOnly ? 'true' : 'false'"
         :data-idle-only="idleOnly ? 'true' : 'false'"
-        class="flex flex-1 flex-col gap-4"
+        class="flex flex-1 flex-col gap-4 pb-20 lg:pb-0"
       >
         <UAlert
           v-if="forbidden"
@@ -1317,32 +1380,6 @@ onUnmounted(() => {
 
               <!-- step 2 · templates -->
               <div v-else-if="step === 2" class="flex flex-col gap-4">
-                <div class="rounded-lg border border-default p-3" data-testid="la-campaign-fixed">
-                  <p class="text-sm font-semibold text-highlighted">
-                    Campaign · fixed
-                  </p>
-                  <dl class="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
-                    <dt class="text-muted">
-                      Objective
-                    </dt>
-                    <dd class="text-highlighted" data-testid="la-campaign-objective">
-                      Sales cashback
-                    </dd>
-                    <dt class="text-muted">
-                      Destination
-                    </dt>
-                    <dd class="text-highlighted" data-testid="la-campaign-destination">
-                      Website conversions
-                    </dd>
-                    <dt class="text-muted">
-                      Campaign name
-                    </dt>
-                    <dd class="text-highlighted">
-                      = order name
-                    </dd>
-                  </dl>
-                </div>
-
                 <UAlert
                   v-if="templatesError"
                   color="error"
@@ -1381,151 +1418,324 @@ onUnmounted(() => {
 
                 <!-- ad group template -->
                 <section class="flex flex-col gap-2">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
                     <h2 class="text-sm font-semibold text-highlighted">
                       Ad group template
                     </h2>
+                    <span class="text-xs text-muted tabular-nums" data-testid="la-agt-count">
+                      {{ agtCountText }}
+                    </span>
+                    <div class="grow" />
+                    <label class="flex items-center gap-1.5 text-xs text-muted">
+                      Copies
+                      <USelect
+                        v-model="copies"
+                        :items="copiesItems"
+                        :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
+                        class="w-20"
+                        size="sm"
+                        aria-label="Ad group copies"
+                        title="Ad groups per campaign — same settings, same budget each"
+                        aria-description="Ad groups per campaign — same settings, same budget each"
+                        data-testid="la-copies"
+                      />
+                    </label>
                     <UInput
-                      v-if="showAgtSearch"
                       v-model="agtSearch"
                       icon="i-lucide-search"
                       size="sm"
+                      class="w-full sm:w-48"
                       placeholder="Filter templates"
+                      aria-label="Filter ad group templates"
                       data-testid="la-agt-search"
                     />
                   </div>
                   <p v-if="!templatesPending && agtItems.length === 0" class="text-sm text-muted" data-testid="la-agt-empty">
                     No ad group template yet — create one under Ad group templates first.
                   </p>
-                  <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div
+                    v-else
+                    class="max-h-60 divide-y divide-default overflow-y-auto rounded-lg border border-default"
+                    role="radiogroup"
+                    aria-label="Ad group template"
+                    data-testid="la-agt-list"
+                  >
                     <button
-                      v-for="template in agtFiltered"
+                      v-for="template in agtUsable"
                       :key="template.id"
                       type="button"
+                      role="radio"
+                      :aria-checked="template.id === adGroupTemplateId"
                       :data-id="template.id"
                       :data-selected="template.id === adGroupTemplateId ? 'true' : 'false'"
-                      :data-stale="isAgtManual(template) ? 'true' : 'false'"
+                      data-stale="false"
                       :data-kind="agtKindOf(template) ?? undefined"
-                      :disabled="isAgtManual(template)"
                       data-testid="la-agt-card"
-                      class="flex flex-col gap-1 rounded-lg border p-3 text-left disabled:opacity-60"
+                      class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 text-left
+                        hover:bg-elevated"
                       :class="template.id === adGroupTemplateId
-                        ? 'border-primary bg-primary/10'
-                        : 'border-default bg-default'"
+                        ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
+                        : 'bg-default'"
                       @click="selectAdGroupTemplate(template)"
                     >
-                      <span class="flex items-center gap-2">
-                        <span class="min-w-0 truncate font-medium text-highlighted">{{ template.name }}</span>
-                        <!-- FEAT-061 — a manual row cannot be launched; it has to be migrated first -->
-                        <UBadge
-                          v-if="isAgtManual(template)"
-                          color="warning"
-                          variant="subtle"
-                          size="sm"
-                          class="whitespace-nowrap"
-                        >
-                          manual
-                        </UBadge>
-                      </span>
-                      <span class="text-xs text-muted">{{ budgetCell(template) }}</span>
-                      <!-- FEAT-061 — the campaign-level strategy/budget of a v3 template -->
                       <span
-                        v-if="campaignCell(template)"
-                        class="text-xs text-muted"
-                        data-testid="la-agt-campaign"
-                      >{{ campaignCell(template) }}</span>
-                      <span class="text-xs text-muted">{{ scheduleCell(template) }}</span>
-                      <span class="line-clamp-2 text-xs text-muted">{{ targetingCell(template) }}</span>
-                      <span class="text-xs text-dimmed">
-                        catalog {{ catalogCell(template.catalogVersion) }} · updated {{ timeAgo(template.updatedAt) }}
+                        class="flex size-4 items-center justify-center rounded-full border"
+                        :class="template.id === adGroupTemplateId ? 'border-primary' : 'border-accented'"
+                      >
+                        <span v-if="template.id === adGroupTemplateId" class="size-2 rounded-full bg-primary" />
                       </span>
-                      <span v-if="isAgtManual(template)" class="text-xs text-warning" data-testid="la-agt-manual">
-                        ต้องปรับเป็น Smart+ ก่อน
+                      <span class="flex min-w-0 flex-col">
+                        <span class="truncate text-sm font-medium text-highlighted" :title="template.name">
+                          {{ template.name }}
+                        </span>
+                        <span class="truncate text-xs text-muted">
+                          <span :title="budgetCell(template)">{{ budgetCell(template) }}</span>
+                          <!-- FEAT-061 — the campaign-level strategy/budget of a v3 template -->
+                          <template v-if="campaignCell(template)">
+                            <span class="text-dimmed"> · </span>
+                            <span
+                              :title="campaignCell(template)"
+                              data-testid="la-agt-campaign"
+                            >{{ campaignCell(template) }}</span>
+                          </template>
+                          <span class="text-dimmed"> · </span>
+                          <span :title="scheduleCell(template)">{{ scheduleCell(template) }}</span>
+                          <span class="text-dimmed"> · </span>
+                          <span :title="targetingCell(template)">{{ targetingCell(template) }}</span>
+                        </span>
+                      </span>
+                      <span class="hidden text-right text-xs text-dimmed tabular-nums sm:block">
+                        catalog {{ catalogCell(template.catalogVersion) }}<br>
+                        updated {{ timeAgo(template.updatedAt) }}
                       </span>
                     </button>
+
+                    <!-- FEAT-062 — manual rows stay in the DOM, folded away until `la-agt-more` opens them -->
+                    <div
+                      v-if="agtFolded.length > 0"
+                      class="divide-y divide-default"
+                      :hidden="!agtFoldOpen"
+                      data-testid="la-agt-hidden"
+                    >
+                      <button
+                        v-for="template in agtFolded"
+                        :key="template.id"
+                        type="button"
+                        role="radio"
+                        aria-checked="false"
+                        :data-id="template.id"
+                        data-selected="false"
+                        data-stale="true"
+                        :data-kind="agtKindOf(template) ?? undefined"
+                        disabled
+                        data-testid="la-agt-card"
+                        class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 bg-default px-2
+                          py-1.5 text-left opacity-60"
+                        @click="selectAdGroupTemplate(template)"
+                      >
+                        <span class="flex size-4 items-center justify-center rounded-full border border-accented" />
+                        <span class="flex min-w-0 flex-col">
+                          <span class="flex min-w-0 items-center gap-1.5">
+                            <span class="truncate text-sm font-medium text-highlighted" :title="template.name">
+                              {{ template.name }}
+                            </span>
+                            <!-- FEAT-061 — a manual row cannot be launched; it has to be migrated first -->
+                            <UBadge
+                              color="warning"
+                              variant="subtle"
+                              size="sm"
+                              class="whitespace-nowrap"
+                            >
+                              manual
+                            </UBadge>
+                            <span class="whitespace-nowrap text-xs text-warning" data-testid="la-agt-manual">
+                              ต้องปรับเป็น Smart+ ก่อน
+                            </span>
+                          </span>
+                          <span class="truncate text-xs text-muted">
+                            <span :title="budgetCell(template)">{{ budgetCell(template) }}</span>
+                            <template v-if="campaignCell(template)">
+                              <span class="text-dimmed"> · </span>
+                              <span
+                                :title="campaignCell(template)"
+                                data-testid="la-agt-campaign"
+                              >{{ campaignCell(template) }}</span>
+                            </template>
+                            <span class="text-dimmed"> · </span>
+                            <span :title="scheduleCell(template)">{{ scheduleCell(template) }}</span>
+                            <span class="text-dimmed"> · </span>
+                            <span :title="targetingCell(template)">{{ targetingCell(template) }}</span>
+                          </span>
+                        </span>
+                        <span class="hidden text-right text-xs text-dimmed tabular-nums sm:block">
+                          catalog {{ catalogCell(template.catalogVersion) }}<br>
+                          updated {{ timeAgo(template.updatedAt) }}
+                        </span>
+                      </button>
+                    </div>
                   </div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-sm text-muted">Ad group copies</span>
-                    <USelect
-                      v-model="copies"
-                      :items="copiesItems"
-                      :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
-                      class="w-24"
-                      aria-label="Ad group copies"
-                      data-testid="la-copies"
-                    />
-                    <span class="text-xs text-muted">
-                      Ad groups per campaign — same settings, same budget each
-                    </span>
-                  </div>
+                  <UButton
+                    v-if="agtFolded.length > 0"
+                    :label="agtMoreText"
+                    color="neutral"
+                    variant="link"
+                    size="xs"
+                    class="self-start px-0"
+                    :aria-expanded="agtFoldOpen"
+                    data-testid="la-agt-more"
+                    @click="agtFoldOpen = !agtFoldOpen"
+                  />
                 </section>
 
                 <!-- ad template -->
                 <section class="flex flex-col gap-2">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
                     <h2 class="text-sm font-semibold text-highlighted">
                       Ad template
                     </h2>
+                    <span class="text-xs text-muted tabular-nums" data-testid="la-adt-count">
+                      {{ adtCountText }}
+                    </span>
+                    <div class="grow" />
                     <UInput
-                      v-if="showAdtSearch"
                       v-model="adtSearch"
                       icon="i-lucide-search"
                       size="sm"
+                      class="w-full sm:w-48"
                       placeholder="Filter templates"
+                      aria-label="Filter ad templates"
                       data-testid="la-adt-search"
                     />
                   </div>
                   <p v-if="!templatesPending && adtItems.length === 0" class="text-sm text-muted" data-testid="la-adt-empty">
                     No ad template yet — create one under Ad templates first.
                   </p>
-                  <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div
+                    v-else
+                    class="max-h-60 divide-y divide-default overflow-y-auto rounded-lg border border-default"
+                    role="radiogroup"
+                    aria-label="Ad template"
+                    data-testid="la-adt-list"
+                  >
                     <button
-                      v-for="template in adtFiltered"
+                      v-for="template in adtUsable"
                       :key="template.id"
                       type="button"
+                      role="radio"
+                      :aria-checked="template.id === adTemplateId"
                       :data-id="template.id"
                       :data-selected="template.id === adTemplateId ? 'true' : 'false'"
-                      :data-stale="isAdtStale(template) ? 'true' : 'false'"
-                      :disabled="isAdtStale(template)"
+                      data-stale="false"
                       data-testid="la-adt-card"
-                      class="flex flex-col gap-1 rounded-lg border p-3 text-left disabled:opacity-60"
+                      class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 text-left
+                        hover:bg-elevated"
                       :class="template.id === adTemplateId
-                        ? 'border-primary bg-primary/10'
-                        : 'border-default bg-default'"
+                        ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
+                        : 'bg-default'"
                       @click="selectAdTemplate(template)"
                     >
-                      <span class="flex items-center gap-2">
-                        <!-- FEAT-042 — the cover of the bound post, only when one is stored -->
-                        <AdTemplatesPostCover
-                          v-if="hasPostCover(template.postInfo)"
-                          :template-id="template.id"
-                          :checked-at="postInfoCheckedAt(template.postInfo)"
-                          ok
-                          testid="la-adt-post-thumb"
-                        />
-                        <span class="min-w-0 truncate font-medium text-highlighted">{{ template.name }}</span>
-                        <AdTemplatesPostStatus :post-info="template.postInfo" testid="la-adt-post-status" />
-                        <UBadge
-                          v-if="isAdtStale(template)"
-                          color="warning"
-                          variant="subtle"
-                          size="sm"
-                          class="whitespace-nowrap"
-                        >
-                          Older catalog
-                        </UBadge>
+                      <span
+                        class="flex size-4 items-center justify-center rounded-full border"
+                        :class="template.id === adTemplateId ? 'border-primary' : 'border-accented'"
+                      >
+                        <span v-if="template.id === adTemplateId" class="size-2 rounded-full bg-primary" />
                       </span>
-                      <span class="break-all text-xs text-muted">{{ postCell(template) }}</span>
-                      <span class="line-clamp-1 text-xs text-muted">{{ pageCell(template) }}</span>
-                      <span class="line-clamp-2 text-xs text-muted" :title="ctaCell(template)">{{ ctaCell(template) }}</span>
-                      <span class="text-xs text-dimmed">
-                        catalog {{ catalogCell(template.catalogVersion) }} · updated {{ timeAgo(template.updatedAt) }}
+                      <span class="flex min-w-0 flex-col">
+                        <span class="flex min-w-0 items-center gap-1.5">
+                          <!-- FEAT-042 — the cover of the bound post, only when one is stored -->
+                          <AdTemplatesPostCover
+                            v-if="hasPostCover(template.postInfo)"
+                            :template-id="template.id"
+                            :checked-at="postInfoCheckedAt(template.postInfo)"
+                            ok
+                            testid="la-adt-post-thumb"
+                          />
+                          <span class="truncate text-sm font-medium text-highlighted" :title="template.name">
+                            {{ template.name }}
+                          </span>
+                          <AdTemplatesPostStatus :post-info="template.postInfo" testid="la-adt-post-status" />
+                        </span>
+                        <span class="truncate text-xs text-muted">
+                          <span :title="postCell(template)">{{ postCell(template) }}</span>
+                          <span class="text-dimmed"> · </span>
+                          <span :title="pageCell(template)">{{ pageCell(template) }}</span>
+                          <span class="text-dimmed"> · </span>
+                          <span :title="ctaCell(template)">{{ ctaCell(template) }}</span>
+                        </span>
                       </span>
-                      <span v-if="isAdtStale(template)" class="text-xs text-warning" data-testid="la-card-stale">
-                        Built from an older catalog — open it in Ad templates and save it again
+                      <span class="hidden text-right text-xs text-dimmed tabular-nums sm:block">
+                        catalog {{ catalogCell(template.catalogVersion) }}<br>
+                        updated {{ timeAgo(template.updatedAt) }}
                       </span>
                     </button>
+
+                    <!-- FEAT-062 — older-catalog rows stay in the DOM, folded away until `la-adt-more` -->
+                    <div
+                      v-if="adtFolded.length > 0"
+                      class="divide-y divide-default"
+                      :hidden="!adtFoldOpen"
+                      data-testid="la-adt-hidden"
+                    >
+                      <button
+                        v-for="template in adtFolded"
+                        :key="template.id"
+                        type="button"
+                        role="radio"
+                        aria-checked="false"
+                        :data-id="template.id"
+                        data-selected="false"
+                        data-stale="true"
+                        disabled
+                        data-testid="la-adt-card"
+                        class="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 bg-default px-2
+                          py-1.5 text-left opacity-60"
+                        @click="selectAdTemplate(template)"
+                      >
+                        <span class="flex size-4 items-center justify-center rounded-full border border-accented" />
+                        <span class="flex min-w-0 flex-col">
+                          <span class="flex min-w-0 items-center gap-1.5">
+                            <AdTemplatesPostCover
+                              v-if="hasPostCover(template.postInfo)"
+                              :template-id="template.id"
+                              :checked-at="postInfoCheckedAt(template.postInfo)"
+                              ok
+                              testid="la-adt-post-thumb"
+                            />
+                            <span class="truncate text-sm font-medium text-highlighted" :title="template.name">
+                              {{ template.name }}
+                            </span>
+                            <AdTemplatesPostStatus :post-info="template.postInfo" testid="la-adt-post-status" />
+                            <UBadge
+                              color="warning"
+                              variant="subtle"
+                              size="sm"
+                              class="whitespace-nowrap"
+                            >
+                              Older catalog
+                            </UBadge>
+                          </span>
+                          <span class="truncate text-xs text-warning" data-testid="la-card-stale">
+                            Built from an older catalog — open it in Ad templates and save it again
+                          </span>
+                        </span>
+                        <span class="hidden text-right text-xs text-dimmed tabular-nums sm:block">
+                          catalog {{ catalogCell(template.catalogVersion) }}<br>
+                          updated {{ timeAgo(template.updatedAt) }}
+                        </span>
+                      </button>
+                    </div>
                   </div>
+                  <UButton
+                    v-if="adtFolded.length > 0"
+                    :label="adtMoreText"
+                    color="neutral"
+                    variant="link"
+                    size="xs"
+                    class="self-start px-0"
+                    :aria-expanded="adtFoldOpen"
+                    data-testid="la-adt-more"
+                    @click="adtFoldOpen = !adtFoldOpen"
+                  />
 
                   <!-- FEAT-042 — non-blocking: the order can still be created, it may fail at the ad stage -->
                   <UAlert
@@ -1609,6 +1819,15 @@ onUnmounted(() => {
                       1 campaign → {{ copies }} ad group(s) → 1 ad each · {{ totalAdGroups }} ad groups in total
                     </dd>
                   </dl>
+
+                  <!-- FEAT-062 — the same preview as the Summary shows on steps 1–2 (AS-3) -->
+                  <LaunchAdsAdPreview
+                    class="mt-3"
+                    :template="adTemplate"
+                    :options="adtOptions"
+                    testid="la-review-preview"
+                    @updated="replaceAdTemplate"
+                  />
                 </section>
 
                 <section class="flex flex-col gap-2">
@@ -1642,51 +1861,6 @@ onUnmounted(() => {
                     </li>
                   </ul>
                 </section>
-              </div>
-
-              <!-- footer -->
-              <div class="mt-auto flex flex-wrap items-center gap-2 border-t border-default pt-4">
-                <UButton
-                  v-if="step > 1"
-                  label="Back"
-                  icon="i-lucide-arrow-left"
-                  color="neutral"
-                  variant="outline"
-                  :disabled="submitting"
-                  data-testid="la-back"
-                  @click="back"
-                />
-                <div class="grow" />
-                <UButton
-                  v-if="step < 3"
-                  label="Continue"
-                  trailing-icon="i-lucide-arrow-right"
-                  color="primary"
-                  :disabled="step === 1 ? !canLeaveStep1 : !canLeaveStep2"
-                  data-testid="la-next"
-                  @click="next"
-                />
-                <template v-else>
-                  <UButton
-                    label="Save as draft"
-                    icon="i-lucide-save"
-                    color="neutral"
-                    variant="outline"
-                    :disabled="!canSubmit || submitting"
-                    :loading="submitting"
-                    data-testid="la-save-draft"
-                    @click="saveDraft"
-                  />
-                  <UButton
-                    label="Create & publish"
-                    icon="i-lucide-rocket"
-                    color="primary"
-                    :disabled="!canSubmit || submitting"
-                    :loading="submitting"
-                    data-testid="la-publish"
-                    @click="askPublish"
-                  />
-                </template>
               </div>
             </div>
 
@@ -1736,10 +1910,83 @@ onUnmounted(() => {
                   {{ totalAdGroups }}
                 </dd>
               </dl>
+              <!-- FEAT-062 — the fixed campaign preset lives here now, on every step (AS-6) -->
+              <div class="flex flex-col gap-0.5 border-t border-default pt-2 text-xs" data-testid="la-campaign-fixed">
+                <span class="text-sm font-semibold text-highlighted">Campaign · fixed</span>
+                <span class="text-highlighted">
+                  <span data-testid="la-campaign-objective">Sales cashback</span>
+                  <span class="text-dimmed"> → </span>
+                  <span data-testid="la-campaign-destination">Website conversions</span>
+                </span>
+                <span class="text-muted">Campaign name = order name</span>
+              </div>
+
+              <!-- FEAT-062 — step 3 renders the same component in the review column instead (AS-3) -->
+              <LaunchAdsAdPreview
+                v-if="step < 3"
+                :template="adTemplate"
+                :options="adtOptions"
+                testid="la-preview"
+                @updated="replaceAdTemplate"
+              />
+
               <p class="text-xs text-muted">
                 Save as draft stops each build at <span class="font-medium">ready</span>; Create &amp; publish
                 publishes on TikTok as soon as the build finishes.
               </p>
+
+              <!--
+                FEAT-062 — one DOM instance of the step actions (AS-2): the last block of the sticky aside at
+                `lg+`, a fixed bottom bar below it. The page body carries `pb-20 lg:pb-0` for the bar.
+              -->
+              <div
+                class="fixed inset-x-0 bottom-0 z-10 flex flex-wrap items-center gap-2 border-t border-default
+                  bg-default p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] lg:static lg:z-auto lg:mt-auto
+                  lg:bg-transparent lg:p-0 lg:pt-3"
+                data-testid="la-actions"
+              >
+                <UButton
+                  v-if="step > 1"
+                  label="Back"
+                  icon="i-lucide-arrow-left"
+                  color="neutral"
+                  variant="outline"
+                  :disabled="submitting"
+                  data-testid="la-back"
+                  @click="back"
+                />
+                <div class="grow" />
+                <UButton
+                  v-if="step < 3"
+                  label="Continue"
+                  trailing-icon="i-lucide-arrow-right"
+                  color="primary"
+                  :disabled="step === 1 ? !canLeaveStep1 : !canLeaveStep2"
+                  data-testid="la-next"
+                  @click="next"
+                />
+                <template v-else>
+                  <UButton
+                    label="Save as draft"
+                    icon="i-lucide-save"
+                    color="neutral"
+                    variant="outline"
+                    :disabled="!canSubmit || submitting"
+                    :loading="submitting"
+                    data-testid="la-save-draft"
+                    @click="saveDraft"
+                  />
+                  <UButton
+                    label="Create &amp; publish"
+                    icon="i-lucide-rocket"
+                    color="primary"
+                    :disabled="!canSubmit || submitting"
+                    :loading="submitting"
+                    data-testid="la-publish"
+                    @click="askPublish"
+                  />
+                </template>
+              </div>
             </aside>
           </div>
         </template>
