@@ -10,10 +10,14 @@
  * (`BrowserProfilesProxyModeField`, prefix `bp-proxy` → `bp-proxy-proxy-mode` / `bp-proxy-proxy`) and starts on
  * "Pick a free proxy" with an empty picker; Pick with nothing chosen is a form error (`PROXY_PICK_REQUIRED`) and
  * sends nothing.
- * Submit → **one** `POST /backend/browser-profiles/:id/proxy` with exactly one key (`proxyId` for Pick,
- * `proxyMode: 'auto' | 'none'`) → 202: close + info toast + `requested` (the page watches the row until its
- * `proxyUpdating` is false again). Every error stays in the modal (`bp-proxy-error`) with the API's own text; a 409
- * also asks the page for a background re-read, because the state we based the button on is stale by then.
+ * Submit → **one** `POST /backend/browser-profiles/:id/proxy` with **exactly one** key (`proxyId` for Pick,
+ * `proxyMode: 'auto' | 'none'`; sending `proxyId: null` next to a `proxyMode` is a 400) → 202
+ * `{ jobId, proxyId, proxyRef }`: close + info toast + `requested` (the page watches the row until its
+ * `proxyUpdating` is false again). Every error stays in the modal (`bp-proxy-error`): a 400 is the standard zod
+ * envelope, so `issues[0].message` is shown, 404 / 409 / 500 carry their text in `error`; a 409 also asks the page
+ * for a background re-read, because the state we based the button on is stale by then.
+ * `bp-proxy-current` reads `proxyRef` before the provider `proxy` snapshot on purpose: from the 202 on, the API
+ * already answers the **new** `proxyRef` while the snapshot is still the old one until the worker confirms.
  */
 import type { FetchError } from 'ofetch'
 import type { ModalProps } from '@nuxt/ui'
@@ -78,11 +82,16 @@ watch(open, (isOpen) => {
   if (isOpen) void settings.load()
 })
 
-/** the API text verbatim, plus the two pieces of a structured 409 that are not already in it */
+/**
+ * The API text verbatim, plus the two pieces of a structured 409 that are not already in it.
+ * A 400 is the standard zod envelope (`error: 'validation'` + `issues`) — show the first issue message instead of
+ * the useless word "validation"; 404 / 409 / 500 carry a human text in `error`.
+ */
 function errorText(e: unknown): string {
   const err = e as FetchError<Partial<SetProfileProxyErrorBody>>
   const body = err.data
-  let text = body?.error ?? err.message ?? 'Could not change the proxy'
+  const issue = body?.issues?.map(i => i.message).find(Boolean)
+  let text = issue ?? body?.error ?? err.message ?? 'Could not change the proxy'
   if (body?.boundProfileName) text += ` · used by ${body.boundProfileName}`
   if (typeof body?.tried === 'number' && !text.includes(`tried ${body.tried}`)) text += ` (tried ${body.tried})`
   return text

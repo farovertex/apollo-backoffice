@@ -185,11 +185,14 @@ export interface SetProfileProxyResponse {
 }
 
 /**
- * Error body of that call: 400 (zod), 404 (`ไม่พบโปรไฟล์` / `ไม่พบ proxy`), 409 (a precondition, the FEAT-027 claim
- * conflict with `boundProfile*`, or an exhausted auto-select with `tried`), 500 (rolled back).
+ * Error body of that call: 400 (the standard zod envelope — `error: 'validation'` + `issues`, so the BO shows
+ * `issues[0].message`), 404 (`ไม่พบโปรไฟล์` / `ไม่พบ proxy`), 409 (a precondition, the FEAT-027 claim conflict with
+ * `boundProfile*`, or an exhausted auto-select with `tried`), 500 (rolled back). Only 400 carries `issues`.
  */
 export interface SetProfileProxyErrorBody {
   error: string
+  /** 400 only — zod issues; the first message is the one the modal shows */
+  issues?: { path: string, message: string }[]
   /** FEAT-027 claim conflict — the proxy is already bound to that profile */
   boundProfileId?: string | null
   boundProfileName?: string | null

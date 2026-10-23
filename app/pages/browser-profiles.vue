@@ -42,7 +42,11 @@
  * cannot see and the button carries the reason in its tooltip. The row then shows an `Updating proxy…` badge
  * (`data-state="proxy"`, also when another admin asked for it) and the same single timer polls with reason `proxy`
  * until `proxyUpdating` is false again → success toast with the new proxy, or an error toast with `provisionError`.
- * That job never touches `runState`, so a healthy bound profile stays `closed` even when AdsPower refuses.
+ * That job never touches `runState`, so a healthy bound profile stays `closed` even when AdsPower refuses — and
+ * `provisionError` is the only signal the worker failed. Known limitation (rare): when the worker cannot take the
+ * profile lock (`profileLocked`) it leaves the row completely untouched, so the outcome toast says "Proxy updated"
+ * for a change AdsPower never received; the Proxy column is right either way (it shows `proxyRef`, which the API
+ * already switched at request time), and a re-try applies it.
  */
 import type { TableColumn } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
