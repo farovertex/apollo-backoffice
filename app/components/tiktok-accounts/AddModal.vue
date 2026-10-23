@@ -309,9 +309,9 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   } catch (e) {
     const accountError = accountErrorState(e)
     if (createdProfile) {
-      // FEAT-044: the 201 has no `deleting` key (it is a `/available`-only, per-list-call value) — a row that was
-      // just created is never being deleted
-      const profile = { ...createdProfile, deleting: false }
+      // FEAT-044 / TASK-profile-proxy: the 201 has no `deleting` / `proxyUpdating` key (both are `/available`-only,
+      // per-list-call values) — a row that was just created is neither being deleted nor changing its proxy
+      const profile = { ...createdProfile, deleting: false, proxyUpdating: false }
       profiles.value = [profile, ...profiles.value.filter(p => p.id !== profile.id)]
       profilesLoaded.value = true
       state.createProfile = false

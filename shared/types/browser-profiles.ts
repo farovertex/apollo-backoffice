@@ -20,6 +20,13 @@
  * (a `provider{delete}` job of that row is `waiting|active`) → the item key set grows from 17 to **19** keys; new
  * `POST /browser-profiles/:id/delete` (202 `DeleteProfileResponse`) really deletes an **empty** profile (provider
  * included) through that job. `DELETE /browser-profiles/:id` (2.8, DB-only unregister) is unchanged.
+ * TASK-profile-proxy (functions 2.13, contract §1): the proxy of an **existing** profile can be changed from the
+ * Browser profiles page — `POST /browser-profiles/:id/proxy` (202 `SetProfileProxyResponse`) claims the new proxy,
+ * releases the old one and queues a `provider{setProxy}` job that writes `user_proxy_config` in AdsPower (it only
+ * takes effect on the next launch, so only a `closed` / `error` profile qualifies; a **bound** profile is allowed —
+ * that is the main use case). Every `/available` item therefore gains `proxyUpdating` (such a job is
+ * `waiting|active`) → the item key set grows from 19 to **20** keys; the 201 of 2.3 keeps its own 20-key shape
+ * without it, like `deleting`.
  */
 
 export interface AvailableProfileProxy {
@@ -84,6 +91,12 @@ export interface AvailableProfile {
    * queue, not a stored field, AS-6). The row then shows the `Deleting…` badge and both row actions are disabled.
    */
   deleting: boolean
+  /**
+   * TASK-profile-proxy — `true` while a `provider{setProxy}` job of this row is `waiting|active` (derived by the API
+   * from the job queue like `deleting`, not a stored field). The row then shows the `Updating proxy…` badge and all
+   * three row actions are disabled; `runState` is **not** touched by that job, so the row stays `closed`.
+   */
+  proxyUpdating: boolean
 }
 
 /**
@@ -147,6 +160,41 @@ export interface DeleteProfileResponse {
   jobId: string
   /** true = a delete job of this profile was already queued/running; nothing new was written */
   reused: boolean
+}
+
+/**
+ * TASK-profile-proxy (contract §1) — body of `POST /browser-profiles/:id/proxy`: **exactly one** of the two keys,
+ * same decision table as the create call (`ProfileProxyChoice`) plus the explicit `proxyId: null` = "remove the
+ * proxy". `proxyMode: 'auto'` auto-selects the oldest free proxy that passes the check, `'none'` removes it.
+ * Both keys or neither is a 400 (`PROXY_BOTH_KEYS` / `PROXY_ONE_KEY`); the profile's **current** proxy id is accepted
+ * (re-apply to AdsPower).
+ */
+export type SetProfileProxyBody
+  = { proxyId: string | null, proxyMode?: never }
+    | { proxyMode: ProxyMode, proxyId?: never }
+
+/**
+ * 202 body — the API has already claimed/released the proxy rows and written `browserProfiles.proxyId`; the
+ * `provider{setProxy}` job then applies it to AdsPower. `proxyRef` is the **new** proxy (null for "no proxy"), so the
+ * BO can show the new label before its next `/available` read.
+ */
+export interface SetProfileProxyResponse {
+  jobId: string
+  proxyId: string | null
+  proxyRef: ProxyRef | null
+}
+
+/**
+ * Error body of that call: 400 (zod), 404 (`ไม่พบโปรไฟล์` / `ไม่พบ proxy`), 409 (a precondition, the FEAT-027 claim
+ * conflict with `boundProfile*`, or an exhausted auto-select with `tried`), 500 (rolled back).
+ */
+export interface SetProfileProxyErrorBody {
+  error: string
+  /** FEAT-027 claim conflict — the proxy is already bound to that profile */
+  boundProfileId?: string | null
+  boundProfileName?: string | null
+  /** connectivity checks performed before `proxyMode: 'auto'` gave up */
+  tried?: number
 }
 
 // ── FEAT-006 — fingerprint, options, defaults, create ─────────────────────────────────────────────────────────────────
@@ -268,8 +316,10 @@ export type CreateProfileAutoBody = { name: string } & ProfileProxyChoice
  * FEAT-044 (api.md "Needs BO"): the 201 keeps its **20**-key shape — `createdAt` was already there, but `deleting`
  * is computed per list call and exists on `/available` items only, so it is omitted here. A fresh row is never
  * being deleted; a consumer that drops it into an `AvailableProfile` list adds `deleting: false`.
+ * TASK-profile-proxy: `proxyUpdating` is omitted for the same reason (and the 201 stays at 20 keys) — a fresh row
+ * has no `setProxy` job either, so such a consumer adds `proxyUpdating: false`.
  */
-export interface CreatedProfile extends Omit<AvailableProfile, 'deleting'> {
+export interface CreatedProfile extends Omit<AvailableProfile, 'deleting' | 'proxyUpdating'> {
   createdBy: string
   createdAt: string
   jobId: string
