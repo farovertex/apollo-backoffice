@@ -36,6 +36,12 @@ const MODE_ITEMS: { label: string, value: BudgetMode }[] = [
 const mode = ref<BudgetMode>('custom')
 const amount = ref<number | null>(null)
 const unlimitedConfirm = ref(false)
+/** the amount error (BUG: modal must not show "ยอดต้องมากกว่า 0…" before the user does anything) is shown only
+ * once the user has acted on this field: edited the amount or pressed Save. Reset on every open and on every
+ * mode change so switching back to "กำหนดเอง" doesn't resurface a stale error. The error text itself is also
+ * gated on `!amountEmpty` (see the template and `amountEmpty` below): clearing the field back to empty — e.g.
+ * select-all + Backspace — must not show the message either, only disable Save. */
+const touched = ref(false)
 
 const budget = computed(() => props.row?.advertiserBudget ?? null)
 const advertiser = computed(() => props.row?.advertiser ?? null)
@@ -54,6 +60,11 @@ watch(open, (value) => {
   mode.value = b?.mode === 'unlimited' ? 'unlimited' : 'custom'
   amount.value = b?.mode === 'custom' ? b.amount : null
   unlimitedConfirm.value = false
+  touched.value = false
+})
+
+watch(mode, () => {
+  touched.value = false
 })
 
 const title = computed(() => {
@@ -96,6 +107,13 @@ const amountError = computed(() => {
   return isValidAmount(amount.value) ? null : 'ยอดต้องมากกว่า 0 และทศนิยมไม่เกิน 2 ตำแหน่ง'
 })
 
+/** `UInputNumber` emits `undefined` (confirmed by hand; not `null`) when its native input is cleared and then
+ * blurred — `== null` below catches both `null` and `undefined`, and `Number.isNaN` catches a stray `NaN` too.
+ * All three count as "empty" for the pristine-error gate below (an emptied field must disable Save silently,
+ * never show the message), while any other non-finite/out-of-range/bad-decimal number is a real invalid value
+ * to flag. */
+const amountEmpty = computed(() => amount.value == null || Number.isNaN(amount.value))
+
 /** decision 5 — the stored value, re-selected, disables Save (defensive; the API also answers 200 unchanged) */
 const unchanged = computed(() => {
   const b = budget.value
@@ -108,6 +126,7 @@ const invalid = computed(() => (mode.value === 'custom' ? amountError.value !== 
 const saveDisabled = computed(() => invalid.value || unchanged.value)
 
 function confirm() {
+  touched.value = true
   if (!props.row || props.saving || saveDisabled.value) return
   const body: SetBudgetBody = mode.value === 'unlimited'
     ? { mode: 'unlimited' }
@@ -143,7 +162,7 @@ function confirm() {
         />
 
         <template v-if="mode === 'custom'">
-          <UFormField label="ยอดงบประมาณ" :error="amountError ?? undefined">
+          <UFormField label="ยอดงบประมาณ">
             <div class="flex items-center gap-2">
               <UInputNumber
                 v-model="amount"
@@ -153,11 +172,12 @@ function confirm() {
                 class="w-full"
                 :disabled="saving"
                 data-testid="am-budget-amount"
+                @update:model-value="touched = true"
               />
               <span v-if="currency" class="text-sm whitespace-nowrap text-muted">{{ currency }}</span>
             </div>
           </UFormField>
-          <p v-if="amountError" class="text-xs text-error" data-testid="am-budget-amount-error">
+          <p v-if="touched && !amountEmpty && amountError" class="text-xs text-error" data-testid="am-budget-amount-error">
             {{ amountError }}
           </p>
           <p class="text-xs text-warning" data-testid="am-budget-warning">
