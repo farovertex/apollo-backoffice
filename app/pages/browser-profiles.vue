@@ -33,6 +33,16 @@
  * shows a `Deleting…` badge (also when another admin asked for it: the item itself says `deleting: true`) and the
  * same single timer polls with reason `delete` until the row disappears (success toast), comes back as `error`
  * (failure toast) or comes back untouched (warning toast). `DELETE /browser-profiles/:id` (2.8) is not used here.
+ * TASK-profile-proxy (functions 2.13, contract §1): every item gains `proxyUpdating` (20 keys) and a third row action,
+ * icon-only "Proxy" (`bp-proxy-edit`) → `BrowserProfilesProxyModal` (`bp-proxy-modal`) → **one**
+ * `POST /backend/browser-profiles/:id/proxy` (202) which claims/releases the proxy rows and queues a
+ * `provider{setProxy}` job that writes `user_proxy_config` in AdsPower. The change only takes effect on the profile's
+ * next launch, so the button needs a created profile in `closed` / `error` that is neither deleting nor already
+ * changing its proxy (a **bound** profile is fine — that is the main use case); the API 409s on everything the row
+ * cannot see and the button carries the reason in its tooltip. The row then shows an `Updating proxy…` badge
+ * (`data-state="proxy"`, also when another admin asked for it) and the same single timer polls with reason `proxy`
+ * until `proxyUpdating` is false again → success toast with the new proxy, or an error toast with `provisionError`.
+ * That job never touches `runState`, so a healthy bound profile stays `closed` even when AdsPower refuses.
  */
 import type { TableColumn } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
@@ -142,11 +152,10 @@ watch(filtered, (rows) => {
   if (currentPage.value > lastPage) setPage(lastPage)
 })
 
+// TASK-profile-proxy: the formatter itself moved to `utils/proxy-mode.ts` so the Change-proxy modal shows the current
+// proxy exactly like this column does; only the "nothing" rendering differs (`—` here, "No proxy" there)
 function formatProxy(proxy: AvailableProfile['proxy']): string {
-  if (!proxy) return '—'
-  const endpoint = proxy.port ? `${proxy.host}:${proxy.port}` : proxy.host
-  const main = [proxy.type, endpoint].filter(Boolean).join(' ')
-  return proxy.country ? `${main} · ${proxy.country}` : main
+  return formatProxySnapshot(proxy) ?? '—'
 }
 
 function boundLabel(p: AvailableProfile): string {
@@ -166,12 +175,25 @@ function isDeleting(p: AvailableProfile): boolean {
 }
 
 /**
+ * TASK-profile-proxy — ids we asked to re-point and have not yet seen come back with `proxyUpdating: false`. Same
+ * reason as `deletingIds` for living up here: `runStateBadge()` and the row actions need them.
+ */
+const proxyChanging = ref<string[]>([])
+/** the row's proxy is being applied — either we asked for it, or another admin's `provider{setProxy}` job is running */
+function isProxyUpdating(p: AvailableProfile): boolean {
+  return p.proxyUpdating || proxyChanging.value.includes(p.id)
+}
+
+/**
  * FEAT-024 — second badge of the Status column (`bp-run-state`, `data-state` = the raw `runState`):
  * `provisioning` → neutral `Creating…` while the `provider{create}` job runs · `error` + `provisionError` → error
  * badge whose tooltip/`title` is the API's own text. Every other `runState` (closed / opening / open / closing) is
  * normal operation and adds nothing.
  * FEAT-044 (api-contract §3.3): a row whose delete job is pending wins over both — `data-state="deleting"`, so the
  * admin sees why the row is about to disappear even while its `runState` is still `closed`.
+ * TASK-profile-proxy: a pending `provider{setProxy}` job adds `data-state="proxy"` between those two — `runState`
+ * stays `closed` throughout, so this badge is the only sign that the row is busy. Precedence: `deleting` > `proxy` >
+ * `provisioning` > `error`.
  */
 function runStateBadge(p: AvailableProfile) {
   if (isDeleting(p)) {
@@ -185,6 +207,18 @@ function runStateBadge(p: AvailableProfile) {
       'data-testid': 'bp-run-state',
       'data-state': 'deleting'
     }, () => 'Deleting…')
+  }
+  if (isProxyUpdating(p)) {
+    return h(UBadge, {
+      'color': 'neutral',
+      'variant': 'subtle',
+      'icon': 'i-lucide-loader-circle',
+      'class': 'whitespace-nowrap',
+      'ui': { leadingIcon: 'animate-spin' },
+      'title': 'The node is writing the new proxy into the AdsPower profile',
+      'data-testid': 'bp-run-state',
+      'data-state': 'proxy'
+    }, () => 'Updating proxy…')
   }
   if (p.runState === 'provisioning') {
     return h(UBadge, {
@@ -247,6 +281,8 @@ const forceClosing = ref<string[]>([])
 const forceClosingCount = computed(() => forceClosing.value.filter(id => profiles.value.find(p => p.id === id)?.runState === 'closing').length)
 /** FEAT-044 — visible rows whose delete job is still pending (ours or another admin's `deleting: true`) */
 const deletingCount = computed(() => filtered.value.filter(p => isDeleting(p)).length)
+/** TASK-profile-proxy — visible rows whose `provider{setProxy}` job is still pending (ours or another admin's) */
+const proxyUpdatingCount = computed(() => filtered.value.filter(p => isProxyUpdating(p)).length)
 
 // one interval for the whole page (spec A12): 2 s, 90 s per reason, cleared on unmount
 const poll = useProfilesPoll(() => refresh())
@@ -284,12 +320,13 @@ watch(syncError, (message) => {
 }, { immediate: true })
 
 // the single source of truth for the timer: which reasons the data in hand still waits for
-watch([syncRunning, provisioningCount, forceClosingCount, deletingCount], () => {
+watch([syncRunning, provisioningCount, forceClosingCount, deletingCount, proxyUpdatingCount], () => {
   const reasons: ProfilesPollReason[] = []
   if (syncRunning.value) reasons.push('sync')
   if (provisioningCount.value > 0) reasons.push('provisioning')
   if (forceClosingCount.value > 0) reasons.push('forceClose')
   if (deletingCount.value > 0) reasons.push('delete')
+  if (proxyUpdatingCount.value > 0) reasons.push('proxy')
   poll.track(reasons)
 }, { immediate: true })
 
@@ -447,12 +484,14 @@ poll.onTimeout('forceClose', () => {
  * see (lock, pending jobs, force-close) and answers 409 — the button only prevents the obvious cases.
  */
 function canDelete(p: AvailableProfile): boolean {
-  return p.status === 'free' && !isDeleting(p) && (p.runState === 'closed' || p.runState === 'error')
+  return p.status === 'free' && !isDeleting(p) && !isProxyUpdating(p) && (p.runState === 'closed' || p.runState === 'error')
 }
 
 /** why the button is disabled / what it does — the tooltip and `title` texts of api-contract §3.2 */
 function deleteReason(p: AvailableProfile): string {
   if (isDeleting(p)) return 'Deleting…'
+  // TASK-profile-proxy: the row is busy with its `setProxy` job (its `runState` still says `closed`)
+  if (isProxyUpdating(p)) return 'Updating proxy…'
   if (p.status === 'bound') return 'Unbind the TikTok account first'
   if (p.runState === 'opening' || p.runState === 'open' || p.runState === 'closing') return 'Close the browser first (Force close)'
   if (p.runState === 'provisioning') return 'Wait until the profile is created'
@@ -532,6 +571,80 @@ watch(profiles, (rows) => {
 poll.onTimeout('delete', () => {
   toast.add({
     title: 'Delete is taking longer than expected',
+    description: 'Is the worker of that node running? Press Refresh in a moment.',
+    color: 'warning'
+  })
+})
+
+// ── change proxy (functions 2.13, TASK-profile-proxy) ────────────────────────────────────────────────────────────────
+/**
+ * AdsPower writes `user_proxy_config` but only honours it on the **next** launch, so the row must exist in the
+ * provider and be at rest. A **bound** profile qualifies (unlike Delete) — re-pointing a profile whose proxy died is
+ * the whole point. Everything we cannot see (lock, another pending job) is the API's 409.
+ */
+function canEditProxy(p: AvailableProfile): boolean {
+  return !!p.providerProfileId
+    && (p.runState === 'closed' || p.runState === 'error')
+    && !isDeleting(p)
+    && !isProxyUpdating(p)
+}
+
+/** why the button is disabled / what it does — the tooltip and `title` texts of the brief §3.2 */
+function proxyReason(p: AvailableProfile): string {
+  if (isProxyUpdating(p)) return 'Updating proxy…'
+  if (isDeleting(p)) return 'Deleting…'
+  if (p.runState === 'opening' || p.runState === 'open' || p.runState === 'closing') return 'Close the browser first (Force close)'
+  if (p.runState === 'provisioning' || !p.providerProfileId) return 'Wait until the profile is created'
+  return 'Change the proxy of this profile'
+}
+
+const proxyTarget = ref<AvailableProfile | null>(null)
+const proxyModalOpen = ref(false)
+
+function askProxy(p: AvailableProfile) {
+  proxyTarget.value = p
+  proxyModalOpen.value = true
+}
+
+/** the modal got its 202 — watch the row and re-open the `proxy` poll window (the POST itself lives in the modal) */
+async function onProxyRequested(profileId: string) {
+  if (!proxyChanging.value.includes(profileId)) proxyChanging.value = [...proxyChanging.value, profileId]
+  // the data in hand still says `proxyUpdating: false` — re-read now so the badge and the poll reason come from the API
+  await refresh()
+  poll.retry('proxy')
+}
+
+/** what the row's proxy is now, as the success toast says it: the picked proxy's label, else the snapshot, else none */
+function proxyLabel(p: AvailableProfile): string {
+  return p.proxyRef?.label ?? formatProxySnapshot(p.proxy) ?? 'No proxy'
+}
+
+// a watched row came back with `proxyUpdating: false` → one toast with the outcome, and the id is dropped
+watch(profiles, (rows) => {
+  if (!proxyChanging.value.length) return
+  const keep: string[] = []
+  for (const id of proxyChanging.value) {
+    const p = rows.find(r => r.id === id)
+    // row gone (deleted by someone else, or no longer visible): nothing left to report
+    if (!p) continue
+    // the job is still queued / running
+    if (p.proxyUpdating) {
+      keep.push(id)
+      continue
+    }
+    // the `setProxy` job never touches `runState` — `provisionError` is the only signal it failed
+    if (p.provisionError) {
+      toast.add({ title: 'Proxy change failed', description: `${p.name} · ${p.provisionError}`, color: 'error' })
+    } else {
+      toast.add({ title: 'Proxy updated', description: `${p.name} · ${proxyLabel(p)}`, color: 'success' })
+    }
+  }
+  if (keep.length !== proxyChanging.value.length) proxyChanging.value = keep
+})
+
+poll.onTimeout('proxy', () => {
+  toast.add({
+    title: 'Proxy change is taking longer than expected',
     description: 'Is the worker of that node running? Press Refresh in a moment.',
     color: 'warning'
   })
@@ -701,14 +814,30 @@ const columns: TableColumn<AvailableProfile>[] = [
     id: 'actions',
     header: '',
     enableSorting: false,
-    // functions 2.11 "Force close" (disabled for rows with nothing to close, spinning while the node works) +
-    // FEAT-044 icon-only "Delete" (api-contract §3.2) — both stay on one line, also at 390 px
+    // TASK-profile-proxy icon-only "Proxy" (§3.2) + functions 2.11 "Force close" (disabled for rows with nothing to
+    // close, spinning while the node works) + FEAT-044 icon-only "Delete" (api-contract §3.2) — all three stay on one
+    // line, also at 390 px
     cell: ({ row }) => {
       const p = row.original
       const busy = forceClosing.value.includes(p.id) && p.runState === 'closing'
       const deleting = isDeleting(p)
+      const proxyUpdating = isProxyUpdating(p)
       const reason = deleteReason(p)
+      const proxyTooltip = proxyReason(p)
       return h('div', { class: 'flex justify-end gap-1' }, [
+        h(UTooltip, { text: proxyTooltip }, () => h(UButton, {
+          'aria-label': `Change proxy of ${p.name}`,
+          'icon': 'i-lucide-network',
+          'color': 'neutral',
+          'variant': 'ghost',
+          'size': 'xs',
+          'disabled': !canEditProxy(p),
+          'title': proxyTooltip,
+          'data-testid': 'bp-proxy-edit',
+          'data-state': p.runState,
+          'data-updating': proxyUpdating ? 'true' : 'false',
+          'onClick': () => askProxy(p)
+        })),
         h(UButton, {
           'label': 'Force close',
           'aria-label': `Force close ${p.name}`,
@@ -716,7 +845,7 @@ const columns: TableColumn<AvailableProfile>[] = [
           'color': 'error',
           'variant': 'outline',
           'size': 'xs',
-          'disabled': !canForceClose(p) || busy || deleting,
+          'disabled': !canForceClose(p) || busy || deleting || proxyUpdating,
           'loading': busy,
           'title': canForceClose(p) ? 'Close the Chrome window right now, even if a job is using it' : 'Nothing to close — the browser is not open',
           'data-testid': 'bp-force-close',
@@ -1076,6 +1205,13 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
 
       <BrowserProfilesDefaultsSlideover v-model:open="defaultsOpen" />
       <BrowserProfilesCreateModal v-model:open="createOpen" @created="onCreated" />
+      <!-- TASK-profile-proxy (functions 2.13): re-point an existing profile at another free proxy / Auto / none -->
+      <BrowserProfilesProxyModal
+        v-model:open="proxyModalOpen"
+        :profile="proxyTarget"
+        @requested="onProxyRequested"
+        @refresh="refresh()"
+      />
     </template>
   </UDashboardPanel>
 </template>
