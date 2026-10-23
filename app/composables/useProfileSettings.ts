@@ -28,9 +28,12 @@ import type { ProxiesResponse, Proxy } from '#shared/types/proxies'
  *   one of the two, never both and never neither (the API 400s on both and resolves "neither" from the defaults);
  * - the FEAT-027/BUG-030 "omit `proxyId` while it still is the default" logic, the "Default" option group, the
  *   "No proxy" picker item and the `proxy*Hint` helpers are removed with the default proxy itself.
- * `options.loadOptions` / `options.loadProxies` drop one of the three GETs: the Default settings slideover needs no
- * proxy list (AC-8: options + me only) and the Add-account modal needs no `/browser-profiles/options` (AC-10:
- * available + me + proxies).
+ * `options.loadOptions` / `options.loadProxies` / `options.loadDefaults` drop one or two of the three GETs: the
+ * Default settings slideover needs no proxy list (AC-8: options + me only), the Add-account modal needs no
+ * `/browser-profiles/options` (AC-10: available + me + proxies) and the TASK-profile-proxy "Change proxy" modal needs
+ * only the free-proxy list (one `GET /proxies?free=1&limit=100&sort=label`) — it changes the proxy of an **existing**
+ * profile, so neither the options nor the admin's defaults say anything about it. With `loadDefaults: false` the form
+ * keeps its blank values and `apply()` is not called: the caller owns `form.proxyMode` / `form.proxyId`.
  */
 
 /** FEAT-028 — what the Proxy radio holds; `pick` exists only where a free-proxy picker is rendered. */
@@ -56,6 +59,11 @@ export interface UseProfileSettingsOptions {
   loadOptions?: boolean
   /** `false` → `load()` skips `GET /proxies?free=1` (Default settings slideover, which has no picker) */
   loadProxies?: boolean
+  /**
+   * TASK-profile-proxy — `false` → `load()` skips `GET /browser-profile-defaults/me` and does **not** prefill the
+   * form (`defaults` stays null, `apply()` is not called): the Change-proxy modal only needs the free-proxy list.
+   */
+  loadDefaults?: boolean
 }
 
 function blankForm(): FingerprintForm {
@@ -82,7 +90,7 @@ function messageOf(e: unknown, fallback: string): string {
 }
 
 export function useProfileSettings(opts: UseProfileSettingsOptions = {}) {
-  const { loadOptions = true, loadProxies = true } = opts
+  const { loadOptions = true, loadProxies = true, loadDefaults = true } = opts
   const api = useApi()
 
   const options = ref<ProfileOptions | null>(null)
@@ -121,7 +129,7 @@ export function useProfileSettings(opts: UseProfileSettingsOptions = {}) {
       // retry: 0 — one request each, ofetch must not re-issue them on 5xx
       const [opts_, me, list] = await Promise.all([
         loadOptions ? api<ProfileOptions>('/browser-profiles/options', { retry: 0 }) : Promise.resolve(null),
-        api<ProfileDefaults>('/browser-profile-defaults/me', { retry: 0 }),
+        loadDefaults ? api<ProfileDefaults>('/browser-profile-defaults/me', { retry: 0 }) : Promise.resolve(null),
         loadProxies
           ? api<ProxiesResponse>('/proxies', { retry: 0, query: { free: 1, limit: 100, sort: 'label' } })
           : Promise.resolve(null)
@@ -130,7 +138,8 @@ export function useProfileSettings(opts: UseProfileSettingsOptions = {}) {
       options.value = opts_
       defaults.value = me
       proxies.value = list?.proxies ?? []
-      apply(me)
+      // TASK-profile-proxy: no defaults request → nothing to prefill from, the caller sets the proxy fields itself
+      if (me) apply(me)
       loaded.value = true
     } catch (e) {
       if (s !== session) return

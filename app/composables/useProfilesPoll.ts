@@ -20,9 +20,10 @@ export const PROFILES_POLL_MAX_MS = 90_000
 
 /**
  * why the page is re-reading: the sync job · at least one visible `provisioning` row · a pending force-close ·
- * FEAT-044 `delete` = at least one visible row whose `provider{delete}` job has not finished yet
+ * FEAT-044 `delete` = at least one visible row whose `provider{delete}` job has not finished yet ·
+ * TASK-profile-proxy `proxy` = at least one visible row whose `provider{setProxy}` job has not finished yet
  */
-export type ProfilesPollReason = 'sync' | 'provisioning' | 'forceClose' | 'delete'
+export type ProfilesPollReason = 'sync' | 'provisioning' | 'forceClose' | 'delete' | 'proxy'
 
 export function useProfilesPoll(reread: () => Promise<unknown>) {
   /** reasons currently being waited on (a timer runs iff this is not empty) */
