@@ -21,6 +21,14 @@
  * advertiser" and before the campaign's own "งบประมาณ" (spec "UI behaviour"); no other column moves and the
  * Ad group / Ad tabs are untouched.
  *
+ * FEAT-064 — the old "บัญชี / advertiser" column is **removed on all three tabs**; its text (account label /
+ * email + advertiser name) moves into the merged `name` cell (`am-row-name`, spec "UI behaviour" → Merged
+ * column), so "nothing else moves": `status`, `advertiserBudget`, `cover` etc. keep their position, only the
+ * `account` column is gone (`advertiserBudget` now immediately follows `status` on the campaign tab). The
+ * `name` header becomes a real collapse button (`am-name-collapse`, state owned by the page, persisted in
+ * `localStorage`) and each row's `am-row-name` gains a per-row campaign filter button (`am-row-filter`,
+ * contract §5). The TikTok id moves out of the cell's visible text into the cell's `title` only.
+ *
  * T9 — sticky header (spec "UI behaviour" → "Sticky header"): `am-table` owns its OWN vertical scrollbox
  * (`max-h-[70vh] overflow-auto`) rather than relying on the outer `UDashboardPanel` body scroll. Measured
  * first: on this page the real vertical scroller is that panel's `data-slot="body"` div, several ancestors
@@ -42,6 +50,10 @@ const props = defineProps<{
   rows: MonitorRow[]
   totals: KpiMetrics
   pending?: boolean
+  /** FEAT-064 — page-level state, shared by all three tabs, persisted by the page in `localStorage`. */
+  nameCollapsed?: boolean
+  /** FEAT-064 — the campaign id currently in the URL (`?campaignId=`), drives `am-row-filter`'s pressed state */
+  campaignId?: string
 }>()
 
 const emit = defineEmits<{
@@ -51,6 +63,10 @@ const emit = defineEmits<{
   'delete': [row: MonitorRow]
   /** FEAT-060 — campaign tab only: the row asks the page to open the budget modal */
   'budget': [row: MonitorRow]
+  /** FEAT-064 — the `am-name-collapse` header button toggled */
+  'update:name-collapsed': [value: boolean]
+  /** FEAT-064 — a row's `am-row-filter` was pressed; the page decides whether that narrows or clears (contract §5) */
+  'filter-campaign': [campaignId: string]
 }>()
 
 /** TASK-campaign-delete-ui — a deleted row stays in the list, dimmed (`deletedAt` is set on all three tabs). */
@@ -102,8 +118,8 @@ const CAMPAIGN_HEAD: Column[] = [
 const COLUMNS: Record<MonitorLevel, Column[]> = {
   campaign: [
     ...CAMPAIGN_HEAD,
-    { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
-    // FEAT-060 — campaign tab only, right after "บัญชี / advertiser" and before the campaign's own budget
+    // FEAT-064 — the old "บัญชี / advertiser" column is gone (moved into `am-row-name`); advertiserBudget now
+    // follows `status` directly, nothing else moves.
     { key: 'advertiserBudget', label: 'งบ advertiser', align: 'left' },
     { key: 'budget', label: 'งบประมาณ', align: 'right' },
     ...METRIC_COLUMNS,
@@ -114,7 +130,6 @@ const COLUMNS: Record<MonitorLevel, Column[]> = {
   adGroup: [
     ...HEAD,
     { key: 'campaign', label: 'แคมเปญ', align: 'left' },
-    { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
     { key: 'budget', label: 'งบประมาณ', align: 'right' },
     { key: 'bid', label: 'Bid', align: 'left' },
     { key: 'schedule', label: 'ตารางเวลา', align: 'left' },
@@ -124,7 +139,6 @@ const COLUMNS: Record<MonitorLevel, Column[]> = {
     ...HEAD,
     { key: 'source', label: 'Source', align: 'left' },
     { key: 'adGroup', label: 'กลุ่มโฆษณา', align: 'left' },
-    { key: 'account', label: 'บัญชี / advertiser', align: 'left' },
     ...METRIC_COLUMNS
   ]
 }
@@ -147,11 +161,23 @@ function accountLabel(row: MonitorRow): string {
   return row.account.label || row.account.loginEmail || REPORT_DASH
 }
 
-/** Tooltip for the account cell — keeps the full label/email and the advertiser id's last4 as text,
- * since v1.2 removed `…last4` from the visible second line (spec "UI behaviour"). */
-function accountTitle(row: MonitorRow): string {
-  const parts = [accountLabel(row), row.advertiser.name, last4(row.advertiser.tiktokAdvertiserId)].filter(Boolean)
+/**
+ * FEAT-064 — tooltip of the merged `name` cell: `"<name> · <id> · <account> · <advertiser> · <aadvid last4>"`
+ * (spec "UI behaviour" → Merged column). The TikTok id lives here, never as visible text.
+ */
+function nameTitle(row: MonitorRow): string {
+  const parts = [row.name || REPORT_DASH, row.id, accountLabel(row), row.advertiser.name || REPORT_DASH, last4(row.advertiser.tiktokAdvertiserId)]
   return parts.join(' · ')
+}
+
+/** FEAT-064 — campaign id of a row (contract §5): campaign tab = `row.id`, ad-group/ad tabs = `row.campaign.id`. */
+function campaignIdOf(row: MonitorRow): string {
+  return props.level === 'campaign' ? row.id : (row.campaign?.id ?? '')
+}
+
+function isCampaignFilterActive(row: MonitorRow): boolean {
+  const id = campaignIdOf(row)
+  return id !== '' && id === props.campaignId
 }
 
 function budgetText(row: MonitorRow): string {
@@ -179,7 +205,12 @@ function scheduleText(row: MonitorRow): string {
 </script>
 
 <template>
-  <div class="min-w-0 max-h-[70vh] overflow-auto" data-testid="am-table" :data-level="level">
+  <div
+    class="min-w-0 max-h-[70vh] overflow-auto"
+    data-testid="am-table"
+    :data-level="level"
+    :data-name-collapsed="nameCollapsed ? 'true' : 'false'"
+  >
     <table class="w-full border-separate border-spacing-0 text-sm">
       <thead>
         <tr class="bg-elevated">
@@ -195,7 +226,21 @@ function scheduleText(row: MonitorRow): string {
             ]"
             :data-field="column.key"
           >
-            {{ column.label }}
+            <button
+              v-if="column.key === 'name'"
+              type="button"
+              class="inline-flex items-center gap-1 font-semibold text-highlighted"
+              data-testid="am-name-collapse"
+              :aria-expanded="!nameCollapsed"
+              :title="nameCollapsed ? 'ขยายคอลัมน์' : 'ย่อคอลัมน์'"
+              @click="emit('update:name-collapsed', !nameCollapsed)"
+            >
+              <span>{{ nameCollapsed ? 'ชื่อ…' : 'ชื่อ / บัญชี / advertiser' }}</span>
+              <UIcon :name="nameCollapsed ? 'i-lucide-chevrons-right' : 'i-lucide-chevrons-left'" class="size-4" />
+            </button>
+            <template v-else>
+              {{ column.label }}
+            </template>
           </th>
         </tr>
       </thead>
@@ -228,7 +273,12 @@ function scheduleText(row: MonitorRow): string {
               @toggle="(target) => emit('toggle', row, target)"
             />
 
-            <div v-else-if="column.key === 'name'" class="flex min-w-0 items-center gap-2">
+            <div
+              v-else-if="column.key === 'name'"
+              class="flex min-w-0 items-start gap-2"
+              data-testid="am-row-name"
+              :data-collapsed="nameCollapsed ? 'true' : 'false'"
+            >
               <span
                 v-if="level === 'ad'"
                 class="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-elevated"
@@ -249,10 +299,31 @@ function scheduleText(row: MonitorRow): string {
                   class="size-4 text-dimmed"
                 />
               </span>
-              <span class="flex min-w-0 flex-col" data-testid="am-row-name">
-                <span class="max-w-40 truncate" :title="row.name ?? ''">{{ row.name || REPORT_DASH }}</span>
-                <span class="text-xs text-muted" :title="row.id">{{ row.id || REPORT_DASH }}</span>
+
+              <span class="flex min-w-0 flex-col" :title="nameTitle(row)">
+                <span
+                  class="truncate"
+                  :class="nameCollapsed ? 'max-w-28' : 'max-w-40'"
+                  data-testid="am-row-name-text"
+                >{{ row.name || REPORT_DASH }}</span>
+
+                <span v-if="!nameCollapsed" class="flex min-w-0 flex-col" data-testid="am-row-account">
+                  <span class="truncate text-xs text-muted" data-testid="am-row-account-label">{{ accountLabel(row) }}</span>
+                  <span class="truncate text-xs text-muted" data-testid="am-row-advertiser">{{ row.advertiser.name || REPORT_DASH }}</span>
+                </span>
               </span>
+
+              <UButton
+                icon="i-lucide-filter"
+                size="xs"
+                :color="isCampaignFilterActive(row) ? 'primary' : 'neutral'"
+                :variant="isCampaignFilterActive(row) ? 'solid' : 'ghost'"
+                :aria-pressed="isCampaignFilterActive(row) ? 'true' : 'false'"
+                :aria-label="isCampaignFilterActive(row) ? 'ยกเลิกกรองแคมเปญนี้' : 'กรองเฉพาะแคมเปญนี้'"
+                data-testid="am-row-filter"
+                :data-campaign-id="campaignIdOf(row)"
+                @click="emit('filter-campaign', campaignIdOf(row))"
+              />
             </div>
 
             <div
@@ -307,16 +378,6 @@ function scheduleText(row: MonitorRow): string {
               :title="row.source ?? ''"
               data-testid="am-row-source"
             >{{ row.source || REPORT_DASH }}</span>
-
-            <span
-              v-else-if="column.key === 'account'"
-              class="flex min-w-0 flex-col"
-              data-testid="am-row-account"
-              :title="accountTitle(row)"
-            >
-              <span>{{ accountLabel(row) }}</span>
-              <span class="text-xs text-muted">{{ row.advertiser.name || REPORT_DASH }}</span>
-            </span>
 
             <AdsMonitorBudgetCell
               v-else-if="column.key === 'advertiserBudget'"

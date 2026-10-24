@@ -21,6 +21,15 @@
  * Filter options come from the same two side endpoints `/reports/banned` uses (`GET /tiktok-accounts` once,
  * `GET /advertisers?limit=100[&tiktokAccountId]` on mount and per account change, failures swallowed — they
  * must never block the table); order options can only come from the rows, the contract has no order lookup.
+ *
+ * FEAT-064 (api-contract.md v1 §5) — `campaignId` is a fourth kind of URL state: like the other filters it is
+ * part of `queryKey` / `hasFilter` / `clearFilters`, sent to the request only when set, and survives a tab
+ * switch / Refresh. It is **toggled**, not set from a dropdown: every row's `am-row-filter` button asks
+ * `onFilterCampaign(id)`, which sets the id when a different row (or none) was active and clears it when the
+ * same row's button is pressed again (contract §5 / spec "Per-row campaign filter"). The chip's label uses
+ * `campaign.name` from the **last** response (kept in `campaignName`, spec: "fine while a tab switch is in
+ * flight"), falling back to the id. The collapsible `name` column (`nameCollapsed`) is unrelated page state,
+ * one ref shared by the three tabs and persisted in `localStorage` (spec "Collapsible header", A9).
  */
 import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
@@ -106,6 +115,8 @@ const accountId = computed(() => queryString('tiktokAccountId') ?? 'all')
 const advertiserId = computed(() => queryString('advertiserId') ?? 'all')
 const orderId = computed(() => queryString('orderId') ?? 'all')
 const searchQuery = computed(() => (queryString('q') ?? '').slice(0, Q_MAX))
+/** FEAT-064 — per-row campaign filter (contract §5), `undefined` when absent. */
+const campaignId = computed(() => queryString('campaignId'))
 
 const search = ref(searchQuery.value)
 const searchDebounced = refDebounced(search, DEBOUNCE_MS)
@@ -242,7 +253,9 @@ async function load() {
         tiktokAccountId: orUndefined(accountId.value),
         advertiserId: orUndefined(advertiserId.value),
         orderId: orUndefined(orderId.value),
-        q: searchQuery.value || undefined
+        q: searchQuery.value || undefined,
+        // FEAT-064 — sent only when set (defaults stay omitted, contract §5)
+        campaignId: campaignId.value
       }
     })
     if (s !== session) return
@@ -295,7 +308,8 @@ async function loadAdvertisers() {
 
 const queryKey = computed(() => JSON.stringify([
   tab.value, range.value, status.value, linked.value, page.value,
-  workspaceId.value, accountId.value, advertiserId.value, orderId.value, searchQuery.value
+  workspaceId.value, accountId.value, advertiserId.value, orderId.value, searchQuery.value,
+  campaignId.value
 ]))
 
 watch(queryKey, () => {
@@ -307,6 +321,7 @@ watch(accountId, () => {
 })
 
 onMounted(() => {
+  nameCollapsed.value = readNameCollapsed()
   void load()
   void loadAccounts()
   void loadAdvertisers()
@@ -477,6 +492,7 @@ const hasFilter = computed(() =>
   || orderId.value !== 'all'
   || status.value !== 'all'
   || linked.value !== 'true'
+  || campaignId.value !== undefined
 )
 
 function clearFilters() {
@@ -488,8 +504,30 @@ function clearFilters() {
     advertiserId: undefined,
     orderId: undefined,
     status: undefined,
-    linked: undefined
+    linked: undefined,
+    campaignId: undefined
   })
+}
+
+// ── FEAT-064 · per-row campaign filter (contract §5) ────────────────────────────────────────────────────────────────
+/** Keep the last response's `campaign.name` while a tab switch (or any other reload) is in flight. */
+const campaignName = ref<string | null>(null)
+watch(data, (value) => {
+  if (value?.campaign) campaignName.value = value.campaign.name
+})
+
+function setCampaignFilter(id: string | undefined) {
+  setQuery({ campaignId: id })
+}
+
+/** `am-row-filter` click (from the table): toggles — inactive → set, active → clear. */
+function onFilterCampaign(id: string) {
+  if (!id) return
+  setCampaignFilter(campaignId.value === id ? undefined : id)
+}
+
+function clearCampaignFilter() {
+  setCampaignFilter(undefined)
 }
 
 /** an account change also drops `advertiserId` (its options are bound to the account) */
@@ -516,6 +554,30 @@ function setPage(value: number) {
 
 /** mobile only — the filter bar collapses behind `am-filters-toggle` under the `sm` breakpoint */
 const filtersOpen = ref(false)
+
+// ── FEAT-064 · collapsible name column (spec "UI behaviour" → Collapsible header, A9) ──────────────────────────────
+// Browser-local only, one value shared by the three tabs. SSR renders expanded (`false`); the client applies the
+// stored value in `onMounted` so there is no hydration mismatch. Every storage access is guarded — a
+// missing/blocked `localStorage` leaves the column expanded and never throws (spec).
+const NAME_COLLAPSED_KEY = 'apollo.adsMonitor.nameCollapsed'
+const nameCollapsed = ref(false)
+
+function readNameCollapsed(): boolean {
+  try {
+    return localStorage.getItem(NAME_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function setNameCollapsed(value: boolean) {
+  nameCollapsed.value = value
+  try {
+    localStorage.setItem(NAME_COLLAPSED_KEY, value ? '1' : '0')
+  } catch {
+    // blocked storage — the toggle still works for the session (spec AC-9), nothing is logged
+  }
+}
 
 // ── states ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const total = computed(() => data.value?.total ?? 0)
@@ -651,6 +713,18 @@ const intervalText = computed(() => {
               aria-label="ค้นหา"
               data-testid="am-search"
             />
+            <UButton
+              v-if="campaignId"
+              :label="`แคมเปญ: ${campaignName || campaignId}`"
+              color="primary"
+              variant="subtle"
+              size="sm"
+              trailing-icon="i-lucide-x"
+              aria-label="ยกเลิกตัวกรองแคมเปญ"
+              data-testid="am-filter-campaign"
+              :data-campaign-id="campaignId"
+              @click="clearCampaignFilter"
+            />
             <USelect
               v-if="showWorkspaceFilter"
               :model-value="workspaceId"
@@ -773,10 +847,14 @@ const intervalText = computed(() => {
               :rows="rows"
               :totals="data.totals"
               :pending="pending"
+              :name-collapsed="nameCollapsed"
+              :campaign-id="campaignId"
               @toggle="toggle"
               @show-covers="showCovers"
               @delete="askDelete"
               @budget="askBudget"
+              @update:name-collapsed="setNameCollapsed"
+              @filter-campaign="onFilterCampaign"
             />
 
             <div class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted">
