@@ -17,7 +17,7 @@
  *
  * Validation and labels come from `app/utils/report-range.ts` — never re-implemented here.
  */
-import { CalendarDate } from '@internationalized/date'
+import { CalendarDate, type DateValue } from '@internationalized/date'
 import type { ReportRange, ReportRangeKey, ReportRangeState } from '#shared/types/reports'
 
 const props = withDefaults(defineProps<{
@@ -82,25 +82,30 @@ function toDay(value: { year: number, month: number, day: number } | null | unde
 }
 
 /**
- * The calendar shows the pair only while it is ordered — an impossible pair (`to < from`, which the hint
- * already explains) would otherwise be an invalid range model. Picking the start emits `from` alone (hint,
- * no request); picking the end emits the pair; the same day twice is a single day.
+ * What the calendar shows: the pair, but only while it is ordered — an impossible pair (`to < from`, which
+ * the hint already explains) is not a valid range model, so only the start is shown.
  */
-const calendarRange = computed({
-  get: () => {
-    const start = toCalendarDate(props.from)
-    const end = toCalendarDate(props.to)
-    if (start && end && end.compare(start) < 0) return { start, end: undefined }
-    return { start, end }
-  },
-  set: (value: { start?: CalendarDate | null, end?: CalendarDate | null } | null) => {
-    emit('update', {
-      range: 'custom',
-      from: toDay(value?.start) || undefined,
-      to: toDay(value?.end) || undefined
-    })
-  }
+const calendarRange = computed(() => {
+  const start = toCalendarDate(props.from)
+  const end = toCalendarDate(props.to)
+  if (start && end && end.compare(start) < 0) return { start, end: undefined }
+  return { start, end }
 })
+
+/**
+ * One-way binding on purpose (no `v-model`): `UCalendar`/reka re-emits its model whenever it normalises what
+ * we gave it — e.g. after `to` is typed before `from`, the range is incomplete for the calendar and it would
+ * emit the pair back without the end, silently dropping `to` from the URL (seen in the browser loop). An
+ * emission equal to what we are showing is therefore ignored; anything else is a real click: the start alone
+ * (hint, no request), then the pair (request). The same day twice is a single day.
+ */
+function onCalendar(value: { start?: DateValue, end?: DateValue } | null) {
+  const from = toDay(value?.start)
+  const to = toDay(value?.end)
+  const shown = calendarRange.value
+  if (from === toDay(shown.start) && to === toDay(shown.end)) return
+  emit('update', { range: 'custom', from: from || undefined, to: to || undefined })
+}
 
 const SHORTCUTS = computed(() => [...RANGE_KEYS, 'custom' as const])
 </script>
@@ -182,11 +187,12 @@ const SHORTCUTS = computed(() => [...RANGE_KEYS, 'custom' as const])
             </div>
 
             <UCalendar
-              v-model="calendarRange"
+              :model-value="calendarRange"
               range
               :number-of-months="wide ? 2 : 1"
               :size="wide ? 'md' : 'sm'"
               class="p-0"
+              @update:model-value="onCalendar"
             />
 
             <p

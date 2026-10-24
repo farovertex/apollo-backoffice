@@ -391,6 +391,7 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
       <div
         data-testid="ru-page"
         :data-state="pageState"
+        :data-range="rangeState.range"
         :data-pending="pending ? 'true' : 'false'"
         class="flex flex-1 flex-col gap-4"
       >

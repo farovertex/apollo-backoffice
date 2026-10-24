@@ -67,6 +67,10 @@ export function parseReportRange(query: Record<string, unknown>, defaultKey: Rep
  * Thai reason why the custom pair cannot be sent, `null` when it is fine — the four texts
  * `/reports/banned` has used since FEAT-056, in that order (contract §6.2). Mirrors the API's `superRefine`
  * (both required, `from ≤ to`, at most 366 days apart) so no page ever fires a 400.
+ *
+ * **Contract v1.1** — the width is counted **inclusively**, like the API's `daysBetween`: 2025-01-01…
+ * 2026-01-01 is 366 days and valid, 2025-01-01…2026-01-02 is 367 days and invalid. `report-banned.vue`'s
+ * pre-FEAT-065 rule compared the bare difference and was therefore one day too generous — not copied.
  */
 export function reportRangeInvalid(state: ReportRangeState): string | null {
   if (state.range !== 'custom') return null
@@ -75,7 +79,7 @@ export function reportRangeInvalid(state: ReportRangeState): string | null {
   const toMs = dayMs(state.to)
   if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return 'รูปแบบวันที่ไม่ถูกต้อง'
   if (toMs < fromMs) return 'วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น'
-  if ((toMs - fromMs) / DAY_MS > MAX_RANGE_DAYS) return `ช่วงเวลาต้องไม่เกิน ${MAX_RANGE_DAYS} วัน`
+  if ((toMs - fromMs) / DAY_MS + 1 > MAX_RANGE_DAYS) return `ช่วงเวลาต้องไม่เกิน ${MAX_RANGE_DAYS} วัน`
   return null
 }
 
