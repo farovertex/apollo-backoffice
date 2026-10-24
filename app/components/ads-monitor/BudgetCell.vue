@@ -18,11 +18,40 @@
  *
  * A deleted campaign row (`deletedAt` set) keeps this cell active — the budget belongs to the advertiser, not
  * the campaign (spec A1), so `deletedAt` is never consulted here.
+ *
+ * FEAT-064 v1.2 (contract §7.2, AC-21) — one extra line `am-budget-balance` **above** `am-budget-value` in every
+ * one of the four states: the TikTok account's BC wallet balance (`row.account.balance`, spec A14), e.g.
+ * "ยอดคงเหลือ 1,234.50 THB" (currency omitted when null; "ยอดคงเหลือ —" when `amount` is null, red when an
+ * `error` is also set). `title` = "อ่านล่าสุด <at>" joined with " · <error>". Read-only: it never changes the
+ * state machine above, the value, the wallet button, the pending/error rows or the modal.
  */
 import type { MonitorRow } from '#shared/types/ads-monitor'
 
 const props = defineProps<{ row: MonitorRow }>()
 const emit = defineEmits<{ ask: [] }>()
+
+/** v1.2 — tolerate a row from an older API / a test stub without `account.balance`: render as all-null */
+const balance = computed(() => props.row.account?.balance ?? { amount: null, currency: null, at: null, error: null })
+
+/** `ยอดคงเหลือ 1,234.50 THB` · `ยอดคงเหลือ 1,234.50` when `currency` is null · `ยอดคงเหลือ —` when `amount` is null */
+const balanceText = computed(() => {
+  const { amount, currency } = balance.value
+  const value = formatDecimal(amount)
+  if (value === REPORT_DASH) return `ยอดคงเหลือ ${REPORT_DASH}`
+  return currency ? `ยอดคงเหลือ ${value} ${currency}` : `ยอดคงเหลือ ${value}`
+})
+
+/** `อ่านล่าสุด <at>` · ` · <error>` appended when set · undefined when neither (no empty tooltip) */
+const balanceTitle = computed(() => {
+  const { at, error } = balance.value
+  const parts: string[] = []
+  if (at) parts.push(`อ่านล่าสุด ${formatDateTime(at)}`)
+  if (error) parts.push(error)
+  return parts.length > 0 ? parts.join(' · ') : undefined
+})
+
+/** red only when there is nothing to show **and** the last read failed — a stale-but-known amount stays muted */
+const balanceError = computed(() => balance.value.amount === null && balance.value.error !== null)
 
 const budget = computed(() => props.row.advertiserBudget ?? null)
 const blocked = computed(() => budget.value === null)
@@ -78,6 +107,15 @@ const ariaLabel = computed(() => `ตั้งงบ advertiser ${props.row.adve
     :data-advertiser="row.advertiser.id"
     :data-state="state"
   >
+    <!-- v1.2 — account wallet balance, first line in every state (contract §7.2) -->
+    <span
+      class="text-xs whitespace-nowrap"
+      :class="balanceError ? 'text-error' : 'text-muted'"
+      data-testid="am-budget-balance"
+      :data-currency="balance.currency ?? ''"
+      :title="balanceTitle"
+    >{{ balanceText }}</span>
+
     <template v-if="blocked">
       <span data-testid="am-budget-value">{{ REPORT_DASH }}</span>
       <UButton
