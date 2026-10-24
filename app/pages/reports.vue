@@ -24,6 +24,14 @@ import type {
   ReportSummaryResponse
 } from '#shared/types/reports'
 
+/**
+ * FEAT-065 — the three-button range row became the shared `ReportsDateRange` popover (five keys + a custom
+ * pair). The page still owns the URL: `parseReportRange` reads it, `rangeUrlPatch` writes it through the
+ * same `setQuery` (so a range change still resets `page`), `reportRangeQuery` is what both requests send,
+ * and an invalid custom pair makes `load()` return before any request — exactly like `/reports/banned`.
+ * The slideover receives the whole pair so `GET /reports/ads/:id` follows a custom range too.
+ */
+
 useSeoMeta({ title: 'Reports' })
 
 const LIMIT = 20
@@ -42,7 +50,10 @@ function queryString(key: string): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-const range = computed<ReportRange>(() => parseRange(route.query.range))
+const rangeState = computed(() => parseReportRange(route.query, 'today'))
+const range = computed<ReportRange>(() => rangeState.value.range)
+/** an incomplete/impossible custom pair is never sent (spec AC-10) */
+const rangeInvalid = computed(() => reportRangeInvalid(rangeState.value))
 const page = computed(() => {
   const n = Number(route.query.page)
   return Number.isInteger(n) && n > 0 ? n : 1
@@ -151,6 +162,12 @@ function filterQuery() {
 }
 
 async function load() {
+  // FEAT-065 — an invalid custom pair sends nothing at all; the previous data and the hint stay
+  if (rangeInvalid.value) {
+    session++
+    pending.value = false
+    return
+  }
   const s = ++session
   pending.value = true
   error.value = null
@@ -160,12 +177,12 @@ async function load() {
     const [summaryRes, listRes] = await Promise.all([
       api<ReportSummaryResponse>('/reports/summary', {
         retry: 0,
-        query: { range: range.value, ...filterQuery() }
+        query: { ...reportRangeQuery(rangeState.value), ...filterQuery() }
       }),
       api<AdsReportResponse>('/reports/ads', {
         retry: 0,
         query: {
-          range: range.value,
+          ...reportRangeQuery(rangeState.value),
           page: page.value,
           limit: LIMIT,
           sort: sort.value,
@@ -206,8 +223,8 @@ async function load() {
 }
 
 const queryKey = computed(() => JSON.stringify([
-  range.value, page.value, sort.value, searchQuery.value, workspaceId.value,
-  accountId.value, advertiserId.value, orderId.value, stateFilter.value, linkedFilter.value
+  range.value, rangeState.value.from, rangeState.value.to, page.value, sort.value, searchQuery.value,
+  workspaceId.value, accountId.value, advertiserId.value, orderId.value, stateFilter.value, linkedFilter.value
 ]))
 
 watch(queryKey, () => {
@@ -287,10 +304,9 @@ const tracking = computed(() => summary.value?.tracking ?? null)
 const previousTotals = computed(() => summary.value?.previous?.totals ?? null)
 const summaryTotals = computed(() => summary.value?.totals ?? totals.value ?? null)
 
-const RANGES: ReportRange[] = ['today', '7d', 'all']
-
-function setRange(value: ReportRange) {
-  setQuery({ range: value === 'today' ? undefined : value })
+/** FEAT-065 — the picker's `update`: the default key leaves the URL, `page` resets (same `setQuery` as before) */
+function onRange(patch: { range: ReportRange, from?: string, to?: string }) {
+  setQuery(rangeUrlPatch({ range: patch.range, from: patch.from ?? '', to: patch.to ?? '' }, 'today'))
 }
 
 function setSort(value: string) {
@@ -333,24 +349,15 @@ function focusRow() {
         </template>
 
         <template #right>
-          <div
+          <ReportsDateRange
             v-if="!forbidden"
-            class="flex flex-wrap gap-1"
-            role="group"
-            aria-label="ช่วงเวลา"
-          >
-            <UButton
-              v-for="key in RANGES"
-              :key="key"
-              :label="RANGE_LABEL[key]"
-              size="xs"
-              :color="range === key ? 'primary' : 'neutral'"
-              :variant="range === key ? 'solid' : 'outline'"
-              :aria-pressed="range === key"
-              :data-testid="`rp-range-${key}`"
-              @click="setRange(key)"
-            />
-          </div>
+            prefix="rp"
+            :range="rangeState.range"
+            :from="rangeState.from"
+            :to="rangeState.to"
+            :pending="pending"
+            @update="onRange"
+          />
           <UButton
             label="Refresh"
             aria-label="Refresh"
@@ -637,7 +644,9 @@ function focusRow() {
       <ReportsAdSlideover
         v-model:open="slideoverOpen"
         :ad-id="selectedAdId"
-        :range="range"
+        :range="rangeState.range"
+        :from="rangeState.from"
+        :to="rangeState.to"
         @refreshed="load()"
         @closed="focusRow()"
       />

@@ -24,8 +24,15 @@
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { AdState } from '#shared/types/reports'
+import type { AdState, ReportRange } from '#shared/types/reports'
 import type { GroupedReportResponse } from '#shared/types/report-summary'
+
+/**
+ * FEAT-065 — the three-button range row became the shared `ReportsDateRange` popover (five keys + a custom
+ * pair): `parseReportRange` reads the URL, `rangeUrlPatch` writes it through this page's own `setQuery`,
+ * `reportRangeQuery` is what `GET /reports/grouped` sends, and an invalid custom pair makes `load()` return
+ * before any request (the previous table stays, the hint is the only feedback).
+ */
 
 useSeoMeta({ title: 'Report summary' })
 definePageMeta({ path: '/reports/summary' })
@@ -45,7 +52,10 @@ function queryString(key: string): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-const range = computed(() => parseRange(route.query.range))
+const rangeState = computed(() => parseReportRange(route.query, 'today'))
+const range = computed(() => rangeState.value.range)
+/** an incomplete/impossible custom pair is never sent (spec AC-10) */
+const rangeInvalid = computed(() => reportRangeInvalid(rangeState.value))
 const gsort = computed(() => queryString('gsort') ?? DEFAULT_GROUP_SORT)
 const workspaceId = computed(() => queryString('workspaceId') ?? 'all')
 const accountId = computed(() => queryString('tiktokAccountId') ?? 'all')
@@ -139,6 +149,12 @@ function filterQuery() {
 }
 
 async function load() {
+  // FEAT-065 — an invalid custom pair sends nothing at all
+  if (rangeInvalid.value) {
+    session++
+    pending.value = false
+    return
+  }
   const s = ++session
   pending.value = true
   error.value = null
@@ -147,7 +163,7 @@ async function load() {
     // retry: 0 — exactly one grouped request per change (contract v1.2 §3.2)
     const groupedRes = await api<GroupedReportResponse>('/reports/grouped', {
       retry: 0,
-      query: { range: range.value, ...filterQuery() }
+      query: { ...reportRangeQuery(rangeState.value), ...filterQuery() }
     })
     if (s !== session) return
     grouped.value = groupedRes
@@ -172,7 +188,7 @@ async function load() {
 
 /** every key that must re-issue the request — `gsort` is deliberately excluded (client-side only) */
 const queryKey = computed(() => JSON.stringify([
-  range.value, searchQuery.value, workspaceId.value,
+  range.value, rangeState.value.from, rangeState.value.to, searchQuery.value, workspaceId.value,
   accountId.value, advertiserId.value, orderId.value, stateFilter.value, linkedFilter.value
 ]))
 
@@ -252,10 +268,9 @@ const intervalText = computed(() => {
   return `อัปเดตทุก ${phrase} · ล่าสุด ${last}`
 })
 
-const RANGES = ['today', '7d', 'all'] as const
-
-function setRange(value: 'today' | '7d' | 'all') {
-  setQuery({ range: value === 'today' ? undefined : value })
+/** FEAT-065 — the picker's `update`: the default key leaves the URL, the pair only travels with `custom` */
+function onRange(patch: { range: ReportRange, from?: string, to?: string }) {
+  setQuery(rangeUrlPatch({ range: patch.range, from: patch.from ?? '', to: patch.to ?? '' }, 'today'))
 }
 
 function setGroupSort(value: string) {
@@ -273,24 +288,15 @@ function setGroupSort(value: string) {
         </template>
 
         <template #right>
-          <div
+          <ReportsDateRange
             v-if="!forbidden"
-            class="flex flex-wrap gap-1"
-            role="group"
-            aria-label="ช่วงเวลา"
-          >
-            <UButton
-              v-for="key in RANGES"
-              :key="key"
-              :label="RANGE_LABEL[key]"
-              size="xs"
-              :color="range === key ? 'primary' : 'neutral'"
-              :variant="range === key ? 'solid' : 'outline'"
-              :aria-pressed="range === key"
-              :data-testid="`rs-range-${key}`"
-              @click="setRange(key)"
-            />
-          </div>
+            prefix="rs"
+            :range="rangeState.range"
+            :from="rangeState.from"
+            :to="rangeState.to"
+            :pending="pending"
+            @update="onRange"
+          />
           <UButton
             label="Refresh"
             aria-label="Refresh"

@@ -21,11 +21,18 @@ import type {
 } from '#shared/types/reports'
 import type { ChartPoint } from './AdChart.client.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   adId: string | null
   /** the range the calling page shows — `ad.metrics` and `rp-ad-kpis` follow it */
   range: ReportRange
-}>()
+  /**
+   * FEAT-065 — the custom pair of the calling page (`''` when it has none, e.g. the order Report tab, whose
+   * three buttons never produce a `custom` key). `GET /reports/ads/:id` gets `range` + the pair, so a custom
+   * range on `/reports` reaches the slideover's own metrics instead of 400-ing.
+   */
+  from?: string
+  to?: string
+}>(), { from: '', to: '' })
 
 const emit = defineEmits<{
   /** a fetch-now round finished: the caller reloads its own list */
@@ -83,6 +90,8 @@ const metricMeta = computed(() => METRICS.find(m => m.key === metric.value) ?? M
 async function loadDetail(silent = false): Promise<boolean> {
   const id = props.adId
   if (!id) return false
+  // FEAT-065 — an invalid custom pair on the calling page sends nothing (the page itself does the same)
+  if (reportRangeInvalid({ range: props.range, from: props.from, to: props.to })) return false
   const s = ++detailSession
   if (!silent) {
     pending.value = true
@@ -92,7 +101,7 @@ async function loadDetail(silent = false): Promise<boolean> {
     // retry: 0 — exactly one request per open / range change / tick
     const res = await api<AdDetailResponse>(`/reports/ads/${encodeURIComponent(id)}`, {
       retry: 0,
-      query: { range: props.range }
+      query: reportRangeQuery({ range: props.range, from: props.from, to: props.to })
     })
     if (s !== detailSession) return false
     detail.value = res
@@ -168,8 +177,8 @@ watch([open, () => props.adId], ([isOpen, id], [wasOpen]) => {
   }
 })
 
-// the page's range switch while the slideover is open
-watch(() => props.range, () => {
+// the page's range switch while the slideover is open — the custom pair counts as a change too (FEAT-065)
+watch(() => [props.range, props.from, props.to].join('|'), () => {
   if (open.value) void loadDetail()
 })
 

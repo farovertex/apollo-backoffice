@@ -12,7 +12,7 @@
  * not read yet (the switch is disabled until the next kpi round, spec A3). The toggle body talks `'on'|'off'`.
  */
 import type { BannedAd } from './report-banned'
-import type { KpiMetrics } from './reports'
+import type { KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
 
 /** API level enum (contract §1 — `ad` is TikTok's `creative`). */
 export type MonitorLevel = 'campaign' | 'adGroup' | 'ad'
@@ -32,8 +32,11 @@ export type MonitorStatusFilter = 'all' | MonitorStatusKey
 /** `linked` query value — `true` (default: only ads our system launched), `false`, `all`. */
 export type MonitorLinkedFilter = 'true' | 'false' | 'all'
 
-/** Ranges the monitor endpoints accept (contract §3.0 — no `custom` here, spec A12). */
-export type MonitorRange = 'today' | '7d' | 'all'
+/**
+ * Ranges the monitor endpoints accept. FEAT-065 (api-contract.md §4.1) — the monitor endpoints joined the
+ * shared vocabulary (`today | yesterday | 7d | all | custom`), so this is an alias of `ReportRange`.
+ */
+export type MonitorRange = ReportRange
 
 /** Toggle direction as the API spells it; `on` ⇒ stored `opt` 0, `off` ⇒ 1. */
 export type ToggleTarget = 'on' | 'off'
@@ -269,7 +272,7 @@ export interface AdsMonitorResponse {
   unfilteredTotal: number
   /** sum over every page of the filtered set; the Total row never sums the visible rows */
   totals: KpiMetrics
-  range: { key: MonitorRange, from: string | null, to: string | null }
+  range: ReportRangeInfo
   intervalMs: number
   refreshedAt: string | null
   /**

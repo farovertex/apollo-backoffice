@@ -23,6 +23,13 @@
  * no `GET /jobs/:id` in apollo-api); 409 / 501 / anything else → one toast with the API's own text and no
  * re-read loop.
  *
+ * FEAT-065 — the dates **left this form**: the shared `ReportsDateRange` popover (`ru-range`, first control
+ * of the filter bar, with `ru-from`/`ru-to` inside `ru-range-panel`) writes `range`(+`from`/`to`) into the
+ * URL immediately, exactly like the other four report pages; `ค้นหา` / Enter only write prefix/source/
+ * medium/campaign and `ru-clear` keeps the range. The request always carries an explicit `range` — the
+ * legacy `from=&to=` pair without a key is never sent again (api-contract.md §5/§6.4) — and an invalid
+ * custom pair sends nothing at all.
+ *
  * **export CSV** is a plain anchor at the Nitro proxy (`/backend/reports/utm.csv?…`), not a `fetch`: the
  * proxy forwards status, body and `content-type` but strips every other upstream header, so the API's
  * `content-disposition` never reaches the browser — the `download` attribute carries the file name instead.
@@ -30,6 +37,7 @@
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { UtmFetchResponse, UtmReportResponse } from '#shared/types/report-utm'
+import type { ReportRange } from '#shared/types/reports'
 import type { UtmSettings } from '#shared/types/settings'
 
 useSeoMeta({ title: 'Reports — UTM' })
@@ -59,30 +67,21 @@ function queryString(key: string): string {
 }
 
 /**
- * `YYYY-MM-DD` of today in Asia/Bangkok — the report cuts its days on Thai time (NOTE_TEXT), so the default
- * window is "today, Thai" whatever the viewer's browser zone (`en-CA` formats as ISO without a library).
+ * FEAT-065 — the page default is still **today**, but it is now the shortcut key `today`: the API resolves it
+ * in Thai time (`UTM_DAY_TZ`), so the BO no longer computes a date at all (the old `todayThai()` is gone) and
+ * the default URL carries no `range` / `from` / `to`.
  */
-function todayThai(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' })
-    .format(new Date())
-}
-
-/**
- * Dates default to **today** when the URL carries none (human request 2026-10-11): the inputs show today, the
- * request sends `from=to=today`, and clearing a date input + ค้นหา drops the key, which falls back to today
- * again. The API's own "last 7 days" default is therefore never used by this page.
- */
-const from = computed(() => queryString('from') || todayThai())
-const to = computed(() => queryString('to') || todayThai())
+const rangeState = computed(() => parseReportRange(route.query, 'today'))
+/** an incomplete/impossible custom pair is never sent (spec AC-10) */
+const rangeInvalid = computed(() => reportRangeInvalid(rangeState.value))
 const prefix = computed(() => queryString('prefix'))
 const source = computed(() => queryString('source'))
 const medium = computed(() => queryString('medium'))
 const campaign = computed(() => queryString('campaign'))
 
-/** only the keys actually present in the URL travel to the API (`from`/`to` always, defaulted to today) — never `limit` (AS-7) */
+/** `range` always explicit, `from`/`to` only with `custom`, the four text filters when set — never `limit` (AS-7) */
 const requestQuery = computed(() => ({
-  from: from.value,
-  to: to.value,
+  ...reportRangeQuery(rangeState.value),
   prefix: prefix.value || undefined,
   source: source.value || undefined,
   medium: medium.value || undefined,
@@ -94,17 +93,13 @@ const hasRowFilter = computed(() =>
 )
 
 // ── local inputs (typing never fetches, U2) ──────────────────────────────────────────────────────────────────────────
-const fromInput = ref(from.value)
-const toInput = ref(to.value)
 const prefixInput = ref(prefix.value || ALL_PREFIX)
 const sourceInput = ref(source.value)
 const mediumInput = ref(medium.value)
 const campaignInput = ref(campaign.value)
 
-/** the URL stays the authority: a back button, a shared link or `ru-clear` re-seed the inputs */
+/** the URL stays the authority: a back button, a shared link or `ru-clear` re-seed the inputs (dates excluded since FEAT-065) */
 function syncInputsFromUrl() {
-  fromInput.value = from.value
-  toInput.value = to.value
   prefixInput.value = prefix.value || ALL_PREFIX
   sourceInput.value = source.value
   mediumInput.value = medium.value
@@ -125,11 +120,12 @@ function orUndefined(value: string): string | undefined {
   return trimmed === '' ? undefined : trimmed
 }
 
-/** "ค้นหา" / Enter — the single place where a filter reaches the URL (AS-14: trimmed, empty = key removed) */
+/**
+ * "ค้นหา" / Enter — the single place where a **text** filter reaches the URL (AS-14: trimmed, empty = key
+ * removed). FEAT-065: the dates are not part of this form any more, so the range in the URL is untouched.
+ */
 function search() {
   setQuery({
-    from: orUndefined(fromInput.value),
-    to: orUndefined(toInput.value),
     prefix: prefixInput.value === ALL_PREFIX ? undefined : orUndefined(prefixInput.value),
     source: orUndefined(sourceInput.value),
     medium: orUndefined(mediumInput.value),
@@ -137,7 +133,12 @@ function search() {
   })
 }
 
-/** `ru-clear` — drops prefix/source/medium/campaign, keeps the dates */
+/** FEAT-065 — the picker writes the URL immediately (no ค้นหา needed), like the other four report pages */
+function onRange(patch: { range: ReportRange, from?: string, to?: string }) {
+  setQuery(rangeUrlPatch({ range: patch.range, from: patch.from ?? '', to: patch.to ?? '' }, 'today'))
+}
+
+/** `ru-clear` — drops prefix/source/medium/campaign, keeps the range */
 function clearFilters() {
   setQuery({ prefix: undefined, source: undefined, medium: undefined, campaign: undefined })
 }
@@ -151,6 +152,12 @@ const forbidden = ref<string | null>(null)
 let session = 0
 
 async function load() {
+  // FEAT-065 — an invalid custom pair sends nothing at all; the previous table and the hint stay
+  if (rangeInvalid.value) {
+    session++
+    pending.value = false
+    return
+  }
   const s = ++session
   pending.value = true
   try {
@@ -183,7 +190,8 @@ async function load() {
 }
 
 const queryKey = computed(() => JSON.stringify([
-  from.value, to.value, prefix.value, source.value, medium.value, campaign.value
+  rangeState.value.range, rangeState.value.from, rangeState.value.to,
+  prefix.value, source.value, medium.value, campaign.value
 ]))
 
 watch(queryKey, () => {
@@ -230,11 +238,15 @@ const csvHref = computed(() => {
   return `/backend/reports/utm.csv${qs ? `?${qs}` : ''}`
 })
 
-/** the proxy strips the API's `content-disposition`, so the file name lives on the anchor */
+/**
+ * The proxy strips the API's `content-disposition`, so the file name lives on the anchor. FEAT-065: it comes
+ * from the **response** window — `utm-all.csv` when the API answered `from: null, to: null` (`range=all`).
+ */
 const csvName = computed(() => {
-  const start = report.value?.from ?? from.value
-  const end = report.value?.to ?? to.value
-  return start && end ? `utm-${start}-${end}.csv` : 'utm.csv'
+  const res = report.value
+  if (!res) return 'utm.csv'
+  if (res.from === null && res.to === null) return 'utm-all.csv'
+  return res.from && res.to ? `utm-${res.from}-${res.to}.csv` : 'utm.csv'
 })
 
 // ── Refresh (POST /utm/fetch + the re-read loop of AS-3) ─────────────────────────────────────────────────────────────
@@ -401,26 +413,14 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
           <!-- filters: local state, only "ค้นหา" writes them into the URL (U2) -->
           <div class="rounded-lg border border-default p-3" data-testid="ru-filters">
             <div class="flex flex-wrap items-center gap-2">
-              <label class="flex items-center gap-1.5 text-sm text-muted">
-                ตั้งแต่
-                <UInput
-                  v-model="fromInput"
-                  type="date"
-                  class="w-36"
-                  aria-label="ตั้งแต่"
-                  data-testid="ru-from"
-                />
-              </label>
-              <label class="flex items-center gap-1.5 text-sm text-muted">
-                ถึง
-                <UInput
-                  v-model="toInput"
-                  type="date"
-                  class="w-36"
-                  aria-label="ถึง"
-                  data-testid="ru-to"
-                />
-              </label>
+              <ReportsDateRange
+                prefix="ru"
+                :range="rangeState.range"
+                :from="rangeState.from"
+                :to="rangeState.to"
+                :pending="pending"
+                @update="onRange"
+              />
               <USelect
                 v-model="prefixInput"
                 :items="prefixItems"

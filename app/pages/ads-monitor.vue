@@ -31,6 +31,12 @@
  * flight"), falling back to the id. The collapsible `name` column (`nameCollapsed`) is unrelated page state,
  * one ref shared by the three tabs and persisted in `localStorage` (spec "Collapsible header", A9).
  *
+ * FEAT-065 — the three-button range row became the shared `ReportsDateRange` popover (`am-range`,
+ * `am-range-today|yesterday|7d|all|custom`, `am-from`/`am-to` inside `am-range-panel`): the five keys and a
+ * custom pair, parsed/validated/serialised by `app/utils/report-range.ts`. `range` stays always explicit in
+ * the request, the pair travels only with `custom`, the default still leaves the URL empty, and an invalid
+ * pair makes `load()` return before any request. Nothing else about the query changed.
+ *
  * FEAT-064 v1.1 (api-contract.md §6.4, AC-17/AC-18) — a second switch "เฉพาะบัญชีที่ไม่ถูกระงับ" (`hideBanned`,
  * **on** by default) works exactly like `linked`: the default is omitted from the URL (`?hideBanned=false` only
  * while off) and the request always sends `hideBanned=true|false` explicitly. It is coupled with the status
@@ -46,7 +52,6 @@ import type {
   DeleteAccepted,
   MonitorLevel,
   MonitorLinkedFilter,
-  MonitorRange,
   MonitorRow,
   MonitorStatusFilter,
   SetBudgetAccepted,
@@ -56,6 +61,7 @@ import type {
   ToggleTarget
 } from '#shared/types/ads-monitor'
 import type { ApiErrorBody } from '#shared/types/auth'
+import type { ReportRange } from '#shared/types/reports'
 import type { AccountsResponse, TikTokAccount } from '#shared/types/tiktok-accounts'
 
 useSeoMeta({ title: 'Ads monitor' })
@@ -84,8 +90,6 @@ const STATUS_ITEMS: { label: string, value: MonitorStatusFilter }[] = [
   { label: 'ลบแล้ว', value: 'deleted' }
 ]
 
-const RANGES: MonitorRange[] = ['today', '7d', 'all']
-
 const route = useRoute()
 const router = useRouter()
 const api = useApi()
@@ -103,10 +107,10 @@ const tab = computed<MonitorLevel>(() => {
   const value = queryString('tab')
   return TABS.some(item => item.value === value) ? value as MonitorLevel : 'campaign'
 })
-const range = computed<MonitorRange>(() => {
-  const value = queryString('range')
-  return value === '7d' || value === 'all' ? value : 'today'
-})
+const rangeState = computed(() => parseReportRange(route.query, 'today'))
+const range = computed<ReportRange>(() => rangeState.value.range)
+/** an incomplete/impossible custom pair is never sent (spec AC-10) */
+const rangeInvalid = computed(() => reportRangeInvalid(rangeState.value))
 const status = computed<MonitorStatusFilter>(() => {
   const value = queryString('status')
   return STATUS_ITEMS.some(item => item.value === value && value !== 'all') ? value as MonitorStatusFilter : 'all'
@@ -247,6 +251,12 @@ function rememberFromQuery() {
 const endpoint = computed(() => TABS.find(item => item.value === tab.value)!.path)
 
 async function load() {
+  // FEAT-065 — an invalid custom pair sends nothing at all; the previous table and the hint stay
+  if (rangeInvalid.value) {
+    session++
+    pending.value = false
+    return
+  }
   const s = ++session
   pending.value = true
   error.value = null
@@ -256,7 +266,7 @@ async function load() {
     const res = await api<AdsMonitorResponse>(endpoint.value, {
       retry: 0,
       query: {
-        range: range.value,
+        ...reportRangeQuery(rangeState.value),
         status: status.value,
         linked: linked.value,
         // FEAT-064 v1.1 — always explicit, like `linked` (contract §6.4)
@@ -321,7 +331,8 @@ async function loadAdvertisers() {
 }
 
 const queryKey = computed(() => JSON.stringify([
-  tab.value, range.value, status.value, linked.value, hideBanned.value, page.value,
+  tab.value, range.value, rangeState.value.from, rangeState.value.to,
+  status.value, linked.value, hideBanned.value, page.value,
   workspaceId.value, accountId.value, advertiserId.value, orderId.value, searchQuery.value,
   campaignId.value
 ]))
@@ -556,8 +567,9 @@ function setTab(value: MonitorLevel) {
   setQuery({ tab: value === 'campaign' ? undefined : value })
 }
 
-function setRange(value: MonitorRange) {
-  setQuery({ range: value === 'today' ? undefined : value })
+/** FEAT-065 — the picker's `update`: the default key leaves the URL, `page` resets as before */
+function onRange(patch: { range: ReportRange, from?: string, to?: string }) {
+  setQuery(rangeUrlPatch({ range: patch.range, from: patch.from ?? '', to: patch.to ?? '' }, 'today'))
 }
 
 function setLinked(value: boolean) {
@@ -646,24 +658,15 @@ const intervalText = computed(() => {
         </template>
 
         <template #right>
-          <div
+          <ReportsDateRange
             v-if="!forbidden"
-            class="flex flex-wrap gap-1"
-            role="group"
-            aria-label="ช่วงเวลา"
-          >
-            <UButton
-              v-for="key in RANGES"
-              :key="key"
-              :label="RANGE_LABEL[key]"
-              size="xs"
-              :color="range === key ? 'primary' : 'neutral'"
-              :variant="range === key ? 'solid' : 'outline'"
-              :aria-pressed="range === key"
-              :data-testid="`am-range-${key}`"
-              @click="setRange(key)"
-            />
-          </div>
+            prefix="am"
+            :range="rangeState.range"
+            :from="rangeState.from"
+            :to="rangeState.to"
+            :pending="pending"
+            @update="onRange"
+          />
           <UButton
             label="Refresh"
             aria-label="Refresh"

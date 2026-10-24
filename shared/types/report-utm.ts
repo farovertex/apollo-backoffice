@@ -62,8 +62,9 @@ export interface UtmReportResponse {
   /** rows matching the filters before `limit` */
   total: number
   limit: number
-  from: string
-  to: string
+  /** FEAT-065 (api-contract.md §5.3) — `null` only for `range=all`; the CSV name is then `utm-all.csv`. */
+  from: string | null
+  to: string | null
   /** the constant `'Asia/Bangkok'` */
   timezone: string
   totals: UtmReportTotals

@@ -3,8 +3,9 @@
  * read-only view of the same ad metrics as FEAT-020/FEAT-035: one row per advertiser TikTok has currently
  * banned (`advertisers.suspendedReason === 'banned'`) that still owns at least one `ads` row.
  *
- * `ReportRangeInfo.from`/`to` are typed `string` in `./reports.ts` while `range=all` delivers `null` for both —
- * widened here (`BannedRangeInfo`) to `string | null` rather than editing the shared file (contract §3 note).
+ * FEAT-065 — the range vocabulary lives in `./reports.ts` only (`ReportRange` = the five keys,
+ * `ReportRangeInfo.from`/`to` widened to `string | null`); `BannedRange` / `BannedRangeInfo` are kept as
+ * aliases so the FEAT-043/056 imports keep working.
  *
  * FEAT-056 adds the `custom` range key and `GET /reports/banned/:advertiserId/campaigns` (contract §6).
  *
@@ -12,20 +13,16 @@
  * `GET /reports/banned/:advertiserId/ads` shapes (`BannedAd` / `BannedAdsResponse`, contract v1 §2) behind the
  * row's "view all ad images" modal.
  */
-import type { AdState, KpiMetrics, ReportRange } from './reports'
+import type { AdState, KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
 
 /**
- * FEAT-056 — `/reports/banned` (and only it, spec A12) also accepts `range=custom` with `from`/`to`
- * (`YYYY-MM-DD`, `from ≤ to`, ≤ 366 days). The monitor endpoints keep `today | 7d | all`.
+ * FEAT-065 — every report endpoint now shares the five keys (`today | yesterday | 7d | all | custom`), so
+ * this is a plain alias of the shared vocabulary; the name stays for the FEAT-043/056 call sites.
  */
-export type BannedRange = ReportRange | 'custom'
+export type BannedRange = ReportRange
 
 /** `range` echo of `/reports/banned` and `/reports/banned/:id/campaigns` (`all` sends `from`/`to` null). */
-export interface BannedRangeInfo {
-  key: BannedRange
-  from: string | null
-  to: string | null
-}
+export type BannedRangeInfo = ReportRangeInfo
 
 export interface BannedRow {
   account: { id: string, label: string | null, loginEmail: string | null }

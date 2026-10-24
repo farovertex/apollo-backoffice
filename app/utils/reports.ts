@@ -9,7 +9,7 @@
  * "สกุลเงินของบัญชี".
  */
 import type { MonitorStatusKey } from '#shared/types/ads-monitor'
-import type { AdState, AdvertiserReportState, KpiMetrics, ReportError, ReportRange } from '#shared/types/reports'
+import type { AdState, AdvertiserReportState, KpiMetrics, ReportError } from '#shared/types/reports'
 
 export const REPORT_DASH = '—'
 
@@ -289,16 +289,15 @@ export function monitorStatusTitle(status: { primary: string, detail: string, re
   return parts.length > 0 ? parts.join(' · ') : REPORT_DASH
 }
 
-export const RANGE_LABEL: Record<ReportRange, string> = {
-  'today': 'วันนี้',
-  '7d': '7 วัน',
-  'all': 'ทั้งหมด'
-}
-
-/** The `range` of a URL query, falling back to `today` for anything unknown. */
-export function parseRange(value: unknown): ReportRange {
-  return value === '7d' || value === 'all' ? value : 'today'
-}
+/**
+ * FEAT-065 — the range vocabulary (labels, parsing, validation, request query, trigger label) moved to
+ * `app/utils/report-range.ts`, the single implementation shared by the five report pages,
+ * `ReportsDateRange.vue` and `AdSlideover.vue`. `RANGE_LABEL` and the old `parseRange()` are **gone from
+ * here**: everything in `app/utils` is auto-imported, so a `export { RANGE_LABEL } from './report-range'`
+ * re-export (contract §6.2) would make unimport log `Duplicated imports "RANGE_LABEL"` on every build and
+ * silently pick one of the two modules. Call sites use the auto-imported `RANGE_LABEL` of `report-range.ts`
+ * (same name, no import statement to change) and `parseReportRange(query, defaultKey)`.
+ */
 
 /** An empty metric block — used as the fallback of a tile before the first answer. */
 export function emptyMetrics(): KpiMetrics {

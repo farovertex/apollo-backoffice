@@ -23,6 +23,12 @@
  * - a fourth range button **กำหนดเอง** (`rb-range-custom`) with two date inputs (`rb-from` / `rb-to`) →
  *   `range=custom&from=&to=`. An incomplete or impossible pair renders `rb-range-invalid` and issues **no**
  *   request at all (AC-25), so the API never sees a 400 from this page.
+ *
+ * FEAT-065 — that whole row (and the inline date block below the navbar) is now the shared
+ * `ReportsDateRange` popover: the same five ids (`rb-range-today|yesterday|7d|all|custom`, `rb-from`,
+ * `rb-to`, `rb-range-invalid`) live **inside** `rb-range-panel`, the validation and the labels come from
+ * `app/utils/report-range.ts`, and the page keeps every rule it had: default `all`, the pair only with
+ * `custom`, "an invalid pair sends nothing", and the campaign cache keyed by (row, range + pair).
  * - an expandable per-advertiser campaign table: `rb-expand` → `GET /reports/banned/:id/campaigns` with the
  *   **same** range query, once per (row, range); the cache is dropped and the open rows reload when the range
  *   changes. The state lives here (the page owns `useApi()`), the rendering in `ReportBannedCampaigns`.
@@ -33,10 +39,10 @@ import type { ApiErrorBody } from '#shared/types/auth'
 import type {
   BannedCampaignsResponse,
   BannedCampaignsState,
-  BannedRange,
   BannedReportResponse,
   BannedRow
 } from '#shared/types/report-banned'
+import type { ReportRange } from '#shared/types/reports'
 import type { AccountsResponse, TikTokAccount } from '#shared/types/tiktok-accounts'
 
 useSeoMeta({ title: 'Report Banned accounts' })
@@ -57,44 +63,17 @@ function queryString(key: string): string | undefined {
 }
 
 /** Unlike `/reports`/`/reports/summary` the default range here is `all` — an unknown value also falls to `all` (contract §3.2). */
-function parseBannedRange(value: unknown): BannedRange {
-  return value === 'today' || value === '7d' || value === 'custom' ? value : 'all'
-}
+const rangeState = computed(() => parseReportRange(route.query, 'all'))
+const range = computed<ReportRange>(() => rangeState.value.range)
+const customFrom = computed(() => rangeState.value.from)
+const customTo = computed(() => rangeState.value.to)
 
-const range = computed<BannedRange>(() => parseBannedRange(route.query.range))
-const customFrom = computed(() => queryString('from') ?? '')
-const customTo = computed(() => queryString('to') ?? '')
-
-const DAY_MS = 86_400_000
-const MAX_RANGE_DAYS = 366
-const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/
-
-function dayMs(value: string): number {
-  return Date.parse(`${value}T00:00:00Z`)
-}
-
-/**
- * Thai reason why the custom pair cannot be sent, `null` when it is fine (contract §6.1: both required,
- * `from ≤ to`, at most 366 days apart). Mirrors the API's `superRefine` so the page never fires a 400.
- */
-const rangeInvalid = computed<string | null>(() => {
-  if (range.value !== 'custom') return null
-  const from = customFrom.value
-  const to = customTo.value
-  if (!ISO_DAY_RE.test(from) || !ISO_DAY_RE.test(to)) return 'เลือกวันที่เริ่มต้นและวันสิ้นสุด'
-  const fromMs = dayMs(from)
-  const toMs = dayMs(to)
-  if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return 'รูปแบบวันที่ไม่ถูกต้อง'
-  if (toMs < fromMs) return 'วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น'
-  if ((toMs - fromMs) / DAY_MS > MAX_RANGE_DAYS) return `ช่วงเวลาต้องไม่เกิน ${MAX_RANGE_DAYS} วัน`
-  return null
-})
+/** Thai reason why the custom pair cannot be sent, `null` when it is fine — shared with the four other pages. */
+const rangeInvalid = computed(() => reportRangeInvalid(rangeState.value))
 
 /** The range part of every request this page makes (`/reports/banned` and the campaign expansion). */
-function rangeQuery(): { range: BannedRange, from?: string, to?: string } {
-  return range.value === 'custom'
-    ? { range: 'custom', from: customFrom.value, to: customTo.value }
-    : { range: range.value }
+function rangeQuery(): { range: ReportRange, from?: string, to?: string } {
+  return reportRangeQuery(rangeState.value)
 }
 const page = computed(() => {
   const n = Number(route.query.page)
@@ -343,20 +322,13 @@ const intervalText = computed(() => {
   return `อัปเดตทุก ${phrase} · ล่าสุด ${last}`
 })
 
-const RANGES: BannedRange[] = ['today', '7d', 'all', 'custom']
-const BANNED_RANGE_LABEL: Record<BannedRange, string> = { ...RANGE_LABEL, custom: 'กำหนดเอง' }
-
-/** Switching to `custom` keeps whatever dates are in the URL; with none the page shows `rb-range-invalid`. */
-function setRange(value: BannedRange) {
-  if (value === 'custom') {
-    setQuery({ range: 'custom' })
-    return
-  }
-  setQuery({ range: value === 'all' ? undefined : value, from: undefined, to: undefined })
-}
-
-function setCustomDate(side: 'from' | 'to', value: string) {
-  setQuery({ [side]: value || undefined })
+/**
+ * FEAT-065 — the picker's `update`: `all` (this page's default) leaves the URL, a shortcut drops the pair,
+ * and switching to `custom` keeps whatever dates the URL has (with none the hint shows and nothing is sent).
+ * `page` resets exactly as before, because this is the page's own `setQuery`.
+ */
+function onRange(patch: { range: ReportRange, from?: string, to?: string }) {
+  setQuery(rangeUrlPatch({ range: patch.range, from: patch.from ?? '', to: patch.to ?? '' }, 'all'))
 }
 
 function setPage(value: number) {
@@ -385,24 +357,15 @@ function showCovers(row: BannedRow) {
         </template>
 
         <template #right>
-          <div
+          <ReportsDateRange
             v-if="!forbidden"
-            class="flex flex-wrap gap-1"
-            role="group"
-            aria-label="ช่วงเวลา"
-          >
-            <UButton
-              v-for="key in RANGES"
-              :key="key"
-              :label="BANNED_RANGE_LABEL[key]"
-              size="xs"
-              :color="range === key ? 'primary' : 'neutral'"
-              :variant="range === key ? 'solid' : 'outline'"
-              :aria-pressed="range === key"
-              :data-testid="`rb-range-${key}`"
-              @click="setRange(key)"
-            />
-          </div>
+            prefix="rb"
+            :range="rangeState.range"
+            :from="rangeState.from"
+            :to="rangeState.to"
+            :pending="pending"
+            @update="onRange"
+          />
           <UButton
             label="Refresh"
             aria-label="Refresh"
@@ -439,34 +402,6 @@ function showCovers(row: BannedRow) {
           <p class="text-sm text-muted" data-testid="rb-interval">
             {{ intervalText }}
           </p>
-
-          <!-- FEAT-056 — custom range: two day inputs; an invalid pair renders the hint and sends nothing -->
-          <div v-if="range === 'custom'" class="flex flex-wrap items-center gap-1.5">
-            <UInput
-              type="date"
-              :model-value="customFrom"
-              class="w-44"
-              aria-label="ตั้งแต่วันที่"
-              data-testid="rb-from"
-              @update:model-value="(v: string | number) => setCustomDate('from', String(v))"
-            />
-            <span class="text-sm text-muted">→</span>
-            <UInput
-              type="date"
-              :model-value="customTo"
-              class="w-44"
-              aria-label="ถึงวันที่"
-              data-testid="rb-to"
-              @update:model-value="(v: string | number) => setCustomDate('to', String(v))"
-            />
-            <p
-              v-if="rangeInvalid"
-              class="text-sm text-error"
-              data-testid="rb-range-invalid"
-            >
-              {{ rangeInvalid }}
-            </p>
-          </div>
 
           <!-- filters -->
           <div class="flex flex-wrap items-center gap-1.5">

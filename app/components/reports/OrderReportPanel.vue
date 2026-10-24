@@ -16,7 +16,7 @@ import type {
   AdvertiserReport,
   OrderReportBuild,
   OrderReportResponse,
-  ReportRange
+  ReportRangeKey
 } from '#shared/types/reports'
 
 const props = defineProps<{
@@ -32,7 +32,7 @@ const report = ref<OrderReportResponse | null>(null)
 const pending = ref(false)
 const loaded = ref(false)
 const error = ref<string | null>(null)
-const range = ref<ReportRange>('today')
+const range = ref<ReportRangeKey>('today')
 let session = 0
 
 const intervalMs = computed(() => report.value?.intervalMs || 300_000)
@@ -180,7 +180,9 @@ function focusRow() {
 }
 
 // ── presentation ─────────────────────────────────────────────────────────────────────────────────────────────────────
-const RANGES: ReportRange[] = ['today', '7d', 'all']
+// FEAT-065 A6 — the order Report tab keeps its three buttons (no `yesterday`, no `custom`): the endpoint
+// `GET /campaign-orders/:id/report` is deliberately out of the new vocabulary's scope.
+const RANGES: ReportRangeKey[] = ['today', '7d', 'all']
 
 function trackText(build: OrderReportBuild): string {
   const t = build.tracking

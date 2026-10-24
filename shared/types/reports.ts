@@ -35,8 +35,13 @@ export interface KpiMetrics {
 /** Derived delivery state of an ad (contract §2.2 table); unknown raw strings land on `unknown`. */
 export type AdState = 'delivering' | 'pending' | 'rejected' | 'ended' | 'unknown'
 
-/** Shared `range` query of every report endpoint. */
-export type ReportRange = 'today' | '7d' | 'all'
+/**
+ * FEAT-065 (api-contract.md §6.1) — the one range vocabulary of **every** report page and endpoint.
+ * `ReportRangeKey` = the four shortcuts in the picker's order; `ReportRange` adds the `custom` pair.
+ * No other file re-declares it (`report-banned.ts` and `ads-monitor.ts` alias these).
+ */
+export type ReportRangeKey = 'today' | 'yesterday' | '7d' | 'all'
+export type ReportRange = ReportRangeKey | 'custom'
 
 /**
  * `advertisers.report.lastError` / `AdReportRow.fetchError`.
@@ -58,9 +63,23 @@ export interface AdStatusBlock {
   reasons: string[]
 }
 
-/** Range echoed by every endpoint: the key plus the resolved `YYYY-MM-DD` boundaries. */
+/**
+ * Range echoed by every endpoint: the key plus the resolved `YYYY-MM-DD` boundaries.
+ * FEAT-065 — widened to `string | null` (null only for `range=all`), which is what
+ * `/reports/banned` already declared locally; `BannedRangeInfo` is now an alias of this.
+ */
 export interface ReportRangeInfo {
   key: ReportRange
+  from: string | null
+  to: string | null
+}
+
+/**
+ * FEAT-065 — the range state the five report pages, `ReportsDateRange` and `app/utils/report-range.ts`
+ * pass around: the URL's key plus the custom pair as strings (`''` when absent).
+ */
+export interface ReportRangeState {
+  range: ReportRange
   from: string
   to: string
 }
