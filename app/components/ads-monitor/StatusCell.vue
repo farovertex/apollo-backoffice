@@ -10,6 +10,10 @@
  * (`am-status-label` stays the element carrying the text, so nothing that asserted on it breaks) with the
  * deletion time underneath (`am-status-deleted-at`, `dd MMM HH:mm` local). Same on all three tabs: group and
  * ad rows of a deleted campaign carry `status.key = 'deleted'` + `deletedAt` as well.
+ *
+ * FEAT-064 — `status.key === 'banned'` is rendered as a red **badge** (same pattern as the `deleted` badge,
+ * `am-status-label` still carries the text), `data-key="banned"` comes from the existing binding below. No
+ * dimming: dimming stays tied to `deletedAt` (the row/table component), never to `banned`.
  */
 import type { MonitorStatus } from '#shared/types/ads-monitor'
 
@@ -20,6 +24,7 @@ const props = defineProps<{
 }>()
 
 const isDeleted = computed(() => props.status.key === 'deleted')
+const isBanned = computed(() => props.status.key === 'banned')
 const deletedAtText = computed(() => formatDayMonthClock(props.deletedAt))
 const label = computed(() => monitorStatusLabel(props.status.key, props.status.primary))
 const dot = computed(() => monitorStatusDot(props.status.key, props.status.primary))
@@ -42,6 +47,16 @@ const title = computed(() => monitorStatusTitle(props.status))
       variant="subtle"
       size="sm"
       icon="i-lucide-trash-2"
+      :label="label"
+      class="w-fit"
+      data-testid="am-status-label"
+    />
+    <UBadge
+      v-else-if="isBanned"
+      color="error"
+      variant="subtle"
+      size="sm"
+      icon="i-lucide-ban"
       :label="label"
       class="w-fit"
       data-testid="am-status-label"

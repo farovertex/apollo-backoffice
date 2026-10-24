@@ -21,8 +21,10 @@ export type MonitorLevel = 'campaign' | 'adGroup' | 'ad'
  * Classification of one level (contract §2); the Thai labels live in `app/utils/reports.ts`.
  * TASK-campaign-delete-ui — `deleted` is the API's **top-priority** key (above `rejected`): every row whose
  * `deletedAt` is set reads `deleted`, because deleting a campaign deletes its groups and ads too.
+ * FEAT-064 — `banned` ranks right after `deleted` (an advertiser whose `suspendedReason === 'banned'`): a row
+ * stays visible in every range until the next Bangkok midnight (contract §2/§3), rendered as a red badge.
  */
-export type MonitorStatusKey = 'deleted' | 'delivering' | 'notDelivering' | 'paused' | 'rejected' | 'other'
+export type MonitorStatusKey = 'deleted' | 'banned' | 'delivering' | 'notDelivering' | 'paused' | 'rejected' | 'other'
 
 /** `status` query value — the six keys plus `all` (default). */
 export type MonitorStatusFilter = 'all' | MonitorStatusKey
@@ -253,6 +255,11 @@ export interface AdsMonitorResponse {
   range: { key: MonitorRange, from: string | null, to: string | null }
   intervalMs: number
   refreshedAt: string | null
+  /**
+   * FEAT-064 — echo of the request's `campaignId` (contract §1.3). `null` when the request has none;
+   * otherwise `{ id: <query value>, name }` with `name` from the newest matching group, `null` when none.
+   */
+  campaign: { id: string, name: string | null } | null
 }
 
 /** `POST /ads-monitor/toggle` body (strict on the API side). */
