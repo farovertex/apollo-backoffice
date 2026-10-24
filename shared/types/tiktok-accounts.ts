@@ -60,6 +60,10 @@
  * accounts (`BcTikTokAccount`, collection `bc_tiktok_accounts`) the BC has linked under that org. The job is
  * `jobs.type = 'bcTtLink'`; nothing of it is stored on the account or the org view. The second step reuses the
  * FEAT-059 per-org discover (`POST :id/discover { bcOrgId }`) — the system never links an account by itself.
+ * FEAT-063 (api-contract.md v1) — the view gains `favorite` (key 41, right after `isActive`): `true` when **this
+ * caller** (the admin reading the view) has starred the account, computed server-side from
+ * `ADMINS.preferences.favoriteAccountIds`, never shared between admins. `PUT`/`DELETE /tiktok-accounts/:id/favorite`
+ * toggle it (idempotent, no body) and answer `{ id, favorite }`.
  */
 
 import type { HumanTaskKind } from './human-tasks'
@@ -186,6 +190,8 @@ export interface TikTokAccount {
   firstLoginTries: FirstLoginTries
   sessionStatus: SessionStatus
   isActive: boolean
+  /** FEAT-063 — true ⇔ the caller (this admin) starred the account; per-admin, never per workspace/team */
+  favorite: boolean
   /** ISO | null — set by the login job's "check first" step */
   lastSessionCheckAt: string | null
   /** ISO | null — set by a successful login job */
@@ -740,4 +746,10 @@ export interface PatchAccountBody {
    * shows that text as-is. Setting `'qr'` always works.
    */
   autoTopupChannel?: TopupChannel
+}
+
+/** FEAT-063 — `PUT`/`DELETE /tiktok-accounts/:id/favorite` 200 body (`id` echoed back as a string). */
+export interface FavoriteToggleResponse {
+  id: string
+  favorite: boolean
 }

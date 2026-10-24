@@ -15,6 +15,11 @@
  * moved off `LaunchAdvertiser` entirely (no `balanceAmount/Currency/At`, no `hasBalance`) and onto
  * `LaunchAccount` (`balanceAmount`, `balanceCurrency`, `balanceAt`, `hasBalance`). The "Only with balance"
  * filter and the default-advertiser rule both key off the account now (`app/pages/launch-ads.vue`).
+ *
+ * FEAT-063 (api-contract.md v1) — `LaunchAccount` gains `favorite` (key 18, right after `isActive`): per-caller,
+ * same flag and same toggle route (`PUT`/`DELETE /tiktok-accounts/:id/favorite`) as `TikTokAccount.favorite`
+ * (`#shared/types/tiktok-accounts`). The API sort (ready first, then name) is unchanged; the BO pins favorites
+ * first on the page itself (`app/pages/launch-ads.vue`).
  */
 import type { AdvertiserStatus } from './advertisers'
 import type { SessionStatus } from './tiktok-accounts'
@@ -52,6 +57,8 @@ export interface LaunchAccount {
   bcOrgName: string | null
   sessionStatus: SessionStatus
   isActive: boolean
+  /** FEAT-063 — true ⇔ the caller (this admin) starred the account; per-admin, never per workspace/team */
+  favorite: boolean
   /**
    * FEAT-034 (api-contract v1 §4) — the account's stored, app-credited balance (`TIKTOK_ACCOUNTS.balanceAmount/
    * Currency/At`, written by the kpi job and by a `paid` round of either top-up level). **Not** TikTok's live
