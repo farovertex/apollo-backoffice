@@ -30,6 +30,13 @@
  * `campaign.name` from the **last** response (kept in `campaignName`, spec: "fine while a tab switch is in
  * flight"), falling back to the id. The collapsible `name` column (`nameCollapsed`) is unrelated page state,
  * one ref shared by the three tabs and persisted in `localStorage` (spec "Collapsible header", A9).
+ *
+ * FEAT-064 v1.1 (api-contract.md §6.4, AC-17/AC-18) — a second switch "เฉพาะบัญชีที่ไม่ถูกระงับ" (`hideBanned`,
+ * **on** by default) works exactly like `linked`: the default is omitted from the URL (`?hideBanned=false` only
+ * while off) and the request always sends `hideBanned=true|false` explicitly. It is coupled with the status
+ * dropdown in one `setQuery` each way: choosing "ถูกระงับ" while the switch is on also turns it off
+ * (`status=banned&hideBanned=false`, one request); turning the switch on while `status=banned` also resets the
+ * status to "ทั้งหมด" — so the BO never sends `status=banned&hideBanned=true` (an always-empty pair).
  */
 import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
@@ -106,6 +113,11 @@ const status = computed<MonitorStatusFilter>(() => {
 })
 /** the switch is "เฉพาะจากระบบ": on ⇒ `linked=true` (default, URL empty) · off ⇒ `linked=all` */
 const linked = computed<MonitorLinkedFilter>(() => (queryString('linked') === 'all' ? 'all' : 'true'))
+/**
+ * FEAT-064 v1.1 — the switch "เฉพาะบัญชีที่ไม่ถูกระงับ": on ⇒ `hideBanned=true` (default, URL empty) · off ⇒
+ * `hideBanned=false` (the v1 banned-today view). Same URL/request pattern as `linked` (contract §6.4).
+ */
+const hideBanned = computed<'true' | 'false'>(() => (queryString('hideBanned') === 'false' ? 'false' : 'true'))
 const page = computed(() => {
   const n = Number(route.query.page)
   return Number.isInteger(n) && n > 0 ? n : 1
@@ -247,6 +259,8 @@ async function load() {
         range: range.value,
         status: status.value,
         linked: linked.value,
+        // FEAT-064 v1.1 — always explicit, like `linked` (contract §6.4)
+        hideBanned: hideBanned.value,
         page: page.value,
         limit: LIMIT,
         workspaceId: orUndefined(workspaceId.value),
@@ -307,7 +321,7 @@ async function loadAdvertisers() {
 }
 
 const queryKey = computed(() => JSON.stringify([
-  tab.value, range.value, status.value, linked.value, page.value,
+  tab.value, range.value, status.value, linked.value, hideBanned.value, page.value,
   workspaceId.value, accountId.value, advertiserId.value, orderId.value, searchQuery.value,
   campaignId.value
 ]))
@@ -492,6 +506,7 @@ const hasFilter = computed(() =>
   || orderId.value !== 'all'
   || status.value !== 'all'
   || linked.value !== 'true'
+  || hideBanned.value !== 'true'
   || campaignId.value !== undefined
 )
 
@@ -505,6 +520,7 @@ function clearFilters() {
     orderId: undefined,
     status: undefined,
     linked: undefined,
+    hideBanned: undefined,
     campaignId: undefined
   })
 }
@@ -546,6 +562,28 @@ function setRange(value: MonitorRange) {
 
 function setLinked(value: boolean) {
   setQuery({ linked: value ? undefined : 'all' })
+}
+
+// ── FEAT-064 v1.1 · "เฉพาะบัญชีที่ไม่ถูกระงับ" ↔ status coupling (contract §6.4, AC-18) ───────────────────────────
+/**
+ * Switch on → drop `hideBanned` from the URL; if the status was "ถูกระงับ" it goes back to "ทั้งหมด" in the **same**
+ * `setQuery` (one request). Switch off → `hideBanned=false`, status untouched.
+ */
+function setHideBanned(on: boolean) {
+  if (!on) {
+    setQuery({ hideBanned: 'false' })
+    return
+  }
+  const patch: Record<string, string | undefined> = { hideBanned: undefined }
+  if (status.value === 'banned') patch.status = undefined
+  setQuery(patch)
+}
+
+/** Status dropdown: choosing "ถูกระงับ" while the switch is on also turns it off in the same `setQuery`. */
+function setStatus(value: string) {
+  const patch: Record<string, string | undefined> = { status: orUndefined(value) }
+  if (value === 'banned' && hideBanned.value === 'true') patch.hideBanned = 'false'
+  setQuery(patch)
 }
 
 function setPage(value: number) {
@@ -769,13 +807,19 @@ const intervalText = computed(() => {
               class="min-w-32"
               aria-label="สถานะ"
               data-testid="am-filter-status"
-              @update:model-value="(v: string) => setQuery({ status: orUndefined(v) })"
+              @update:model-value="(v: string) => setStatus(v)"
             />
             <USwitch
               :model-value="linked === 'true'"
               label="เฉพาะจากระบบ"
               data-testid="am-filter-linked"
               @update:model-value="setLinked"
+            />
+            <USwitch
+              :model-value="hideBanned === 'true'"
+              label="เฉพาะบัญชีที่ไม่ถูกระงับ"
+              data-testid="am-filter-hide-banned"
+              @update:model-value="setHideBanned"
             />
             <UButton
               v-if="hasFilter"

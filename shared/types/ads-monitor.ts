@@ -107,12 +107,29 @@ export interface MonitorAdvertiserRef {
   suspendedReason: string | null
 }
 
+/**
+ * FEAT-064 v1.2 (contract §7.1) — the TikTok account's BC wallet balance (`tiktokAccounts.balance*`, the only
+ * balance since FEAT-034; the advertiser has no balance of its own). Always an object: every key is null when
+ * the wallet was never read or the account row is gone. Rendered by `AdsMonitorBudgetCell` as the
+ * `am-budget-balance` line, deliberately **not** part of `advertiserBudget` (spec A14).
+ */
+export interface MonitorAccountBalance {
+  amount: number | null
+  currency: string | null
+  /** ISO of the last wallet read */
+  at: string | null
+  /** last read error — a sentence safe to show */
+  error: string | null
+}
+
 export interface MonitorAccountRef {
   id: string
   label: string | null
   /** v1.2 — full, unmasked, the fallback text when `label` is null */
   loginEmail: string | null
   sessionStatus: string
+  /** FEAT-064 v1.2 — the account's BC wallet (contract §7.1), always an object */
+  balance: MonitorAccountBalance
 }
 
 export interface MonitorWorkspaceRef {
