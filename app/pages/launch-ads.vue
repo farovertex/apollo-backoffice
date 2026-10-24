@@ -81,6 +81,15 @@
  * A 403 on the targets request (a Payment-only admin that typed the URL) renders `la-forbidden` with the API
  * text and nothing else; no redirect (the nav item is hidden for that admin, but the API is the authority).
  * No enum label of a template field is invented here: every one comes from the templates' `/options`.
+ *
+ * FEAT-063 (api-contract.md v1, spec "UI behaviour") — a favorite star (`TiktokAccountsFavoriteStar`,
+ * `la-acc-fav`) right after `la-acc-name` on every `la-acc-row` and `la-unavail-row` (clickable, `stopPropagation`
+ * so it never touches the row's selection), and a static `la-review-fav` after the name of a favorite
+ * `la-review-target`. Same per-admin flag and the same toggle route as `/tiktok-accounts`
+ * (`#shared/types/tiktok-accounts`). `favoriteById` (override map, cleared on every fresh `loadTargets`) keeps a
+ * just-toggled star correct; `pinnedFilteredAccounts` / `pinnedUnavailableAccounts` render the same two lists
+ * stably sorted favorites-first — `filteredAccounts` / `unavailableAccounts` themselves (and therefore
+ * `defaultAdvertiserId`, select-all-visible, every counter) are untouched by the pin.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -179,6 +188,9 @@ async function loadTargets() {
     limits.value = res.limits ?? null
     targetsLoaded.value = true
     forbidden.value = null
+    // FEAT-063 — a fresh targets fetch (first load or Refresh) drops the favorite override: the next render
+    // reads the server's own per-caller `favorite` again.
+    favoriteById.value = new Map()
     reconcileSelection()
   } catch (e) {
     if (s !== targetsSession) return
@@ -196,6 +208,28 @@ async function loadTargets() {
 
 const availableAccounts = computed(() => accounts.value.filter(a => a.available))
 const unavailableAccounts = computed(() => accounts.value.filter(a => !a.available))
+
+/**
+ * FEAT-063 — the star's override map (keyed by account id, same id space as `/tiktok-accounts`): set by a
+ * successful (or reverted) `FavoriteStar` toggle, cleared on every fresh targets fetch (`loadTargets` above).
+ * `effectiveFavorite` is the single read everywhere a row needs the flag (`la-acc-row` / `la-unavail-row` /
+ * `la-review-target` / the pin-first sort below).
+ */
+const favoriteById = shallowRef(new Map<string, boolean>())
+function effectiveFavorite(account: LaunchAccount): boolean {
+  return favoriteById.value.get(account.id) ?? account.favorite
+}
+function onFavoriteChange(id: string, favorite: boolean) {
+  favoriteById.value = new Map(favoriteById.value).set(id, favorite)
+}
+/**
+ * FEAT-063 (AC-7, AS-3) — favorites first, stable. Rendering-only: `defaultAdvertiserId` auto-pick,
+ * select-all-visible and every counter still read `filteredAccounts` / `unavailableAccounts` themselves (order
+ * does not change what those compute), so only the two template `v-for`s use these.
+ */
+function pinFavoritesFirst(list: LaunchAccount[]): LaunchAccount[] {
+  return [...list].sort((a, b) => Number(effectiveFavorite(b)) - Number(effectiveFavorite(a)))
+}
 
 // ── step 1 · filters ─────────────────────────────────────────────────────────────────────────────────────────────────
 const accountSearch = ref('')
@@ -263,6 +297,11 @@ const filteredAccounts = computed(() => {
   if (!idleOnly.value) return fundedFilteredAccounts.value
   return fundedFilteredAccounts.value.filter(a => !a.launchingAds)
 })
+
+/** FEAT-063 — what `la-acc-row` actually renders (favorites first); every other reader keeps `filteredAccounts`. */
+const pinnedFilteredAccounts = computed(() => pinFavoritesFirst(filteredAccounts.value))
+/** FEAT-063 — what `la-unavail-row` actually renders (favorites first); the count/label keep `unavailableAccounts`. */
+const pinnedUnavailableAccounts = computed(() => pinFavoritesFirst(unavailableAccounts.value))
 
 /** how many of the search/workspace-filtered accounts the funded switch additionally hides */
 const unfundedHiddenCount = computed(() => searchFilteredAccounts.value.filter(a => !isFunded(a)).length)
@@ -1177,12 +1216,13 @@ onUnmounted(() => {
                           Loading accounts…
                         </td>
                       </tr>
-                      <template v-for="account in filteredAccounts" :key="account.id">
+                      <template v-for="account in pinnedFilteredAccounts" :key="account.id">
                         <tr
                           :data-id="account.id"
                           :data-selected="isSelected(account) ? 'true' : 'false'"
                           :data-funded="isFunded(account) ? 'true' : 'false'"
                           :data-launching="account.launchingAds ? 'true' : 'false'"
+                          :data-favorite="effectiveFavorite(account) ? 'true' : 'false'"
                           data-slot="tr"
                           data-testid="la-acc-row"
                         >
@@ -1195,8 +1235,16 @@ onUnmounted(() => {
                             />
                           </td>
                           <td class="border-b border-default px-3 py-2">
-                            <div class="flex flex-col">
-                              <span class="font-medium text-highlighted" data-testid="la-acc-name">{{ accountName(account) }}</span>
+                            <div class="flex min-w-0 flex-col">
+                              <div class="flex min-w-0 items-center gap-1">
+                                <span class="truncate font-medium text-highlighted" data-testid="la-acc-name">{{ accountName(account) }}</span>
+                                <TiktokAccountsFavoriteStar
+                                  :account-id="account.id"
+                                  :favorite="effectiveFavorite(account)"
+                                  testid="la-acc-fav"
+                                  @update:favorite="(v: boolean) => onFavoriteChange(account.id, v)"
+                                />
+                              </div>
                               <span v-if="accountEmail(account)" class="text-xs text-muted">{{ accountEmail(account) }}</span>
                               <!-- FEAT-029 flag of the account — launch status -->
                               <UBadge
@@ -1347,13 +1395,20 @@ onUnmounted(() => {
                   />
                   <ul v-if="unavailableOpen" class="flex flex-col gap-2">
                     <li
-                      v-for="account in unavailableAccounts"
+                      v-for="account in pinnedUnavailableAccounts"
                       :key="account.id"
                       :data-id="account.id"
+                      :data-favorite="effectiveFavorite(account) ? 'true' : 'false'"
                       data-testid="la-unavail-row"
                       class="flex flex-wrap items-center gap-2 rounded-lg border border-default px-3 py-2 text-sm"
                     >
                       <span class="font-medium text-highlighted">{{ accountName(account) }}</span>
+                      <TiktokAccountsFavoriteStar
+                        :account-id="account.id"
+                        :favorite="effectiveFavorite(account)"
+                        testid="la-acc-fav"
+                        @update:favorite="(v: boolean) => onFavoriteChange(account.id, v)"
+                      />
                       <span v-if="accountEmail(account)" class="text-xs text-muted">{{ accountEmail(account) }}</span>
                       <UBadge color="neutral" variant="outline" size="sm">
                         {{ account.workspace?.name ?? '—' }}
@@ -1857,6 +1912,13 @@ onUnmounted(() => {
                       class="flex flex-wrap items-center gap-2 rounded-lg border border-default px-3 py-2 text-sm"
                     >
                       <span class="font-medium text-highlighted">{{ accountName(account) }}</span>
+                      <TiktokAccountsFavoriteStar
+                        v-if="effectiveFavorite(account)"
+                        :account-id="account.id"
+                        :favorite="true"
+                        testid="la-review-fav"
+                        readonly
+                      />
                       <UIcon name="i-lucide-arrow-right" class="size-4 text-dimmed" />
                       <span class="text-highlighted">{{ advertiserOf(account)?.name ?? '—' }}</span>
                       <span class="text-xs text-muted">{{ advertiserOf(account)?.tiktokAdvertiserId ?? '—' }}</span>
