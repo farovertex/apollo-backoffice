@@ -155,6 +155,13 @@
  *   · The Business Center drill-down of `TiktokAccountsOrganizationRows` is a titled panel with a tree instead
  *     of a bare floating table — see that component's header. Nothing changed on this side: same props, same
  *     events, same `expandedOrgs` model.
+ * FEAT-063 (api-contract.md v1, spec "UI behaviour") — a favorite star (`TiktokAccountsFavoriteStar`, `ta-fav`)
+ * after the row's name line (after `ta-label` when there is one, else after `ta-account-email`), per **admin**
+ * (`account.favorite`). Click = optimistic `PUT`/`DELETE /tiktok-accounts/:id/favorite`; the result is kept in
+ * `favoriteById` (override map, cleared on every fresh dataset) so the 2 s discover/balance poll's possibly-stale
+ * `favorite` can never flip the star back right after a successful toggle. `rows` stable-sorts `filtered` with
+ * favorites first (`ta-row[data-favorite]`), so a search or the "Launching only" switch still shows its favorites
+ * on top; the API's own `createdAt desc` order is untouched inside each group.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -201,6 +208,7 @@ const UIcon = resolveComponent('UIcon')
 const UDropdownMenu = resolveComponent('UDropdownMenu')
 const TopupsStatusBadge = resolveComponent('TopupsStatusBadge')
 const TopupsRowActions = resolveComponent('TopupsRowActions')
+const TiktokAccountsFavoriteStar = resolveComponent('TiktokAccountsFavoriteStar')
 
 const POLL_MS = 2000
 
@@ -250,9 +258,11 @@ const filtered = computed<TikTokAccount[]>(() => {
 // (2026-10-11) the per-row password / recovery-email reveal sets went away with their columns — the secrets are
 // no longer rendered in the table at all.
 // a fresh dataset (refresh / after create / after delete / after an import) drops the per-row poll snapshots
+// FEAT-063 — and the favorite override (AC-5): the next render reads the server's own value again.
 watch(data, () => {
   polledById.value = new Map()
   topupById.value = new Map()
+  favoriteById.value = new Map()
 })
 
 // ── relative time ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -471,11 +481,25 @@ function stampMenuItem(testid: string) {
 const polledById = shallowRef(new Map<string, TikTokAccount>())
 // account-level rounds pushed by the top-up stream / a mutation, newer than the row's own `topup`
 const topupById = shallowRef(new Map<string, TopupView>())
-const rows = computed<TikTokAccount[]>(() => filtered.value.map((a) => {
-  const row = polledById.value.get(a.id) ?? a
-  const topup = topupById.value.get(a.id)
-  return topup ? { ...row, topup } : row
-}))
+// FEAT-063 — set by a successful (or reverted) `FavoriteStar` toggle, cleared on every fresh dataset (watch(data)
+// above) so the per-row 2 s poll (which can carry a stale `favorite`) never wins over a toggle the admin just made.
+const favoriteById = shallowRef(new Map<string, boolean>())
+function effectiveFavorite(a: TikTokAccount): boolean {
+  return favoriteById.value.get(a.id) ?? a.favorite
+}
+function onFavoriteChange(id: string, favorite: boolean) {
+  favoriteById.value = new Map(favoriteById.value).set(id, favorite)
+}
+const rows = computed<TikTokAccount[]>(() => {
+  const merged = filtered.value.map((a) => {
+    const row = polledById.value.get(a.id) ?? a
+    const topup = topupById.value.get(a.id)
+    return topup ? { ...row, topup } : row
+  })
+  // FEAT-063 (AC-6) — favorites first, stable: a plain `sort` on a boolean key keeps the relative order of every
+  // two rows with the same favorite-ness (the API's `createdAt desc`), so a list with no favorites is untouched.
+  return [...merged].sort((x, y) => Number(effectiveFavorite(y)) - Number(effectiveFavorite(x)))
+})
 
 // account id whose POST …/discover is in flight (button spinner + no double click)
 const syncStarting = ref<string | null>(null)
@@ -1453,23 +1477,42 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       // create failed). The profile *name* is deliberately not rendered — the label carries the human-readable
       // name.
       const pid = a.browserProfile?.providerProfileId ?? null
+      // FEAT-063 — the override wins until the next full list fetch (watch(data) above), so the 2 s poll's
+      // possibly-stale `favorite` never flips the star back right after a successful toggle (AC-5).
+      const favorite = effectiveFavorite(a)
+      const star = h(TiktokAccountsFavoriteStar, {
+        'accountId': a.id,
+        'favorite': favorite,
+        'testid': 'ta-fav',
+        'onUpdate:favorite': (v: boolean) => onFavoriteChange(a.id, v)
+      })
       return h('div', {
         'class': 'flex min-w-0 flex-col',
         'data-testid': 'ta-row',
         'data-id': a.id,
         'data-launching': launching ? 'true' : 'false',
+        'data-favorite': favorite ? 'true' : 'false',
         'onVnodeMounted': markRowLaunching(launching),
         'onVnodeUpdated': markRowLaunching(launching)
       }, [
-        // the label is the row's name when there is one; without a label the email takes that place (no `—`)
+        // the label is the row's name when there is one; without a label the email takes that place (no `—`) —
+        // FEAT-063: the star sits on whichever line is the name line, after it, on the same line (AS-8).
         a.label
-          ? h('span', { 'class': 'truncate font-medium text-highlighted', 'title': a.label, 'data-testid': 'ta-label' }, a.label)
+          ? h('div', { class: 'flex min-w-0 items-center gap-1' }, [
+              h('span', { 'class': 'truncate font-medium text-highlighted', 'title': a.label, 'data-testid': 'ta-label' }, a.label),
+              star
+            ])
           : null,
         h('div', { 'class': 'flex min-w-0 flex-col', 'data-testid': 'ta-account' }, [
-          h('span', {
-            'class': a.label ? 'whitespace-nowrap text-xs text-toned' : 'whitespace-nowrap text-highlighted',
-            'data-testid': 'ta-account-email'
-          }, a.loginEmail),
+          a.label
+            ? h('span', {
+                'class': 'whitespace-nowrap text-xs text-toned',
+                'data-testid': 'ta-account-email'
+              }, a.loginEmail)
+            : h('div', { class: 'flex min-w-0 items-center gap-1' }, [
+                h('span', { 'class': 'truncate text-highlighted', 'data-testid': 'ta-account-email' }, a.loginEmail),
+                star
+              ]),
           h('span', {
             'class': 'font-mono text-xs text-muted',
             'data-testid': 'ta-account-profile-id',
