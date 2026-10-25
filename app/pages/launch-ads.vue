@@ -653,14 +653,22 @@ function scheduleCell(template: AdGroupTemplate): string {
   return `${mode} · ${start} → ${shortDateTime(schedule.endTime)}`
 }
 
-/** locations · age groups · gender, all three with the labels of `/options` */
+/**
+ * locations · age groups · gender, all three with the labels of `/options`.
+ * TASK-adgroup-targeting: a template that asks for TikTok's **manual** targeting says so at the end (the label
+ * comes from `options.targetingMode`); `auto` is the contract default and adds nothing.
+ */
 function targetingCell(template: AdGroupTemplate): string {
   const config = template.config
   const locations = (config?.locations ?? []).map(v => labelOf(agtOptions.value?.locations, v)).join(', ') || '—'
   const ages = (config?.ageGroups ?? []).length === 0
     ? (agtOptions.value?.ageGroupsUnlimitedLabel ?? '—')
     : config.ageGroups.map(v => labelOf(agtOptions.value?.ageGroups, v)).join(', ')
-  return `${locations} · ${ages} · ${labelOf(agtOptions.value?.gender, config?.gender)}`
+  const parts = [locations, ages, labelOf(agtOptions.value?.gender, config?.gender)]
+  if (config?.targetingMode && config.targetingMode !== 'auto') {
+    parts.push(labelOf(agtOptions.value?.targetingMode, config.targetingMode))
+  }
+  return parts.join(' · ')
 }
 
 function postCell(template: AdTemplate): string {

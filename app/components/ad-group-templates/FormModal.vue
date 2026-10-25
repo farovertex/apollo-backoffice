@@ -6,7 +6,7 @@
  * `POST /ad-group-templates/:id/migrate`).
  *
  * One component for four modes:
- * - `template === null` → **create** (`POST` with a complete **15-key v3** config prefilled from
+ * - `template === null` → **create** (`POST` with a complete **17-key v3.1** config prefilled from
  *   `options.systemDefault`, never `catalogVersion`),
  * - a row + `mode: 'form'` → **edit** (`PATCH` with only the changed keys; each changed top-level `config` key is
  *   sent whole — assumption A3). Only a **Smart+** row can be edited: the API refuses a PATCH on a manual row
@@ -19,7 +19,7 @@
  *   `agt-migrate` on a manual row with `canEdit`): `GET /:id/migration` answers the v3 `draft` the API mapped
  *   from the stored manual config plus `required` / `dropped` / `renamed` / `notes`; the form is prefilled from
  *   the draft, the dropped keys are listed under "จะถูกตัดออก" (`agt-migrate-dropped`), name and description are
- *   read-only (AS-7) and the save button (`agt-form-submit`, "บันทึกเป็น Smart+") POSTs the **full** 15-key
+ *   read-only (AS-7) and the save button (`agt-form-submit`, "บันทึกเป็น Smart+") POSTs the **full** 17-key
  *   config to `/:id/migrate`. A **duplicate of a manual row** (AS-6) is the same draft on the create path:
  *   `GET /<source>/migration` → `POST /ad-group-templates` + `duplicateOf`, so the copy is born Smart+.
  *
@@ -82,6 +82,23 @@
  * the API requires it, AS-3); only where the controls render does: the bid radio moves between the two always-open
  * sections (one `UFormField` name, one test id, rendered in one place at a time), `targetCpa` lives in the ad-group
  * block, and the ad-group budget inputs are replaced by a note under `cbo` unless an error points at them.
+ *
+ * **TASK-adgroup-targeting** (human request 2026-10-25, contract v3 → **v3.1**, 17 config keys):
+ * 1. **No campaign-name input.** The worker never types a campaign name — TikTok's own default is always used — so
+ *    the input (`agt-campaign-name`) and its validation are gone and `config.campaign.name` is always sent as
+ *    `null`. The campaign section says so in `agt-campaign-name-note`; a stored name therefore shows up as a
+ *    changed `campaign` key the first time an old template is saved.
+ * 2. **`targetingMode` + `spendingPower`** (both right after `gender`, as in `CONFIG_KEYS`): the audience section
+ *    starts with the mode radio (`agt-targeting-mode`, labels from `options.targetingMode`) and the sentence
+ *    `options.targetingModeHint[mode]` under it (`agt-targeting-mode-hint`), then renders the controls in TikTok's
+ *    own order — ที่ตั้ง · อายุ · เพศ · ภาษา · ความสนใจ · กำลังซื้อ (`agt-spending-power`, from
+ *    `options.spendingPower`). In `auto` the spending power is **disabled and held at `all`** (the API refuses
+ *    anything else with an issue at `config.spendingPower`, which the client schema mirrors), and อายุ / เพศ /
+ *    ความสนใจ carry the muted suffix `คำแนะนำ` because TikTok only treats them as a recommendation there.
+ *    `config.interests` gets its control back (`agt-form-interests`): the worker fills it in both modes now.
+ * 3. **Graceful degradation.** Everything in 2 hangs off `options.targetingMode` being served: without it the
+ *    radio, the hint, the spending power and the suffixes are not rendered and `configFromState()` leaves both
+ *    keys out of the body, so this form still creates and patches templates on an API that predates v3.1.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -198,9 +215,11 @@ interface MoneyState {
   currency: string
 }
 
-/** FEAT-061 — `config.campaign`; `budget` is only sent while `budgetStrategy === 'cbo'` */
+/**
+ * FEAT-061 — `config.campaign`; `budget` is only sent while `budgetStrategy === 'cbo'`.
+ * TASK-adgroup-targeting: no `name` any more — the form has no input for it and always sends `null`.
+ */
 interface CampaignState {
-  name: string
   budgetStrategy: string
   budget: MoneyState
   bidStrategy: string
@@ -216,6 +235,10 @@ interface ConfigState {
   locations: string[]
   ageGroups: string[]
   gender: string
+  /** TASK-adgroup-targeting — `auto` / `manual`; only sent while `/options` serves the list */
+  targetingMode: string
+  /** TASK-adgroup-targeting — `all` / `high`; held at `all` (and disabled) while the mode is `auto` */
+  spendingPower: string
   budget: MoneyState
   schedule: ScheduleState
   timezone: string
@@ -301,6 +324,14 @@ function moneyToInput(amount: number | null | undefined): string {
   return Number.isFinite(amount) ? (amount as number).toFixed(2) : ''
 }
 
+/**
+ * TASK-adgroup-targeting — the contract's own defaults for the two new keys (values, not labels): a row (or a
+ * migration draft) written before v3.1 reads as "automatic targeting, spending power unlimited", exactly as the
+ * API's view mapper fills it.
+ */
+const TARGETING_AUTO = 'auto'
+const SPENDING_ALL = 'all'
+
 /** the config part of the state, from a v3 config (system default / row) or a migration draft */
 function configStateFrom(config: FillableConfig): ConfigState {
   const isScheduled = config.schedule?.startTime !== 'now'
@@ -311,7 +342,6 @@ function configStateFrom(config: FillableConfig): ConfigState {
   return {
     adGroupNamePrefix: config.adGroupNamePrefix ?? '',
     campaign: {
-      name: campaign?.name ?? '',
       // a migration draft leaves it `null` → no radio selected until the admin picks one (spec "required")
       budgetStrategy: campaign?.budgetStrategy ?? '',
       budget: {
@@ -328,6 +358,9 @@ function configStateFrom(config: FillableConfig): ConfigState {
     locations: [...(config.locations ?? [])],
     ageGroups: [...(config.ageGroups ?? [])],
     gender: config.gender,
+    // TASK-adgroup-targeting — a row written before v3.1 carries neither key: read it as the contract's defaults
+    targetingMode: config.targetingMode ?? props.options.systemDefault?.targetingMode ?? TARGETING_AUTO,
+    spendingPower: config.spendingPower ?? props.options.systemDefault?.spendingPower ?? SPENDING_ALL,
     budget: {
       type: config.budget?.type ?? '',
       amount: moneyToInput(config.budget?.amount),
@@ -526,8 +559,8 @@ type SectionId = 'campaign' | 'adgroup' | 'placement' | 'audience' | 'budget' | 
 /**
  * The collapsible sections and the `config` keys each one owns. The Thai heading is the section's TikTok title.
  * FEAT-061: `campaign` + `targetCpa` live in the always-open campaign section (no badge, no toggle) and the
- * removed v2 keys took their controls with them — `placement` is the optimisation location alone, `audience`
- * lost `spendingPower` and `bidding` is the five advanced toggles only.
+ * removed v2 keys took their controls with them — `placement` is the optimisation location alone and `bidding` is
+ * the five advanced toggles only. TASK-adgroup-targeting gave `audience` the mode radio and `spendingPower` back.
  * `audiences` belongs to no section (pass-through, never edited → never a badge reason).
  */
 const SECTIONS = [
@@ -539,7 +572,8 @@ const SECTIONS = [
   {
     id: 'audience' as const,
     heading: 'การกำหนดเป้าหมายผู้ชม',
-    keys: ['locations', 'ageGroups', 'gender', 'interests', 'languages'] as const
+    // TASK-adgroup-targeting — `targetingMode` / `spendingPower` belong to this section's badge and summary too
+    keys: ['locations', 'ageGroups', 'gender', 'targetingMode', 'spendingPower', 'interests', 'languages'] as const
   },
   {
     id: 'budget' as const,
@@ -556,6 +590,8 @@ const SECTIONS = [
 /** FEAT-061 — the campaign section's title (always open, like `adgroup`) — TASK-smart-plus-publish: named by TikTok page */
 const CAMPAIGN_HEADING = 'หน้าแคมเปญ (แผนการโฆษณา)'
 const CAMPAIGN_CAPTION = 'ค่าในส่วนนี้ worker ตั้งบนหน้าแคมเปญของ TikTok — กลยุทธ์งบประมาณเป็นตัวกำหนดว่าหน้ากลุ่มโฆษณาจะมีช่องอะไร'
+/** TASK-adgroup-targeting — the input is gone; this one line says what happens to the campaign name instead */
+const CAMPAIGN_NAME_NOTE = 'ชื่อแผนการโฆษณา: ใช้ค่าเริ่มต้นของ TikTok (worker ไม่กรอกชื่อ)'
 const ADGROUP_HEADING = 'หน้ากลุ่มโฆษณา'
 const ADGROUP_CAPTION = 'ค่าในส่วนนี้และส่วนที่พับอยู่ด้านล่าง worker ตั้งบนหน้ากลุ่มโฆษณาของ TikTok'
 /** the words next to the controls that move between the two pages (survey 2026-10-21 · draft 1879661858900065) */
@@ -645,6 +681,37 @@ const showAdGroupBudget = computed(() =>
  */
 const placementOptions = computed(() => (props.options.placement ?? []).filter(item => item.value !== 'website'))
 
+// ── TASK-adgroup-targeting · targeting mode + spending power ─────────────────────────────────────────────────────────
+/**
+ * Does the API serve the v3.1 contract? Everything this task adds — the mode radio, its hint, the spending-power
+ * radio, the `คำแนะนำ` suffixes — and both keys in the body hang off this one list being there, so the form keeps
+ * working against an API that predates the contract (item 4 of the brief).
+ */
+const targetingSupported = computed(() => (props.options.targetingMode?.length ?? 0) > 0)
+const isAutoTargeting = computed(() => state.config.targetingMode === TARGETING_AUTO)
+/** the sentence `/options` serves for the selected mode (never written here) */
+const targetingModeHint = computed(() => {
+  const hint = props.options.targetingModeHint
+  if (!hint) return ''
+  return state.config.targetingMode === 'manual' ? hint.manual : hint.auto
+})
+/**
+ * In `auto` TikTok reads age / gender / interests as a *recommendation* only, so each of those labels carries this
+ * one muted word. Nothing is appended in `manual` (there every value really restricts the audience).
+ */
+const RECOMMENDATION_WORD = 'คำแนะนำ'
+const recommendationHint = computed(() =>
+  targetingSupported.value && isAutoTargeting.value ? RECOMMENDATION_WORD : ''
+)
+
+/**
+ * The spending power only exists in manual mode: `auto` keeps it disabled **and** forces it back to `all`, which is
+ * what the API requires (400 with an issue at `config.spendingPower` otherwise — mirrored in the schema below).
+ */
+watch(() => state.config.targetingMode, (mode) => {
+  if (mode === TARGETING_AUTO) state.config.spendingPower = SPENDING_ALL
+})
+
 // ── "Default" badges (live) ──────────────────────────────────────────────────────────────────────────────────────────
 /** the config the current state would send — the single source for the badges and for the POST/PATCH bodies */
 const currentConfig = computed(() => configFromState())
@@ -717,6 +784,8 @@ function someLabels(items: OptionItem[] | undefined, values: string[], max = 2):
 /** the words around the `/options` labels (the only Thai this feature adds) */
 const SUMMARY_TEXT = {
   languages: (n: number) => `${n} ภาษา`,
+  /** TASK-adgroup-targeting — the interests control is back, so the summary counts its tags like the languages' */
+  interests: (n: number) => `${n} ความสนใจ`,
   advancedDefault: 'ตามค่าเริ่มต้น',
   advancedSet: (n: number) => `ตั้งเอง ${n} รายการ`
 } as const
@@ -732,12 +801,16 @@ const sectionSummary = computed<Record<string, string | null>>(() => {
   return {
     placement: joinSummary([labelOf(props.options.placement, c.placement)]),
     audience: joinSummary([
+      // TASK-adgroup-targeting: the two new keys only speak up when they are not at the contract default
+      c.targetingMode === TARGETING_AUTO ? '' : labelOf(props.options.targetingMode, c.targetingMode),
       someLabels(props.options.locations, c.locations),
       c.ageGroups.length === 0
         ? props.options.ageGroupsUnlimitedLabel
         : someLabels(props.options.ageGroups, c.ageGroups, 3),
       labelOf(props.options.gender, c.gender),
-      c.languages.length === 0 ? '' : SUMMARY_TEXT.languages(c.languages.length)
+      c.languages.length === 0 ? '' : SUMMARY_TEXT.languages(c.languages.length),
+      c.interests.length === 0 ? '' : SUMMARY_TEXT.interests(c.interests.length),
+      c.spendingPower === SPENDING_ALL ? '' : labelOf(props.options.spendingPower, c.spendingPower)
     ]),
     budget: joinSummary([
       // TASK-smart-plus-publish: under `cbo` the ad-group page has no budget — say so instead of repeating a hidden value
@@ -897,7 +970,8 @@ const MSG = {
   campaignBudgetRequired: 'กรอกงบประมาณแผนการโฆษณา (CBO)',
   campaignBudgetType: 'budget.type ต้องเป็น daily หรือ lifetime',
   targetCpaRequired: 'กรอกค่าใช้จ่ายต่อผลลัพธ์เป้าหมาย',
-  campaignName: 'ชื่อแผนการโฆษณายาวเกิน 100 ตัว',
+  /** TASK-adgroup-targeting — the API's own sentence for the spendingPower-vs-mode rule (contract v3.1) */
+  spendingPowerAuto: 'กำลังซื้อ ตั้งได้เฉพาะการกำหนดเป้าหมายด้วยตนเอง',
   money: (label: string) => ({
     number: `${label}ต้องเป็นตัวเลข`,
     positive: `${label}ต้องมากกว่า 0`,
@@ -938,7 +1012,6 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
     config: z.object({
       adGroupNamePrefix: z.string().trim().max(100, 'Prefix must be at most 100 characters'),
       campaign: z.object({
-        name: z.string().trim().max(100, MSG.campaignName),
         budgetStrategy: z.string(),
         budget: z.object({
           type: z.string(),
@@ -952,6 +1025,9 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
       locations: z.array(z.string()).min(1, 'Select at least one location'),
       ageGroups: z.array(z.string()),
       gender: z.string().min(1, 'Gender is required'),
+      // TASK-adgroup-targeting — the pair rule is in the refinement below (path `config.spendingPower`)
+      targetingMode: z.string(),
+      spendingPower: z.string(),
       budget: z.object({
         type: z.string().min(1, 'Budget type is required'),
         amount: z.string().trim(),
@@ -1002,6 +1078,11 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
         const issue = moneyIssue(data.config.targetCpa, TARGET_CPA_MONEY, null, '')
         if (issue) ctx.addIssue({ code: 'custom', path, message: issue })
       }
+    }
+
+    // ── TASK-adgroup-targeting — spending power is a manual-mode control (the API's own rule, same message) ───
+    if (data.config.targetingMode === TARGETING_AUTO && data.config.spendingPower !== SPENDING_ALL) {
+      ctx.addIssue({ code: 'custom', path: ['config', 'spendingPower'], message: MSG.spendingPowerAuto })
     }
 
     // ── ad group budget amount — required, numeric, at most 2 decimals, >= the minimum of its currency ────────
@@ -1081,7 +1162,7 @@ const schema = computed(() => makeSchema(
 ))
 
 // ── body building ────────────────────────────────────────────────────────────────────────────────────────────────────
-/** the complete 15-key v3 `AdGroupConfig` the API expects, from the current state */
+/** the complete 17-key v3.1 `AdGroupConfig` the API expects, from the current state */
 function configFromState(): AdGroupConfig {
   const c = state.config
   const prefix = c.adGroupNamePrefix.trim()
@@ -1095,7 +1176,6 @@ function configFromState(): AdGroupConfig {
     : { mode: 'continuous', startTime }
 
   // FEAT-061 — a hidden campaign budget / targetCpa is sent as `null`, whatever the form still holds
-  const campaignName = c.campaign.name.trim()
   const campaignAmount = c.campaign.budget.amount.trim()
   const campaignBudget: AdGroupBudget | null = c.campaign.budgetStrategy === 'cbo'
     ? {
@@ -1105,7 +1185,8 @@ function configFromState(): AdGroupConfig {
       }
     : null
   const campaign: AdGroupCampaign = {
-    name: campaignName === '' ? null : campaignName,
+    // TASK-adgroup-targeting — always `null`: the worker never types a campaign name (TikTok's default is used)
+    name: null,
     budgetStrategy: c.campaign.budgetStrategy as AdGroupCampaign['budgetStrategy'],
     budget: campaignBudget,
     bidStrategy: c.campaign.bidStrategy as AdGroupCampaign['bidStrategy']
@@ -1124,6 +1205,14 @@ function configFromState(): AdGroupConfig {
     locations: [...c.locations],
     ageGroups: [...c.ageGroups] as AdGroupConfig['ageGroups'],
     gender: c.gender as AdGroupConfig['gender'],
+    // TASK-adgroup-targeting — both keys are omitted entirely while `/options` does not serve the mode list, so a
+    // POST / PATCH against an API that predates v3.1 carries exactly the 15 keys it knows (item 4 of the brief)
+    ...(targetingSupported.value
+      ? {
+          targetingMode: c.targetingMode as AdGroupConfig['targetingMode'],
+          spendingPower: c.spendingPower as AdGroupConfig['spendingPower']
+        }
+      : {}),
     budget: {
       type: c.budget.type as AdGroupConfig['budget']['type'],
       amount: Number(c.budget.amount.trim()),
@@ -1161,10 +1250,14 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return true
 }
 
-/** the 15 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-061 api-contract §1.1) */
+/**
+ * the 17 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-061 api-contract §1.1 — TASK-adgroup-targeting
+ * inserted `targetingMode` / `spendingPower` right after `gender`)
+ */
 const CONFIG_KEYS = [
-  'adGroupNamePrefix', 'campaign', 'targetCpa', 'placement', 'locations', 'ageGroups', 'gender', 'budget',
-  'schedule', 'timezone', 'dayparting', 'audiences', 'interests', 'languages', 'advancedPlacement'
+  'adGroupNamePrefix', 'campaign', 'targetCpa', 'placement', 'locations', 'ageGroups', 'gender', 'targetingMode',
+  'spendingPower', 'budget', 'schedule', 'timezone', 'dayparting', 'audiences', 'interests', 'languages',
+  'advancedPlacement'
 ] as const satisfies readonly (keyof AdGroupConfig)[]
 
 /** only the keys whose value really changed; each changed `config` key is sent whole (A3) */
@@ -1177,6 +1270,8 @@ function patchBodyFrom(original: AdGroupTemplate, name: string, description: str
   const changed: Partial<AdGroupConfig> = {}
   let hasConfigChange = false
   for (const key of CONFIG_KEYS) {
+    // TASK-adgroup-targeting — a key this form does not send (no v3.1 `/options`) is never part of the diff
+    if (next[key] === undefined) continue
     if (!deepEqual(next[key], original.config?.[key])) {
       // each key carries its complete value — the API replaces it wholesale
       Object.assign(changed, { [key]: next[key] })
@@ -1198,7 +1293,7 @@ const visibleFieldNames = computed(() => {
   const names = [
     'name', 'description',
     'config.adGroupNamePrefix',
-    'config.campaign.name', 'config.campaign.budgetStrategy', 'config.campaign.bidStrategy',
+    'config.campaign.budgetStrategy', 'config.campaign.bidStrategy',
     'config.placement',
     'config.locations', 'config.ageGroups', 'config.gender',
     'config.budget.type', 'config.budget.amount', 'config.budget.currency',
@@ -1208,6 +1303,8 @@ const visibleFieldNames = computed(() => {
     ...ADVANCED_KEYS.map(key => `config.advancedPlacement.${key}`)
   ]
   // rendered with `v-if`: while it does not exist, its issue belongs in the form alert (Lead ruling 2026-09-25)
+  // TASK-adgroup-targeting — both controls only exist while `/options` serves the mode list
+  if (targetingSupported.value) names.push('config.targetingMode', 'config.spendingPower')
   if (showCampaignBudget.value) names.push('config.campaign.budget.type', 'config.campaign.budget.amount')
   if (showTargetCpa.value) names.push('config.targetCpa')
   if (showStartTime.value) names.push('config.schedule.startTime')
@@ -1291,7 +1388,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   const description = event.data.description === '' ? null : event.data.description
   const original = props.template
 
-  // FEAT-061 — migrate: the **full** 15-key config replaces the stored manual one; name/description are not sent
+  // FEAT-061 — migrate: the **full** 17-key config replaces the stored manual one; name/description are not sent
   if (isMigrate.value && original) {
     const body: MigrateBody = { config: configFromState() }
     submitting.value = true
@@ -1339,7 +1436,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     return
   }
 
-  // create always sends the complete 15-key config and never `catalogVersion` (the API stamps it)
+  // create always sends the complete 17-key config and never `catalogVersion` (the API stamps it)
   const body: CreateAdGroupTemplateBody = { name, description, config: configFromState() }
   // FEAT-057 — one single POST for a duplicate too; `duplicateOf` is the only extra key (api-contract §5)
   const duplicate = isDuplicate.value
@@ -1437,20 +1534,10 @@ const submitLabel = computed(() => {
               </p>
             </div>
 
-            <UFormField
-              label="Campaign name"
-              name="config.campaign.name"
-              hint="Optional"
-              :error="fieldError('config.campaign.name')"
-            >
-              <UInput
-                v-model="state.config.campaign.name"
-                placeholder="ให้ TikTok ตั้งชื่อ"
-                class="w-full"
-                :disabled="submitting"
-                data-testid="agt-campaign-name"
-              />
-            </UFormField>
+            <!-- TASK-adgroup-targeting — no name input at all: the worker always leaves TikTok's default name -->
+            <p class="text-sm text-muted xl:col-span-2" data-testid="agt-campaign-name-note">
+              {{ CAMPAIGN_NAME_NOTE }}
+            </p>
 
             <UFormField
               label="Budget strategy"
@@ -1739,6 +1826,30 @@ const submitLabel = computed(() => {
               class="mt-4 grid gap-4 xl:grid-cols-2"
               data-testid="agt-sec-audience"
             >
+              <!--
+                TASK-adgroup-targeting — the mode TikTok's audience section runs in, and the sentence `/options`
+                serves for it. Hidden (with the spending power below) when the API does not serve the list.
+              -->
+              <UFormField
+                v-if="targetingSupported"
+                label="Targeting mode"
+                name="config.targetingMode"
+                required
+                class="xl:col-span-2"
+                :error="fieldError('config.targetingMode')"
+              >
+                <URadioGroup
+                  v-model="state.config.targetingMode"
+                  :items="options.targetingMode ?? []"
+                  value-key="value"
+                  :disabled="submitting"
+                  data-testid="agt-targeting-mode"
+                />
+                <template v-if="targetingModeHint" #help>
+                  <span data-testid="agt-targeting-mode-hint">{{ targetingModeHint }}</span>
+                </template>
+              </UFormField>
+
               <UFormField
                 label="Locations"
                 name="config.locations"
@@ -1758,12 +1869,16 @@ const submitLabel = computed(() => {
               </UFormField>
 
               <!-- a horizontal row of seven checkboxes → full width on a wide screen -->
+              <!-- TASK-adgroup-targeting — in `auto` TikTok reads age / gender / interests as a recommendation -->
               <UFormField
                 label="Age"
                 name="config.ageGroups"
                 class="xl:col-span-2"
                 :error="serverErrors['config.ageGroups']"
               >
+                <template v-if="recommendationHint" #hint>
+                  <span data-testid="agt-hint-ages">{{ recommendationHint }}</span>
+                </template>
                 <UCheckboxGroup
                   :model-value="ageSelection"
                   :items="ageItems"
@@ -1781,6 +1896,9 @@ const submitLabel = computed(() => {
                 required
                 :error="serverErrors['config.gender']"
               >
+                <template v-if="recommendationHint" #hint>
+                  <span data-testid="agt-hint-gender">{{ recommendationHint }}</span>
+                </template>
                 <URadioGroup
                   v-model="state.config.gender"
                   :items="options.gender"
@@ -1806,6 +1924,52 @@ const submitLabel = computed(() => {
                   :disabled="submitting"
                   data-testid="agt-form-languages"
                   @update:model-value="(v: string[]) => onTagsUpdate('config.languages', v)"
+                />
+              </UFormField>
+
+              <!--
+                TASK-adgroup-targeting — the interests control is back (the worker fills "ความสนใจและพฤติกรรม" in
+                both modes now). The test id lands on the inner `<input data-slot="input">` (UInputTags has
+                `inheritAttrs: false`); the tags are `[data-slot="item"]` of its parent `[data-slot="root"]`.
+              -->
+              <UFormField
+                label="Interests & behaviors"
+                name="config.interests"
+                hint="Optional"
+                :help="state.config.interests.length === 0 ? options.unlimitedLabel : undefined"
+                :error="fieldError('config.interests')"
+              >
+                <template v-if="recommendationHint" #hint="{ hint }">
+                  <span data-testid="agt-hint-interests">{{ hint }} · {{ recommendationHint }}</span>
+                </template>
+                <UInputTags
+                  :model-value="state.config.interests"
+                  :duplicate="true"
+                  placeholder="Add a category, press Enter"
+                  class="w-full"
+                  :disabled="submitting"
+                  data-testid="agt-form-interests"
+                  @update:model-value="(v: string[]) => onTagsUpdate('config.interests', v)"
+                />
+              </UFormField>
+
+              <!--
+                TASK-adgroup-targeting — TikTok's "กำลังซื้อ" only exists in manual mode: under `auto` the radio is
+                disabled and the watcher above keeps the value at the contract's `all`.
+              -->
+              <UFormField
+                v-if="targetingSupported"
+                label="Spending power"
+                name="config.spendingPower"
+                :error="fieldError('config.spendingPower')"
+              >
+                <URadioGroup
+                  v-model="state.config.spendingPower"
+                  :items="options.spendingPower ?? []"
+                  value-key="value"
+                  orientation="horizontal"
+                  :disabled="submitting || isAutoTargeting"
+                  data-testid="agt-spending-power"
                 />
               </UFormField>
             </div>

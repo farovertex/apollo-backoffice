@@ -13,6 +13,15 @@
  * The BO hard-codes **no** enum label: every human-readable string for a config value comes from
  * `GET /ad-group-templates/options` (`OptionItem { value, label }`), which is fetched once per page
  * lifetime and reused by the modals.
+ *
+ * **TASK-adgroup-targeting** (human request 2026-10-25, contract v3 → **v3.1**): `config` goes from 15 to
+ * **17 keys** — `targetingMode` and `spendingPower` are inserted right after `gender` and decide which mode the
+ * worker puts TikTok's "การกำหนดเป้าหมายผู้ชม" section in. `campaign.name` stays in the shape (nullable, so old
+ * templates keep validating) but the worker never types it: the campaign always gets TikTok's default name, so the
+ * BO has no name input any more and always sends `null`.
+ * Both new keys and their three `/options` entries (`targetingMode`, `spendingPower`, `targetingModeHint`) are
+ * **optional in these types** so a BO built against this contract still renders — and still saves — against an
+ * API that predates it (then the two controls are hidden and the keys are left out of the body).
  */
 
 /** One entry of an option list served by `GET /ad-group-templates/options`. */
@@ -34,6 +43,19 @@ export type Dayparting = 'allDay'
 export type BudgetStrategy = 'cbo' | 'adGroup'
 /** FEAT-061 — `config.campaign.bidStrategy`; `costCap` is the only one that uses `config.targetCpa` */
 export type BidStrategy = 'maxResults' | 'costCap'
+/** TASK-adgroup-targeting — `config.targetingMode`: which mode the worker puts TikTok's audience section in */
+export type TargetingMode = 'auto' | 'manual'
+/** TASK-adgroup-targeting — `config.spendingPower`: TikTok's "กำลังซื้อ" chip, **manual mode only** */
+export type SpendingPower = 'all' | 'high'
+
+/**
+ * TASK-adgroup-targeting — `options.targetingModeHint`: what each mode does to the other audience values, served
+ * by the API per mode (the BO hard-codes none of it, it only picks the entry of the selected mode).
+ */
+export interface TargetingModeHint {
+  auto: string
+  manual: string
+}
 
 /**
  * FEAT-061 — `config.campaign`: the campaign-page choices of the Smart+ wizard, stored inside the ad-group
@@ -41,6 +63,11 @@ export type BidStrategy = 'maxResults' | 'costCap'
  * `null` for `adGroup`; `name` is trimmed and `''` is sent as `null` (= let TikTok name the campaign).
  */
 export interface AdGroupCampaign {
+  /**
+   * TASK-adgroup-targeting — **ignored by the worker**: the campaign always keeps TikTok's own default name, so
+   * the BO has no input for it and always sends `null`. The key stays in the shape because stored templates
+   * (and therefore order snapshots) still carry the name they were saved with.
+   */
   name: string | null
   budgetStrategy: BudgetStrategy
   budget: AdGroupBudget | null
@@ -83,8 +110,8 @@ export interface AdGroupAdvancedPlacement {
 export type AdvancedPlacementKey = keyof AdGroupAdvancedPlacement
 
 /**
- * The 15 config keys of an ad group template **v3** (strict on the API side, in `CONFIG_KEYS` order —
- * FEAT-061 api-contract §1.1). A **manual** row (`kind: 'manual'`) still carries its old 13/19 keys as stored,
+ * The 17 config keys of an ad group template **v3.1** (strict on the API side, in `CONFIG_KEYS` order —
+ * FEAT-061 api-contract §1.1 + TASK-adgroup-targeting). A **manual** row (`kind: 'manual'`) still carries its old 13/19 keys as stored,
  * so a reader of an arbitrary row treats this type as the v3 shape only (see `AdGroupConfigSnapshot` of
  * `campaign-orders.ts` for the permissive reader).
  */
@@ -105,6 +132,18 @@ export interface AdGroupConfig {
   /** empty array = unlimited (`options.ageGroupsUnlimitedLabel`) */
   ageGroups: AgeGroup[]
   gender: Gender
+  /**
+   * TASK-adgroup-targeting — `auto` (TikTok's "การกำหนดเป้าหมายอัตโนมัติ": age / gender / interests are only a
+   * *recommendation*, languages still restrict) or `manual` (every value restricts the audience and the rebate
+   * offer is lost). Optional in this type only so a response of an API that predates v3.1 still type-checks;
+   * such a row reads as `auto` in the form.
+   */
+  targetingMode?: TargetingMode
+  /**
+   * TASK-adgroup-targeting — TikTok's "กำลังซื้อ" chip of the detailed-targeting panel. **Manual only**: with
+   * `targetingMode: 'auto'` it must stay `'all'` (the API answers 400 with an issue at `config.spendingPower`).
+   */
+  spendingPower?: SpendingPower
   /** the **ad group** budget (`options.minBudget`); the campaign budget is `campaign.budget` */
   budget: AdGroupBudget
   schedule: AdGroupSchedule
@@ -190,9 +229,10 @@ export interface AdGroupListLimits {
 }
 
 /**
- * `GET /ad-group-templates/options` 200 body — the **14** label lists plus the BO helpers
+ * `GET /ad-group-templates/options` 200 body — the **16** label lists plus the BO helpers
  * (`ageGroupsUnlimitedLabel`, `unlimitedLabel`, `minBudget`, `campaignMinBudget`, `systemDefault`,
- * `catalogVersion`, `listLimits`) — FEAT-061 api-contract §2.0, 21 top-level keys.
+ * `catalogVersion`, `listLimits`, `targetingModeHint`) — FEAT-061 api-contract §2.0 + TASK-adgroup-targeting,
+ * 24 top-level keys.
  */
 export interface AdGroupTemplateOptions {
   placement: OptionItem[]
@@ -213,6 +253,16 @@ export interface AdGroupTemplateOptions {
   budgetStrategy: OptionItem[]
   /** FEAT-061 — `maxResults` / `costCap` labels of `config.campaign.bidStrategy` */
   bidStrategy: OptionItem[]
+  /**
+   * TASK-adgroup-targeting — `auto` / `manual` labels of `config.targetingMode`. **Optional**: an API that
+   * predates v3.1 serves no list, and then the BO hides the mode radio *and* the spending-power control and
+   * leaves both keys out of the body (so the form keeps working against the old contract).
+   */
+  targetingMode?: OptionItem[]
+  /** TASK-adgroup-targeting — `all` / `high` labels of `config.spendingPower` (optional, same reason) */
+  spendingPower?: OptionItem[]
+  /** TASK-adgroup-targeting — the sentence shown under the mode radio, per mode (optional, same reason) */
+  targetingModeHint?: TargetingModeHint
   /** shown when no age group is selected */
   ageGroupsUnlimitedLabel: string
   /** shown when a free-text list (Languages) is empty */
@@ -233,7 +283,7 @@ export interface AdGroupTemplateOptions {
   listLimits: AdGroupListLimits
 }
 
-/** `POST /ad-group-templates` body — `config` is complete (all 15 keys), never `catalogVersion`. */
+/** `POST /ad-group-templates` body — `config` is complete (all 17 keys of v3.1), never `catalogVersion`. */
 export interface CreateAdGroupTemplateBody {
   name: string
   description?: string | null
@@ -303,7 +353,7 @@ export interface MigrationResponse {
 }
 
 /**
- * `POST /ad-group-templates/:id/migrate` body (api-contract §2.2) — the **complete** 15-key v3 config,
+ * `POST /ad-group-templates/:id/migrate` body (api-contract §2.2) — the **complete** 17-key v3.1 config,
  * strict: no `name`, no `description`, no `catalogVersion`. 200 answers the template view with
  * `kind: 'smartPlus'`.
  */
