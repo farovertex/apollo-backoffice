@@ -31,6 +31,25 @@ export function formatPercent(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${DEC.format(value)}%` : REPORT_DASH
 }
 
+/**
+ * TASK-utm-ratios — the two ratio columns of `/reports/utm`, computed the way to-the-mars does it
+ * (`web/lib/utm-report.ts` → `utmMetrics`: `depPerBudget = deposit_amount / spend`, `depRegPct = depositors /
+ * registers × 100`), shown here as percent points for `formatPercent`. "Budget" is the row's `spend`, "FTD" (first-
+ * time depositor) is `depositors`. `null` when the divisor is null or 0 — printed `—`, never `0.00%` or `∞`.
+ */
+
+/** `depositAmount / spend × 100` — DEP/BUD; `null` when there is no spend (null) or spend is 0. */
+export function depPerBudgetPct(depositAmount: number, spend: number | null): number | null {
+  if (spend === null || !Number.isFinite(spend) || spend === 0 || !Number.isFinite(depositAmount)) return null
+  return (depositAmount / spend) * 100
+}
+
+/** `depositors / registers × 100` — FTD CONVERSION; `null` when nobody registered. */
+export function ftdConversionPct(depositors: number, registers: number): number | null {
+  if (!Number.isFinite(registers) || registers === 0 || !Number.isFinite(depositors)) return null
+  return (depositors / registers) * 100
+}
+
 /** `HH:mm` of the browser's timezone; `—` for null / an unparsable date. */
 export function formatClock(iso: string | null | undefined): string {
   if (!iso) return REPORT_DASH

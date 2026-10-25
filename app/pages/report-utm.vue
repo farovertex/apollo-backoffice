@@ -15,7 +15,14 @@
  * default of 500 applies and the footer says "showing first M" when the API counted more (AS-7).
  *
  * Nothing is computed here: `winLose`, `costPerDeposit`, `spend`, `spendCurrency` and the whole `tfoot` come
- * from the response (`totals` is the API's, never a sum of the visible rows).
+ * from the response (`totals` is the API's, never a sum of the visible rows). The one exception, since
+ * TASK-utm-ratios: the two trailing ratio columns **DEP/BUD** (`depositAmount / spend` %) and **FTD CONVERSION**
+ * (`depositors / registers` %) are derived in the browser from the API's own numbers — row from the row, footer
+ * from `totals` — exactly as to-the-mars does in `web/lib/utm-report.ts` (`utmMetrics`), see
+ * `depPerBudgetPct` / `ftdConversionPct` in `app/utils/reports.ts`. The CSV is untouched (12 fields).
+ *
+ * TASK-utm-ratios also dropped the `Reports | Summary | UTM` tab bar (`ReportsTabs`, FEAT-040 U1/AS-4): the
+ * sidebar already carries the three pages.
  *
  * **Refresh** posts once to `/utm/fetch`. Feature B (the `utmFetch` job) does not exist yet, so the API
  * answers 501 today — the page already implements the final contract: 202 → toast + re-read `GET
@@ -353,8 +360,20 @@ const HEADERS: { label: string, numeric: boolean }[] = [
   { label: 'AMOUNT WITHDRAWL', numeric: true },
   { label: 'WIN/LOSE', numeric: true },
   { label: 'SPEND', numeric: true },
-  { label: 'COST PER DEPOSIT', numeric: true }
+  { label: 'COST PER DEPOSIT', numeric: true },
+  { label: 'DEP/BUD', numeric: true },
+  { label: 'FTD CONVERSION', numeric: true }
 ]
+
+/** the footer ratios — from the API's `totals`, same formulas as a row (to-the-mars `utmMetrics(totals)`) */
+const totalsDepPerBudget = computed(() => {
+  const t = report.value?.totals
+  return t ? depPerBudgetPct(t.depositAmount, t.spend) : null
+})
+const totalsFtdConversion = computed(() => {
+  const t = report.value?.totals
+  return t ? ftdConversionPct(t.depositors, t.registers) : null
+})
 
 /** `<currency> · <n> ads` — what the spend of a row is made of */
 function spendTitle(spendCurrency: string | null, adCount: number): string {
@@ -398,8 +417,6 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
         <p class="text-sm text-muted" data-testid="ru-interval">
           {{ intervalText }}
         </p>
-
-        <ReportsTabs />
 
         <UAlert
           v-if="forbidden"
@@ -614,6 +631,20 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                   >
                     {{ formatDecimal(row.costPerDeposit) }}
                   </td>
+                  <td
+                    class="px-3 py-2 text-right tabular-nums"
+                    data-testid="ru-depbud"
+                    :data-null="depPerBudgetPct(row.depositAmount, row.spend) === null ? 'true' : 'false'"
+                  >
+                    {{ formatPercent(depPerBudgetPct(row.depositAmount, row.spend)) }}
+                  </td>
+                  <td
+                    class="px-3 py-2 text-right tabular-nums"
+                    data-testid="ru-ftdconv"
+                    :data-null="ftdConversionPct(row.depositors, row.registers) === null ? 'true' : 'false'"
+                  >
+                    {{ formatPercent(ftdConversionPct(row.depositors, row.registers)) }}
+                  </td>
                 </tr>
               </tbody>
               <tfoot>
@@ -649,6 +680,12 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                   </td>
                   <td class="px-3 py-2 text-right tabular-nums">
                     {{ formatDecimal(report.totals.costPerDeposit) }}
+                  </td>
+                  <td class="px-3 py-2 text-right tabular-nums" data-testid="ru-foot-depbud">
+                    {{ formatPercent(totalsDepPerBudget) }}
+                  </td>
+                  <td class="px-3 py-2 text-right tabular-nums" data-testid="ru-foot-ftdconv">
+                    {{ formatPercent(totalsFtdConversion) }}
                   </td>
                 </tr>
               </tfoot>
