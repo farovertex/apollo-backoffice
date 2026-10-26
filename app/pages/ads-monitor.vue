@@ -90,8 +90,10 @@ const STATUS_ITEMS: { label: string, value: MonitorStatusFilter }[] = [
   { label: 'ไม่ส่ง', value: 'notDelivering' },
   { label: 'หยุดชั่วคราว', value: 'paused' },
   { label: 'ไม่ผ่าน/ถูกลงโทษ', value: 'rejected' },
-  // FEAT-064 — banned advertisers stay visible until the next Bangkok midnight (spec A5)
+  // FEAT-064 — banned advertisers are listed whenever they have kpi data in the selected range (FEAT-068 §1)
   { label: 'ถูกระงับ', value: 'banned' },
+  // FEAT-068 — a row whose `missingSince` is set (gone from TikTok); same visibility rule as every other row
+  { label: 'ไม่พบบน TikTok แล้ว', value: 'missing' },
   { label: 'อื่น ๆ', value: 'other' },
   // TASK-campaign-delete-ui — the API's new top-priority key; filterable like the other five
   { label: 'ลบแล้ว', value: 'deleted' }

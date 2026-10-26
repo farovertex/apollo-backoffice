@@ -27,9 +27,11 @@ export type MonitorLevel = 'campaign' | 'adGroup' | 'ad'
  * TASK-campaign-delete-ui — `deleted` is the API's **top-priority** key (above `rejected`): every row whose
  * `deletedAt` is set reads `deleted`, because deleting a campaign deletes its groups and ads too.
  * FEAT-064 — `banned` ranks right after `deleted` (an advertiser whose `suspendedReason === 'banned'`): a row
- * stays visible in every range until the next Bangkok midnight (contract §2/§3), rendered as a red badge.
+ * is listed whenever it has kpi snapshot data in the selected range (FEAT-068 §1), rendered as a red badge.
+ * FEAT-068 — `missing` ranks right after `banned` (the row's `missingSince` is set, i.e. it is gone from
+ * TikTok): a row is listed whenever it has kpi snapshot data in the selected range, like every other row.
  */
-export type MonitorStatusKey = 'deleted' | 'banned' | 'delivering' | 'notDelivering' | 'paused' | 'rejected' | 'other'
+export type MonitorStatusKey = 'deleted' | 'banned' | 'missing' | 'delivering' | 'notDelivering' | 'paused' | 'rejected' | 'other'
 
 /** `status` query value — the six keys plus `all` (default). */
 export type MonitorStatusFilter = 'all' | MonitorStatusKey

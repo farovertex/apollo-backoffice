@@ -237,6 +237,7 @@ export function monitorStatusLabel(key: MonitorStatusKey, primary?: string | nul
   switch (key) {
     case 'deleted': return 'ลบแล้ว'
     case 'banned': return 'ถูกระงับ'
+    case 'missing': return 'ไม่พบบน TikTok แล้ว'
     case 'delivering': return 'ใช้งานอยู่'
     case 'notDelivering': return 'ไม่ส่ง'
     case 'paused': return 'หยุดชั่วคราว'
@@ -250,6 +251,7 @@ export function monitorStatusDot(key: MonitorStatusKey, primary?: string | null)
   switch (key) {
     case 'deleted': return 'bg-muted'
     case 'banned': return 'bg-error'
+    case 'missing': return 'bg-muted'
     case 'delivering': return 'bg-success'
     case 'notDelivering': return 'bg-warning'
     case 'paused': return 'bg-muted'
@@ -263,6 +265,7 @@ export function monitorStatusText(key: MonitorStatusKey): string {
   switch (key) {
     case 'deleted': return 'text-muted'
     case 'banned': return 'text-error'
+    case 'missing': return 'text-muted'
     case 'delivering': return 'text-success'
     case 'rejected': return 'text-error'
     case 'notDelivering': return 'text-warning'
