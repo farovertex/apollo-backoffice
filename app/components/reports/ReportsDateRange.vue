@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * FEAT-065 — the **one** date-range picker of every report page (spec "UI behaviour → The shared control",
- * api-contract.md §6.3). One trigger button opens a popover with the four shortcuts + `กำหนดเอง`, the two
+ * api-contract.md §6.3). One trigger button opens a popover with the five shortcuts + `กำหนดเอง`, the two
  * native `type=date` inputs and a range calendar bound to them.
  *
  * Fully **controlled**: the page owns the URL (and its own `setQuery` mechanics), this component owns
@@ -10,7 +10,7 @@
  * button, a shared link or a page-side reset is reflected immediately.
  *
  * The `prefix` makes the test ids per page (`rp` / `rs` / `rb` / `ru` / `am`): `<p>-range`,
- * `<p>-range-trigger`, `<p>-range-panel`, `<p>-range-<key>` (×5), `<p>-from`, `<p>-to`,
+ * `<p>-range-trigger`, `<p>-range-panel`, `<p>-range-<key>` (×6), `<p>-from`, `<p>-to`,
  * `<p>-range-invalid`. The two inputs are the deterministic surface for specs (spec A1); the `UCalendar` is
  * a convenience bound to the same values (pattern: `app/components/home/HomeDateRangePicker.vue`, demo code
  * that is not reused).

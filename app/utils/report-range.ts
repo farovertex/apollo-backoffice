@@ -4,8 +4,8 @@
  * `AdSlideover.vue` and the five report pages — `/reports`, `/reports/summary`, `/reports/banned`,
  * `/reports/utm`, `/ads-monitor`. No page keeps a second copy of any rule or text (spec "UI behaviour").
  *
- * The vocabulary and the validation mirror the API (`src/kpi/range-query.ts`, contract §1/§2): the four
- * shortcuts are resolved **by the API** in `KPI_TIMEZONE` (the BO never computes "today" for a shortcut,
+ * The vocabulary and the validation mirror the API (`src/kpi/range-query.ts`, contract §1/§2): the five
+ * shortcuts (FEAT-069 added `30d`) are resolved **by the API** in `KPI_TIMEZONE` (the BO never computes "today" for a shortcut,
  * spec A5), and a `custom` pair is checked here exactly as the API's `superRefine` does, so an invalid pair
  * never leaves the browser (the page returns early instead of collecting a 400).
  *
@@ -16,13 +16,14 @@
 import type { ReportRange, ReportRangeKey, ReportRangeState } from '#shared/types/reports'
 
 /** Shortcut order of the picker (= `RANGE_KEYS` of the API, contract §1). */
-export const RANGE_KEYS: ReportRangeKey[] = ['today', 'yesterday', '7d', 'all']
+export const RANGE_KEYS: ReportRangeKey[] = ['today', 'yesterday', '7d', '30d', 'all']
 
-/** Labels of the five keys — the only place they are written (contract §6.2). */
+/** Labels of the six keys — the only place they are written (contract §6.2). */
 export const RANGE_LABEL: Record<ReportRange, string> = {
   'today': 'วันนี้',
   'yesterday': 'เมื่อวาน',
   '7d': '7 วัน',
+  '30d': '30 วัน',
   'all': 'ทั้งหมด',
   'custom': 'กำหนดเอง'
 }
