@@ -43,6 +43,13 @@
  * dropdown in one `setQuery` each way: choosing "ถูกระงับ" while the switch is on also turns it off
  * (`status=banned&hideBanned=false`, one request); turning the switch on while `status=banned` also resets the
  * status to "ทั้งหมด" — so the BO never sends `status=banned&hideBanned=true` (an always-empty pair).
+ *
+ * FEAT-067 (api-contract.md §4) — a second collapsible column, "UTM" (`AdsMonitorUtmCell`): `utmCollapsed` is
+ * a page-level ref mirroring `nameCollapsed` exactly (its own `localStorage` key, read in `onMounted`,
+ * independent of `nameCollapsed`) and is **not** part of `queryKey` / the request / `hasFilter` /
+ * `clearFilters` — it only drives `AdsMonitorTable`'s rendering. The table also receives the page's
+ * `rangeState` so its UTM cells can build `/reports/utm` links carrying the monitor's current range (spec
+ * A5); no new request, no URL change.
  */
 import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
@@ -347,6 +354,7 @@ watch(accountId, () => {
 
 onMounted(() => {
   nameCollapsed.value = readNameCollapsed()
+  utmCollapsed.value = readUtmCollapsed()
   void load()
   void loadAccounts()
   void loadAdvertisers()
@@ -629,6 +637,28 @@ function setNameCollapsed(value: boolean) {
   }
 }
 
+// ── FEAT-067 · collapsible UTM column (spec "UI behaviour" → Header, A6) ───────────────────────────────────────────
+// Same pattern as `nameCollapsed` above, its own key, independent ref.
+const UTM_COLLAPSED_KEY = 'apollo.adsMonitor.utmCollapsed'
+const utmCollapsed = ref(false)
+
+function readUtmCollapsed(): boolean {
+  try {
+    return localStorage.getItem(UTM_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function setUtmCollapsed(value: boolean) {
+  utmCollapsed.value = value
+  try {
+    localStorage.setItem(UTM_COLLAPSED_KEY, value ? '1' : '0')
+  } catch {
+    // blocked storage — the toggle still works for the session (contract §4), nothing is logged
+  }
+}
+
 // ── states ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const total = computed(() => data.value?.total ?? 0)
 const unfilteredTotal = computed(() => data.value?.unfilteredTotal ?? 0)
@@ -895,12 +925,15 @@ const intervalText = computed(() => {
               :totals="data.totals"
               :pending="pending"
               :name-collapsed="nameCollapsed"
+              :utm-collapsed="utmCollapsed"
+              :range="rangeState"
               :campaign-id="campaignId"
               @toggle="toggle"
               @show-covers="showCovers"
               @delete="askDelete"
               @budget="askBudget"
               @update:name-collapsed="setNameCollapsed"
+              @update:utm-collapsed="setUtmCollapsed"
               @filter-campaign="onFilterCampaign"
             />
 

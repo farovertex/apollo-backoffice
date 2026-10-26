@@ -41,9 +41,15 @@
  * `bg-elevated` (opaque, not `/50`) on both the row and each `th` keeps rows from showing through underneath;
  * `z-10` keeps it above `USwitch` / badges. `am-total` is not sticky (not required) — reachable by scrolling
  * the same box to the end.
+ *
+ * FEAT-067 — a collapsible "UTM" column (`AdsMonitorUtmCell`, spec "UI behaviour" → Cell / contract §4) is
+ * inserted right after `name` on the ad-group / ad tabs and right after `cover` on the campaign tab; nothing
+ * else moves. Its own `utmCollapsed` / `am-utm-collapse` mirror `nameCollapsed` / `am-name-collapse` exactly
+ * but are an **independent** page-level ref — collapsing one never affects the other. The cell needs the
+ * monitor's current range (`range` prop) to build its `/reports/utm` links.
  */
 import type { MonitorLevel, MonitorRow, ToggleTarget } from '#shared/types/ads-monitor'
-import type { KpiMetrics } from '#shared/types/reports'
+import type { KpiMetrics, ReportRangeState } from '#shared/types/reports'
 
 const props = defineProps<{
   level: MonitorLevel
@@ -52,6 +58,10 @@ const props = defineProps<{
   pending?: boolean
   /** FEAT-064 — page-level state, shared by all three tabs, persisted by the page in `localStorage`. */
   nameCollapsed?: boolean
+  /** FEAT-067 — same pattern as `nameCollapsed`, independent of it. */
+  utmCollapsed?: boolean
+  /** FEAT-067 — the monitor's current range (`rangeState`); the UTM cell's links always carry it (spec A5). */
+  range: ReportRangeState
   /** FEAT-064 — the campaign id currently in the URL (`?campaignId=`), drives `am-row-filter`'s pressed state */
   campaignId?: string
 }>()
@@ -65,6 +75,8 @@ const emit = defineEmits<{
   'budget': [row: MonitorRow]
   /** FEAT-064 — the `am-name-collapse` header button toggled */
   'update:name-collapsed': [value: boolean]
+  /** FEAT-067 — the `am-utm-collapse` header button toggled */
+  'update:utm-collapsed': [value: boolean]
   /** FEAT-064 — a row's `am-row-filter` was pressed; the page decides whether that narrows or clears (contract §5) */
   'filter-campaign': [campaignId: string]
 }>()
@@ -102,12 +114,15 @@ const METRIC_COLUMNS: Column[] = [
 const HEAD: Column[] = [
   { key: 'switch', label: 'On/off', align: 'left' },
   { key: 'name', label: 'ชื่อ', align: 'left' },
+  // FEAT-067 — right after `name` on the ad-group / ad tabs (spec "UI behaviour" → Column placement)
+  { key: 'utm', label: 'UTM', align: 'left' },
   { key: 'status', label: 'สถานะ', align: 'left' }
 ]
 
 /**
- * `HEAD` is `[switch, name, status]`; the cover column is spliced in right after `name` (index 1) so the
- * order stays switch → name → รูปโฆษณา → status, exactly as the spec lists it.
+ * `HEAD` is `[switch, name, utm, status]`; the cover column is spliced in right after `name` (index 2, before
+ * `utm`) so the order stays switch → name → รูปโฆษณา → UTM → status, exactly as the spec lists it (FEAT-067 —
+ * `utm` right after `cover` on the campaign tab, not after `name` like the other two tabs).
  */
 const CAMPAIGN_HEAD: Column[] = [
   ...HEAD.slice(0, 2),
@@ -210,6 +225,7 @@ function scheduleText(row: MonitorRow): string {
     data-testid="am-table"
     :data-level="level"
     :data-name-collapsed="nameCollapsed ? 'true' : 'false'"
+    :data-utm-collapsed="utmCollapsed ? 'true' : 'false'"
   >
     <table class="w-full border-separate border-spacing-0 text-sm">
       <thead>
@@ -237,6 +253,18 @@ function scheduleText(row: MonitorRow): string {
             >
               <span>{{ nameCollapsed ? 'ชื่อ…' : 'ชื่อ / บัญชี / advertiser' }}</span>
               <UIcon :name="nameCollapsed ? 'i-lucide-chevrons-right' : 'i-lucide-chevrons-left'" class="size-4" />
+            </button>
+            <button
+              v-else-if="column.key === 'utm'"
+              type="button"
+              class="inline-flex items-center gap-1 font-semibold text-highlighted"
+              data-testid="am-utm-collapse"
+              :aria-expanded="!utmCollapsed"
+              :title="utmCollapsed ? 'ขยายคอลัมน์' : 'ย่อคอลัมน์'"
+              @click="emit('update:utm-collapsed', !utmCollapsed)"
+            >
+              <span>UTM</span>
+              <UIcon :name="utmCollapsed ? 'i-lucide-chevrons-right' : 'i-lucide-chevrons-left'" class="size-4" />
             </button>
             <template v-else>
               {{ column.label }}
@@ -325,6 +353,13 @@ function scheduleText(row: MonitorRow): string {
                 @click="emit('filter-campaign', campaignIdOf(row))"
               />
             </div>
+
+            <AdsMonitorUtmCell
+              v-else-if="column.key === 'utm'"
+              :utm="row.utm"
+              :collapsed="utmCollapsed"
+              :range="range"
+            />
 
             <div
               v-else-if="column.key === 'cover'"

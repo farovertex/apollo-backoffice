@@ -10,6 +10,11 @@
  *
  * TikTok's switch value is inverted on purpose: `opt === 0` is **on**, `opt === 1` is **off**, `null` =
  * not read yet (the switch is disabled until the next kpi round, spec A3). The toggle body talks `'on'|'off'`.
+ *
+ * FEAT-067 §1/§4 — `row.utm`: the first UTM set (names only, from `builds.utm`) of the row's ads in
+ * `compareFirstAd` order, plus the group's other distinct sets (`others`); `null` when no ad has a usable
+ * one. Rendered by `AdsMonitorUtmCell` as a collapsible column right after `name` (campaign tab: after
+ * `cover`), linking to `/reports/utm` pre-filtered to that set + the monitor's current range.
  */
 import type { BannedAd } from './report-banned'
 import type { KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
@@ -211,6 +216,23 @@ export interface MonitorCover {
   isVideo: boolean
 }
 
+/**
+ * FEAT-067 §1 — one UTM set as the human reads it: the four NAMES of `builds.utm` (never the ids). A name may
+ * be `''` (older builds); the BO prints `—` for that line and omits that key from the `/reports/utm` link.
+ */
+export interface MonitorUtmSet {
+  prefix: string
+  source: string
+  medium: string
+  campaign: string
+}
+
+/** FEAT-067 §1 — `row.utm`: the row's first UTM set (contract A2) + every other distinct set of the group. */
+export interface MonitorUtm extends MonitorUtmSet {
+  /** always an array; `[]` on the ad tab and on single-set groups */
+  others: MonitorUtmSet[]
+}
+
 /** One row of any tab (contract §3.1 / §3.2 / §3.3). */
 export interface MonitorRow {
   level: MonitorLevel
@@ -259,6 +281,12 @@ export interface MonitorRow {
   source?: string | null
   createdAt: string | null
   metrics: KpiMetrics
+  /**
+   * FEAT-067 §1 — always present on every row of the three lists (contract §4: "a stub without it is a
+   * harness bug, not a BO case"); `null` = no ad of this row has a build with a usable UTM (then no `others`
+   * either). `AdsMonitorUtmCell` still renders `—` for a literal `undefined` rather than crashing.
+   */
+  utm: MonitorUtm | null
 }
 
 /** Shared 200 envelope of the three list endpoints. */
