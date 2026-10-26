@@ -43,7 +43,8 @@ function blockedReason(a: TikTokAccount): string | null {
   if (!a.isActive) return 'บัญชีถูกปิดใช้งาน'
   if (!a.bcOrgId) return 'ยังไม่รู้ BC — กด Sync ก่อน'
   if (a.topup?.active) return 'มีรอบฝากที่ยังไม่จบ'
-  return null
+  // TASK-topup-qr-usd (2026-10-26) — this modal is QR only; a USD account tops up by card from its own row
+  return qrChannelBlockedReason(a.balanceCurrency)
 }
 
 const visible = computed(() => {

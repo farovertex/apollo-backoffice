@@ -102,13 +102,29 @@ const cardOpen = ref(false)
 
 /** why the card option cannot be used (unknown currency / a currency without card limits), null = it can */
 const cardBlocked = computed(() => cardChannelBlockedReason(props.balanceCurrency, topupOptions.value))
+/**
+ * TASK-topup-qr-usd (2026-10-26) — why the QR option cannot be used (a USD account tops up by card only), null = it
+ * can. Known from the currency prop at once (fallback list) and confirmed by `qr.enabled` once the options answer.
+ */
+const qrBlocked = computed(() => qrChannelBlockedReason(props.balanceCurrency, topupOptions.value))
 const isCard = computed(() => channel.value === 'card')
 
 function selectChannel(next: TopupChannel) {
   if (next === 'card' && cardBlocked.value) return
+  if (next === 'qr' && qrBlocked.value) return
   channel.value = next
   serverError.value = null
 }
+
+/** the channel the popover starts on: card when asked for (or when QR is closed for this currency) and allowed */
+function startChannel(): TopupChannel {
+  return (props.defaultChannel === 'card' || qrBlocked.value) && !cardBlocked.value ? 'card' : 'qr'
+}
+
+// the options answer may close QR after the popover opened (currency unknown to the surface) — move off it
+watch(qrBlocked, (blocked) => {
+  if (blocked && !isCard.value && !cardBlocked.value) channel.value = 'card'
+})
 
 /** TASK-topup-min-currency — the QR minimum of **this account's currency** (USD → 10, same as the card channel) */
 const qrMin = computed(() => topupQrMinAmount(topupOptions.value, props.balanceCurrency))
@@ -119,7 +135,9 @@ const localError = computed(() =>
     : topupAmountError(amount.value, { qrMin: qrMin.value, currency: props.balanceCurrency })
 )
 const errorText = computed(() => serverError.value ?? (touched.value ? localError.value : null))
-const canSubmit = computed(() => !submitting.value && !props.disabled && localError.value === null)
+/** QR selected while closed for this currency (both channels blocked) → nothing can be sent */
+const channelBlocked = computed(() => (isCard.value ? cardBlocked.value : qrBlocked.value) !== null)
+const canSubmit = computed(() => !submitting.value && !props.disabled && localError.value === null && !channelBlocked.value)
 
 /** the amount label says which currency is being typed — for both channels once the account's currency is known */
 const amountLabel = computed(() =>
@@ -146,7 +164,7 @@ watch(open, (isOpen) => {
   amount.value = props.defaultAmount
   serverError.value = null
   touched.value = false
-  channel.value = props.defaultChannel === 'card' && !cardBlocked.value ? 'card' : 'qr'
+  channel.value = startChannel()
   // FEAT-053 — exactly one `GET /topups/options` per open
   void loadOptions(props.tiktokAccountId)
 })
@@ -235,7 +253,7 @@ function failToast(message: string, status: number | undefined) {
       :label="retry ? 'ลองใหม่' : 'จ่ายเงิน'"
       :size="size"
       color="primary"
-      icon="i-lucide-qr-code"
+      :icon="qrBlocked ? 'i-lucide-credit-card' : 'i-lucide-qr-code'"
       :disabled="disabled"
       :data-testid="triggerTestid"
       :data-retry="retry ? 'true' : 'false'"
@@ -283,18 +301,22 @@ function failToast(message: string, status: number | undefined) {
           :data-channel="channel"
         >
           <div class="grid grid-cols-2 gap-1">
-            <UButton
-              label="QR"
-              icon="i-lucide-qr-code"
-              size="xs"
-              block
-              role="radio"
-              :aria-checked="!isCard"
-              :color="!isCard ? 'primary' : 'neutral'"
-              :variant="!isCard ? 'solid' : 'outline'"
-              data-testid="ta-adv-topup-channel-qr"
-              @click="selectChannel('qr')"
-            />
+            <!-- TASK-topup-qr-usd — QR is closed for a USD account; the reason is the API's own text -->
+            <UTooltip :text="qrBlocked ?? 'QR code ของบัญชีนี้'">
+              <UButton
+                label="QR"
+                icon="i-lucide-qr-code"
+                size="xs"
+                block
+                role="radio"
+                :aria-checked="!isCard"
+                :color="!isCard ? 'primary' : 'neutral'"
+                :variant="!isCard ? 'solid' : 'outline'"
+                :disabled="!!qrBlocked"
+                data-testid="ta-adv-topup-channel-qr"
+                @click="selectChannel('qr')"
+              />
+            </UTooltip>
             <UTooltip :text="cardBlocked ?? 'บัตรเครดิต/เดบิตของบัญชีนี้'">
               <UButton
                 label="บัตร"
@@ -314,6 +336,9 @@ function failToast(message: string, status: number | undefined) {
           <p v-if="cardBlocked" class="text-xs text-warning" data-testid="ta-adv-topup-channel-reason">
             {{ cardBlocked }}
           </p>
+          <p v-if="qrBlocked" class="text-xs text-warning" data-testid="ta-adv-topup-channel-qr-reason">
+            {{ qrBlocked }}
+          </p>
         </div>
 
         <UButton
@@ -324,6 +349,7 @@ function failToast(message: string, status: number | undefined) {
           size="sm"
           block
           :loading="submitting"
+          :disabled="!!qrBlocked"
           data-testid="ta-adv-topup-submit"
         />
         <UButton

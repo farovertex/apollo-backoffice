@@ -404,6 +404,40 @@ export function cardChannelBlockedReason(
   return null
 }
 
+/**
+ * TASK-topup-qr-usd (human decision 2026-10-26) — the currencies the **QR channel refuses**: a USD account tops up
+ * by card only. Fallback copy of the API's `QR_UNSUPPORTED_CURRENCIES` (`src/topup/card-rules.ts`), used only when
+ * `GET /topups/options` did not answer — change one, change the other.
+ */
+export const QR_UNSUPPORTED_CURRENCIES: readonly string[] = ['USD']
+
+/** the API's own 400 text / auto-round skip reason, byte for byte (`qrUnsupportedText()` in the API) */
+export function qrUnsupportedText(currency: string): string {
+  return `ช่องทาง QR ไม่รองรับสกุลเงิน ${currency.trim().toUpperCase()} — ใช้ช่องทางบัตร`
+}
+
+/**
+ * Why the QR channel cannot be used for this account, or `null` when it can (as far as the BO can tell).
+ *  - the server answered **for this account** (`card.account` present, `qr.enabled` a boolean) → its verdict wins;
+ *  - otherwise a known currency is checked against `qr.unsupportedCurrencies` of the server, else the fallback list;
+ *  - `undefined` / `null` currency → `null` (unknown currency keeps QR open, same as the API's `qrSupportedFor`).
+ * The wording is the API's 400 text, so the popover, the bulk modal and the per-row error read the same.
+ */
+export function qrChannelBlockedReason(
+  currency: string | null | undefined,
+  options?: TopupOptionsResponse | null
+): string | null {
+  const account = options?.card?.account
+  if (account && typeof options?.qr?.enabled === 'boolean') {
+    if (options.qr.enabled) return null
+    return qrUnsupportedText(account.currency ?? currency ?? '')
+  }
+  const key = (currency ?? '').trim().toUpperCase()
+  if (!key) return null
+  const list = options?.qr?.unsupportedCurrencies ?? QR_UNSUPPORTED_CURRENCIES
+  return list.includes(key) ? qrUnsupportedText(key) : null
+}
+
 /** digits only — spaces and dashes of a typed card number / expiry are not part of the value */
 export function onlyDigits(value: string | null | undefined): string {
   return (value ?? '').replace(/\D+/g, '')

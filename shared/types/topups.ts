@@ -251,7 +251,16 @@ export interface TopupOptionsAccount {
  * `app/utils/topup.ts` (spec assumption 9).
  */
 export interface TopupOptionsResponse {
-  qr: { minAmount: number }
+  qr: {
+    minAmount: number
+    /**
+     * TASK-topup-qr-usd (2026-10-26) — with `?tiktokAccountId=`: may the QR channel be used for that account's
+     * currency (USD → `false`); without an account, or on an API that predates the key, `true`/missing.
+     */
+    enabled?: boolean
+    /** the currencies the QR channel refuses (uppercase, `['USD']`) — missing on an older API */
+    unsupportedCurrencies?: string[]
+  }
   card: {
     enabled: boolean
     approvalTtlHours: number

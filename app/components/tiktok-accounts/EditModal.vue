@@ -76,6 +76,13 @@ function stateOf(account: TikTokAccount | null): FormState {
 const original = ref<FormState>(stateOf(null))
 const state = reactive<FormState>(stateOf(null))
 
+/**
+ * TASK-topup-qr-usd (2026-10-26) — the QR option is closed for a USD account (the auto round would only be skipped
+ * by the API with this same reason). The API does not refuse the PATCH itself, so this is a hint, not a gate: an
+ * old row that already sits on `qr` keeps showing it selected until the admin moves it to card.
+ */
+const qrBlocked = computed(() => qrChannelBlockedReason(props.account?.balanceCurrency))
+
 const schema = z.object({
   label: z.string()
     .trim()
@@ -322,7 +329,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               size="xs"
               role="radio"
               :aria-checked="state.autoTopupChannel === 'qr'"
-              :disabled="submitting"
+              :disabled="submitting || !!qrBlocked"
               data-testid="ta-edit-auto-channel-qr"
               @click="state.autoTopupChannel = 'qr'"
             />
@@ -341,6 +348,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
           <template #help>
             <span data-testid="ta-edit-auto-channel-helper">ช่องทางที่ระบบใช้เมื่อเปิดรอบเติมเงินอัตโนมัติให้บัญชีนี้</span>
+            <span v-if="qrBlocked" class="block text-warning" data-testid="ta-edit-auto-channel-qr-reason">{{ qrBlocked }}</span>
           </template>
         </UFormField>
 
