@@ -6,7 +6,7 @@
  * reads never depends on the browser locale.
  */
 import type { AdGroupBudget } from '#shared/types/ad-group-templates'
-import type { BuildCounts, BuildStatus, OrderStatus } from '#shared/types/campaign-orders'
+import type { BuildCounts, BuildPauseState, BuildStatus, OrderStatus } from '#shared/types/campaign-orders'
 
 export type StatusColor = 'neutral' | 'primary' | 'info' | 'success' | 'warning' | 'error'
 
@@ -39,6 +39,18 @@ export function orderStatusBadge(status: OrderStatus | string): StatusBadge {
 
 export function buildStatusBadge(status: BuildStatus | string): StatusBadge {
   return (BUILD_STATUS_BADGE as Record<string, StatusBadge>)[status] ?? { label: status, color: 'neutral' }
+}
+
+/** FEAT-066 (spec "UI behaviour") — `builds.pause.state` → `od-build-pause` text/color */
+export const BUILD_PAUSE_BADGE: Record<BuildPauseState, StatusBadge> = {
+  waitingKpi: { label: 'รอปิด campaign', color: 'neutral' },
+  queued: { label: 'กำลังปิด campaign…', color: 'warning' },
+  done: { label: 'ปิด campaign แล้ว', color: 'success' },
+  failed: { label: 'ปิด campaign ไม่สำเร็จ', color: 'error' }
+}
+
+export function buildPauseBadge(state: BuildPauseState | string): StatusBadge {
+  return (BUILD_PAUSE_BADGE as Record<string, StatusBadge>)[state] ?? { label: state, color: 'neutral' }
 }
 
 /** the build statuses in lifecycle order — used by the summary text and the segmented bar */

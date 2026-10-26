@@ -51,6 +51,15 @@
  * draft from the earlier attempt may still be on TikTok, plus a publish-specific sentence for
  * `publishMode === 'publish'` orders. `od-build-attempt` (`attempt N`) appears next to the status badge only
  * when `attempt > 1`; `queuedAt` / `previousJobIds` are carried by `BuildView` but not rendered.
+ *
+ * FEAT-066 (api-contract.md v1 §3, spec "UI behaviour") — `od-pause-after-publish` (warning/outline/sm,
+ * "ปิดหลังเผยแพร่") sits next to `od-mode` in the summary header, present iff `order.pauseAfterPublish`. Per
+ * build row, next to `od-build-stop-requested`, `od-build-pause` (`data-state="<pause.state>"`, present iff
+ * `build.pause` is non-null) uses `buildPauseBadge()` (`app/utils/campaign-orders.ts`) for its text/color —
+ * `waitingKpi` รอปิด campaign (neutral) · `queued` กำลังปิด campaign… (warning) · `done` ปิด campaign แล้ว
+ * (success) · `failed` ปิด campaign ไม่สำเร็จ (error, `title` = `pause.reason`); the expanded row
+ * (`od-build-expanded`) repeats the reason as `od-build-pause-reason` when `failed`. No new request — the
+ * page's existing 5 s poll (while a build is `queued`/`running`) keeps every badge current.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -756,6 +765,17 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                 >
                   {{ order.publishMode === 'publish' ? 'Publish' : 'Draft' }}
                 </UBadge>
+                <!-- FEAT-066 — only when the order asked to be paused after publish -->
+                <UBadge
+                  v-if="order.pauseAfterPublish"
+                  color="warning"
+                  variant="outline"
+                  size="sm"
+                  class="whitespace-nowrap"
+                  data-testid="od-pause-after-publish"
+                >
+                  ปิดหลังเผยแพร่
+                </UBadge>
                 <UBadge
                   color="neutral"
                   variant="outline"
@@ -977,6 +997,19 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                           >
                             {{ build.stoppedBeforePublish ? 'Stopped before publish' : 'Stop requested' }}
                           </UBadge>
+                          <!-- FEAT-066 — only while the build has a pause-after-publish state -->
+                          <UBadge
+                            v-if="build.pause"
+                            :color="buildPauseBadge(build.pause.state).color"
+                            variant="outline"
+                            size="sm"
+                            class="whitespace-nowrap"
+                            data-testid="od-build-pause"
+                            :data-state="build.pause.state"
+                            :title="build.pause.state === 'failed' ? (build.pause.reason ?? undefined) : undefined"
+                          >
+                            {{ buildPauseBadge(build.pause.state).label }}
+                          </UBadge>
                           <UBadge
                             v-if="build.attempt > 1"
                             color="neutral"
@@ -1068,6 +1101,14 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                     </tr>
                     <tr v-if="expanded.includes(build.id)" :data-id="build.id" data-testid="od-build-expanded">
                       <td class="border-b border-default bg-elevated/30 px-3 py-2" colspan="9">
+                        <!-- FEAT-066 — the reason text of a failed pause, same place a failed step would show it -->
+                        <p
+                          v-if="build.pause?.state === 'failed'"
+                          class="mb-2 text-sm text-error"
+                          data-testid="od-build-pause-reason"
+                        >
+                          {{ build.pause.reason }}
+                        </p>
                         <p v-if="build.steps.length === 0" class="text-sm text-muted" data-testid="od-steps-empty">
                           No steps yet
                         </p>
