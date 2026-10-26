@@ -20,6 +20,14 @@
  * same flag and same toggle route (`PUT`/`DELETE /tiktok-accounts/:id/favorite`) as `TikTokAccount.favorite`
  * (`#shared/types/tiktok-accounts`). The API sort (ready first, then name) is unchanged; the BO pins favorites
  * first on the page itself (`app/pages/launch-ads.vue`).
+ *
+ * FEAT-066 (api-contract.md v1 §2–§3) — "ปิด campaign หลังเผยแพร่": `CreateOrderBody` gains optional
+ * `pauseAfterPublish` (sent only when `publishMode === 'publish'` and the checkbox is on; omitted otherwise,
+ * never `false`, so every FEAT-016/062 exact-body assertion stays valid — `app/pages/launch-ads.vue`).
+ * `OrderView` gains `pauseAfterPublish: boolean` as the **last** key; `BuildView` gains `pauseAfterPublish:
+ * boolean` and `pause: BuildPauseView | null` as the last two keys (after `previousJobIds`). `pause` tracks the
+ * build worker → kpi after-run hook → optToggle worker state machine `waitingKpi → queued → done | failed`; the
+ * BO only renders it (`app/pages/orders/[id].vue`), no new request.
  */
 import type { AdvertiserStatus } from './advertisers'
 import type { SessionStatus } from './tiktok-accounts'
@@ -123,6 +131,8 @@ export interface CreateOrderBody {
   adTemplateId: string
   adGroupCopies: number
   publishMode: PublishMode
+  /** FEAT-066 — omit the key unless true (API default is `false`; `draft` + `true` is a 400) */
+  pauseAfterPublish?: boolean
   targets: CreateOrderTarget[]
 }
 
@@ -155,6 +165,8 @@ export interface OrderView {
   createdBy: { id: string, username: string | null }
   createdAt: string
   updatedAt: string
+  /** FEAT-066 — immutable, copied from the create body */
+  pauseAfterPublish: boolean
 }
 
 /**
@@ -207,6 +219,23 @@ export function isBuildScreenshotUrl(shot: BuildScreenshotResponse): shot is Bui
   return 'url' in shot
 }
 
+/** FEAT-066 — `builds.pause.state` machine written by the build worker, the kpi after-run hook and the
+ * optToggle worker, in that order. */
+export type BuildPauseState = 'waitingKpi' | 'queued' | 'done' | 'failed'
+
+/** FEAT-066 api-contract.md v1 §3.2 — `null` when the build never asked to be paused after publish. */
+export interface BuildPauseView {
+  state: BuildPauseState
+  /** the `optToggle` job id, set once the kpi after-run hook enqueues it */
+  jobId: string | null
+  /** ISO — `= publishedAt`, the clock the max-wait window is measured from */
+  requestedAt: string | null
+  /** ISO — set by the optToggle worker (`done`/`failed`) or by the hook giving up (`failed`) */
+  finishedAt: string | null
+  /** Thai, shown verbatim; non-null only when `state === 'failed'` */
+  reason: string | null
+}
+
 /** api-contract §6 "BuildView" — one build = one advertiser of the order. */
 export interface BuildView {
   id: string
@@ -235,6 +264,10 @@ export interface BuildView {
   queuedAt: string
   /** FEAT-055 — `jobId` of every earlier attempt, oldest first; never trimmed */
   previousJobIds: string[]
+  /** FEAT-066 — `= order.pauseAfterPublish` at insert; survives retry rounds */
+  pauseAfterPublish: boolean
+  /** FEAT-066 — `null` unless `pauseAfterPublish`; reset to `null` on every retry */
+  pause: BuildPauseView | null
 }
 
 /** `POST /campaign-orders` 201 body. */
