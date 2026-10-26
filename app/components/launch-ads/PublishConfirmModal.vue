@@ -8,6 +8,9 @@
  *
  * The dialog never calls the API itself: it emits `confirm` and the page runs the single POST (the button
  * stays in its loading state through `submitting`, so a double submit is impossible).
+ *
+ * FEAT-066 (spec "UI behaviour") — when `pauseAfterPublish` is true, one extra line (`la-confirm-pause`)
+ * repeats the checkbox's intent under the budget cap; absent when false. `la-confirm-ack` is unchanged.
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { AdGroupBudget } from '#shared/types/ad-group-templates'
@@ -21,6 +24,8 @@ const props = defineProps<{
   /** label of `budget.type` from `GET /ad-group-templates/options` — never invented here */
   budgetTypeLabel: string
   submitting: boolean
+  /** FEAT-066 — mirrors the `la-pause-after-publish` checkbox of the page */
+  pauseAfterPublish: boolean
 }>()
 
 const emit = defineEmits<{ confirm: [] }>()
@@ -79,6 +84,15 @@ const capText = computed(() => formatBudgetCap(props.budget, props.copies, props
           <span class="text-sm text-muted">Budget cap</span>
           <span class="text-base font-semibold text-highlighted" data-testid="la-confirm-cap">{{ capText }}</span>
         </div>
+
+        <p
+          v-if="pauseAfterPublish"
+          class="flex items-center gap-1.5 text-sm text-muted"
+          data-testid="la-confirm-pause"
+        >
+          <UIcon name="i-lucide-info" class="size-4 shrink-0" />
+          หลังเผยแพร่ ระบบจะปิด campaign ให้ (หลังรอบ KPI ถัดไป)
+        </p>
 
         <UCheckbox
           v-model="acknowledged"

@@ -90,6 +90,14 @@
  * just-toggled star correct; `pinnedFilteredAccounts` / `pinnedUnavailableAccounts` render the same two lists
  * stably sorted favorites-first — `filteredAccounts` / `unavailableAccounts` themselves (and therefore
  * `defaultAdvertiserId`, select-all-visible, every counter) are untouched by the pin.
+ *
+ * FEAT-066 (api-contract.md v1 §2, spec "UI behaviour", human decision §0.1) — a `UCheckbox`
+ * (`la-pause-after-publish`) in the Summary panel, directly above the action buttons: "ปิด campaign ทันที
+ * หลังเผยแพร่" (description "ระบบจะปิดให้หลังรอบ KPI ถัดไป"), default unchecked, page state like `copies` (survives
+ * step changes), always enabled. `body()` adds `pauseAfterPublish: true` only when `publishMode === 'publish'`
+ * and the box is checked — omitted otherwise (A5), so Save as draft never sends it and every FEAT-016/062
+ * exact-body assertion stays valid. The value is passed to `LaunchAdsPublishConfirmModal` to render its
+ * `la-confirm-pause` line. No other layout of FEAT-062 changes.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -506,6 +514,8 @@ function retryTemplates() {
 const adGroupTemplateId = ref<string | null>(null)
 const adTemplateId = ref<string | null>(null)
 const copies = ref(1)
+/** FEAT-066 — page state like `copies` (survives step changes); only sent on publish, never on draft */
+const pauseAfterPublish = ref(false)
 const agtSearch = ref('')
 const adtSearch = ref('')
 
@@ -787,6 +797,9 @@ function body(publishMode: PublishMode): CreateOrderBody {
     adTemplateId: adTemplateId.value as string,
     adGroupCopies: copies.value,
     publishMode,
+    // FEAT-066 (A5) — omit the key unless publishing with the box checked; draft never sends it, and every
+    // existing exact-body assertion that predates this flag keeps passing
+    ...(publishMode === 'publish' && pauseAfterPublish.value ? { pauseAfterPublish: true } : {}),
     targets: selectedAccounts.value.map(account => ({
       tiktokAccountId: account.id,
       advertiserId: selection.value[account.id] as string
@@ -2018,6 +2031,14 @@ onUnmounted(() => {
                 publishes on TikTok as soon as the build finishes.
               </p>
 
+              <!-- FEAT-066 — above the action buttons (human decision §0.1); no effect on Save as draft -->
+              <UCheckbox
+                v-model="pauseAfterPublish"
+                label="ปิด campaign ทันทีหลังเผยแพร่"
+                description="ระบบจะปิดให้หลังรอบ KPI ถัดไป"
+                data-testid="la-pause-after-publish"
+              />
+
               <!--
                 FEAT-062 — one DOM instance of the step actions (AS-2): the last block of the sticky aside at
                 `lg+`, a fixed bottom bar below it. The page body carries `pb-20 lg:pb-0` for the bar.
@@ -2082,6 +2103,7 @@ onUnmounted(() => {
         :budget="budget"
         :budget-type-label="budgetTypeLabel"
         :submitting="submitting"
+        :pause-after-publish="pauseAfterPublish"
         @confirm="confirmPublish"
       />
     </template>
