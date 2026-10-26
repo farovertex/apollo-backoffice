@@ -47,7 +47,8 @@ const format = (v: number) => (props.decimals ? formatDecimal(v) : formatInt(v))
 const xTickValues = computed(() => {
   const n = props.points.length
   const step = n > 16 ? Math.ceil(n / 8) : n > 8 ? 2 : 1
-  return props.points.map((_, i) => i).filter(i => i % step === 0 || i === n - 1)
+  // counted back from the last point so the last label is always drawn and never collides with its neighbour
+  return props.points.map((_, i) => i).filter(i => (n - 1 - i) % step === 0)
 })
 const xTicks = (i: number) => props.points[Math.round(i)]?.label ?? ''
 
