@@ -22,7 +22,7 @@ import type { ReportRange, ReportRangeKey, ReportRangeState } from '#shared/type
 
 const props = withDefaults(defineProps<{
   /** test-id prefix of the hosting page */
-  prefix: 'rp' | 'rs' | 'rb' | 'ru' | 'am'
+  prefix: 'rp' | 'rs' | 'rb' | 'ru' | 'am' | 'rf' | 'rd'
   range: ReportRange
   /** `''` when absent — only `custom` ever carries a pair */
   from: string
