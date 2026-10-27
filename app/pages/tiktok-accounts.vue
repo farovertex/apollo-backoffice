@@ -196,6 +196,7 @@ import type {
   SessionStatus,
   TikTokAccount
 } from '#shared/types/tiktok-accounts'
+import { FAILURE_SCREENSHOT_TYPE_LABEL } from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
 
@@ -1428,6 +1429,15 @@ function openCards(account: TikTokAccount) {
   cardsOpen.value = true
 }
 
+// FEAT-071 — failure screenshot modal (one instance, opened from the Session status cell)
+const failShotOpen = ref(false)
+const failShotTarget = ref<TikTokAccount | null>(null)
+
+function openFailShot(account: TikTokAccount) {
+  failShotTarget.value = account
+  failShotOpen.value = true
+}
+
 // 2026-10-16 — FEAT-053's `setAutoChannel()` / `autoChannelBusy` left this page with the column: the channel is
 // now one of the fields of the Edit modal and is written by that modal's single diff PATCH.
 
@@ -1547,6 +1557,23 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       // to the status badge now. Nothing to say → nothing is appended (no `—`, no `ta-first-login`).
       const firstLogin = firstLoginNode(a)
       if (firstLogin) children.push(firstLogin)
+      // FEAT-071 — failure screenshot of the newest failed login / sync / top-up job (summary rides on the list)
+      const fail = a.failureScreenshot
+      if (fail) {
+        children.push(h(UButton, {
+          'icon': 'i-lucide-image',
+          'size': 'xs',
+          'variant': 'ghost',
+          'color': 'neutral',
+          'class': 'shrink-0',
+          'aria-label': `ภาพหน้าจอตอน job ล้มของ ${a.label ?? a.loginEmail}`,
+          'title': `ภาพหน้าจอตอน job ล้ม · ${FAILURE_SCREENSHOT_TYPE_LABEL[fail.jobType] ?? fail.jobType} · ${fail.error} · ${formatDateTime(fail.at)}`,
+          'data-testid': 'ta-fail-shot',
+          'data-job-id': fail.jobId,
+          'data-job-type': fail.jobType,
+          'onClick': () => openFailShot(a)
+        }))
+      }
       return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
     }
   },
@@ -2152,6 +2179,10 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         :bc-org-id="advOrgId"
         :org-name="advOrgName"
         @sync="onSync"
+      />
+      <TiktokAccountsFailureScreenshotModal
+        v-model:open="failShotOpen"
+        :account="failShotTarget"
       />
       <TiktokAccountsCardsModal
         v-model:open="cardsOpen"
