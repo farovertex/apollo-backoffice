@@ -19,6 +19,7 @@
  * (AC-1). No key of the card channel ever carries a secret: the view knows `brand`/`last4`/`expiry`/`holderName`
  * and nothing else (api-contract §6, AC-24).
  */
+import type { MonitorUtm } from '#shared/types/ads-monitor'
 import type { ApiErrorBody } from './auth'
 
 /**
@@ -63,6 +64,45 @@ export type TopupTrigger = 'manual' | 'auto'
 export type TopupLevel = 'advertiser' | 'account'
 
 /**
+ * FEAT-072 (api-contract v1 §1.1) — the round's workspace, resolved to its owner's display name. `id` is
+ * always `workspaceId`; `name`/`ownerName` are `null` once the workspace row or its owner admin is gone.
+ */
+export interface TopupWorkspaceRef {
+  id: string
+  name: string | null
+  ownerName: string | null
+}
+
+/**
+ * FEAT-072 (api-contract v1 §1.2) — one resolved ad of `TopupSource.primary`. Internal ids are our own
+ * (`advertiserId` is never the TikTok aadvid — no masking, api-contract §2 "Permissions"); `coverUrl` is the
+ * signed CDN link of the last kpi fetch and may expire (`ReportsAdThumb` already handles that).
+ */
+export interface TopupSourceAd {
+  adId: string
+  tiktokCreativeId: string
+  creativeName: string
+  coverUrl: string | null
+  isVideo: boolean
+  campaignName: string
+  tiktokCampaignId: string
+  advertiserId: string
+  tiktokAccountId: string
+}
+
+/**
+ * FEAT-072 (api-contract v1 §1.2) — "มาจาก ads ไหน" of an auto round: the switched-on ads of the account at
+ * the moment the round was opened (rule S1). `null` ⇔ the row has no `cause` (every manual round; every auto
+ * round written before FEAT-072). `primary` is `compareFirstAd`-first; `adCount` is the **stored** count
+ * (`cause.adIds.length`), which may be larger than the number of ids that still resolved to a row.
+ */
+export interface TopupSource {
+  primary: TopupSourceAd | null
+  adCount: number
+  utm: MonitorUtm | null
+}
+
+/**
  * FEAT-051 (api-contract §6) — the copy of the card a round was started with. **No secret**: the full number,
  * the CVV and the ciphertext never leave the API.
  */
@@ -88,6 +128,12 @@ export interface TopupHumanTaskRef {
 export interface TopupView {
   id: string
   workspaceId: string
+  /**
+   * FEAT-072 (api-contract v1 §1.1) — the resolved workspace + owner, always present on the wire. Optional
+   * here so the page tolerates an API/stub that predates this feature (reads like `undefined` → no owner,
+   * same as `null`), same spirit as the FEAT-051 optional keys below.
+   */
+  workspace?: TopupWorkspaceRef
   level: TopupLevel
   tiktokAccountId: string
   /** null when `level === 'account'` */
@@ -126,6 +172,11 @@ export interface TopupView {
   /** FEAT-029 — `null` ⇔ `trigger: 'auto'` (the BO shows "ระบบ"); a manual round always carries the admin */
   requestedBy: TopupActor | null
   requestedAt: string
+  /**
+   * FEAT-072 (api-contract v1 §1.2) — "มาจาก ads ไหน" of an auto round, always present on the wire. Optional
+   * here for the same reason as `workspace` above: an API/stub without the key must render like `null`.
+   */
+  source?: TopupSource | null
   createdAt: string
   updatedAt: string
   /** FEAT-051 — `qr` | `card`; **missing ⇒ `qr`** (every row written before the feature) */

@@ -32,10 +32,17 @@
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
+import type { ReportRangeState } from '#shared/types/reports'
 import type { TopupStatus, TopupView, TopupsResponse } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
 
 useSeoMeta({ title: 'Top-ups' })
+
+/**
+ * FEAT-072 (api-contract "BO link recipe", spec A4) — "มาจาก ads" always links with `range: 'all'`: a history
+ * round may be days old and the Ads monitor only lists rows of its selected range (FEAT-068).
+ */
+const SOURCE_UTM_RANGE: ReportRangeState = { range: 'all', from: '', to: '' }
 
 const LIMIT = 20
 
@@ -245,17 +252,26 @@ const STATUS_ITEMS = computed(() => [
   ...TOPUP_STATUSES.map(status => ({ label: TOPUP_BADGE[status].label, value: status }))
 ])
 
-/** the workspaces that have been seen in a row (the API has no list endpoint for them — same as /reports) */
-const knownWorkspaces = ref<string[]>([])
+/**
+ * the workspaces that have been seen in a row (the API has no list endpoint for them — same as /reports).
+ * FEAT-072 (AC-5, A7): the label is the AC-4 owner-name text of the **first** row seen for that id, so the
+ * filter never disagrees with the cell; the value a selection sends is still the id (request shape unchanged).
+ */
+const knownWorkspaces = ref<Map<string, string>>(new Map())
 watch([activeRows, historyRows], () => {
-  const next = new Set(knownWorkspaces.value)
-  for (const row of [...activeRows.value, ...historyRows.value]) next.add(row.workspaceId)
-  if (next.size !== knownWorkspaces.value.length) knownWorkspaces.value = [...next]
+  let changed = false
+  const next = new Map(knownWorkspaces.value)
+  for (const row of [...activeRows.value, ...historyRows.value]) {
+    if (next.has(row.workspaceId)) continue
+    next.set(row.workspaceId, topupWorkspaceText(row.workspaceId, row.workspace))
+    changed = true
+  }
+  if (changed) knownWorkspaces.value = next
 }, { immediate: true })
 
 const workspaceItems = computed(() => [
   { label: 'ทุก workspace', value: 'all' },
-  ...knownWorkspaces.value.map(id => ({ label: `…${id.slice(-6)}`, value: id }))
+  ...[...knownWorkspaces.value.entries()].map(([id, label]) => ({ label, value: id }))
 ])
 
 const LIVE_LABEL: Record<string, string> = {
@@ -502,6 +518,9 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                     Trigger
                   </th>
                   <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                    มาจาก ads
+                  </th>
+                  <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                     คนจอง
                   </th>
                   <th scope="col" class="border-y border-default px-2 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
@@ -520,7 +539,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
               </thead>
               <tbody :class="pending ? 'opacity-60' : ''">
                 <tr v-if="pending && rows.length === 0" data-testid="tp-table-loading">
-                  <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="12">
+                  <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="13">
                     กำลังโหลด…
                   </td>
                 </tr>
@@ -560,10 +579,16 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                     </div>
                   </td>
                   <td class="border-b border-default px-2 py-2 whitespace-nowrap" data-testid="tp-row-account" :title="row.account?.loginEmail ?? ''">
-                    {{ row.account?.label ?? row.account?.loginEmail ?? REPORT_DASH }}
+                    <span class="block" data-testid="tp-row-account-label">{{ row.account?.label ?? row.account?.loginEmail ?? REPORT_DASH }}</span>
+                    <span v-if="row.account?.label != null" class="block text-xs text-muted" data-testid="tp-row-account-email">{{ row.account?.loginEmail ?? REPORT_DASH }}</span>
                   </td>
-                  <td class="border-b border-default px-2 py-2 font-mono text-xs whitespace-nowrap" data-testid="tp-row-workspace">
-                    …{{ row.workspaceId.slice(-6) }}
+                  <td
+                    class="border-b border-default px-2 py-2 text-xs whitespace-nowrap"
+                    data-testid="tp-row-workspace"
+                    :data-workspace-id="row.workspaceId"
+                    :title="row.workspace?.name ?? row.workspaceId"
+                  >
+                    {{ topupWorkspaceText(row.workspaceId, row.workspace) }}
                   </td>
                   <td class="border-b border-default px-2 py-2 text-right tabular-nums whitespace-nowrap" data-testid="tp-row-amount">
                     {{ formatInt(row.amount) }}
@@ -609,6 +634,52 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                       class="whitespace-nowrap"
                     />
                     <span v-else class="text-xs whitespace-nowrap text-muted">manual</span>
+                  </td>
+                  <!-- FEAT-072 — มาจาก ads: which ads were switched on when an auto round was opened (rule S1) -->
+                  <td
+                    class="max-w-64 border-b border-default px-2 py-2"
+                    data-testid="tp-row-source"
+                    :data-source="topupSourceState(row)"
+                  >
+                    <span v-if="topupSourceState(row) === 'none'" class="text-xs whitespace-nowrap text-muted" data-testid="tp-row-source-empty">{{ REPORT_DASH }}</span>
+                    <span v-else-if="topupSourceState(row) === 'empty'" class="text-xs whitespace-nowrap text-muted" data-testid="tp-row-source-empty">ไม่มีโฆษณาที่เปิดอยู่</span>
+                    <div v-else class="flex items-start gap-2">
+                      <ReportsAdThumb
+                        :url="row.source?.primary?.coverUrl ?? null"
+                        :is-video="row.source?.primary?.isVideo ?? false"
+                        size="sm"
+                      />
+                      <div class="flex min-w-0 flex-col gap-0.5">
+                        <span class="flex min-w-0 items-center gap-1">
+                          <NuxtLink
+                            class="max-w-40 truncate hover:underline"
+                            data-testid="tp-row-source-campaign"
+                            :title="row.source?.primary?.creativeName"
+                            :to="{
+                              path: '/ads-monitor',
+                              query: {
+                                tab: 'campaign',
+                                tiktokAccountId: row.source?.primary?.tiktokAccountId,
+                                advertiserId: row.source?.primary?.advertiserId,
+                                campaignId: row.source?.primary?.tiktokCampaignId,
+                                range: 'all'
+                              }
+                            }"
+                          >{{ row.source?.primary?.campaignName || REPORT_DASH }}</NuxtLink>
+                          <UBadge
+                            v-if="(row.source?.adCount ?? 0) > 1"
+                            :label="`+${(row.source?.adCount ?? 1) - 1}`"
+                            size="sm"
+                            variant="soft"
+                            color="neutral"
+                            data-testid="tp-row-source-more"
+                            :data-count="(row.source?.adCount ?? 1) - 1"
+                            :title="`อีก ${(row.source?.adCount ?? 1) - 1} โฆษณา`"
+                          />
+                        </span>
+                        <AdsMonitorUtmCell :utm="row.source?.utm ?? null" :range="SOURCE_UTM_RANGE" />
+                      </div>
+                    </div>
                   </td>
                   <td class="border-b border-default px-2 py-2 whitespace-nowrap" data-testid="tp-row-paying-by">
                     {{ row.payingBy?.displayName || REPORT_DASH }}

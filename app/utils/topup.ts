@@ -22,7 +22,7 @@
 import type { AdminRole } from '#shared/types/auth'
 import type { PaymentCardView } from '#shared/types/payment-cards'
 import type { TikTokAccount } from '#shared/types/tiktok-accounts'
-import type { TopupCardLimit, TopupCardSnapshot, TopupChannel, TopupOptionsResponse, TopupStatus, TopupTrigger, TopupView } from '#shared/types/topups'
+import type { TopupCardLimit, TopupCardSnapshot, TopupChannel, TopupOptionsResponse, TopupStatus, TopupTrigger, TopupView, TopupWorkspaceRef } from '#shared/types/topups'
 
 /** `TOPUP_MIN_AMOUNT` of the API (api-contract §1). The API's 400 body stays the authority — this is the hint. */
 export const TOPUP_MIN_AMOUNT = 400
@@ -330,6 +330,28 @@ export function topupRequesterName(topup: Pick<TopupView, 'requestedBy'> | null 
 /** FEAT-029 — `manual` for rows written before the field existed */
 export function topupTrigger(topup: Pick<TopupView, 'trigger'> | null | undefined): TopupTrigger {
   return topup?.trigger === 'auto' ? 'auto' : 'manual'
+}
+
+/**
+ * FEAT-072 (spec "UI behaviour", AC-12) — `tp-row-source[data-source]`: `none` for a manual round, or an auto
+ * round whose `source` is `null`/missing (written before FEAT-072, or an API/stub that predates it); `empty`
+ * when the snapshot found no ad switched on (`adCount === 0`); `ads` otherwise.
+ */
+export function topupSourceState(topup: Pick<TopupView, 'trigger' | 'source'> | null | undefined): 'none' | 'empty' | 'ads' {
+  if (topupTrigger(topup) !== 'auto' || !topup?.source) return 'none'
+  return topup.source.adCount === 0 ? 'empty' : 'ads'
+}
+
+/**
+ * FEAT-072 (api-contract v1 §1.1, spec AC-4/AC-5, A7) — the three-step text of a round's workspace, shared by
+ * the `tp-row-workspace` cell and the `tp-filter-workspace` item labels so they can never drift apart: the
+ * owner's name, else the workspace's own name, else the old `…<last 6 of id>` fallback. `workspace` missing or
+ * `undefined` (an API/stub that predates FEAT-072) reads like `{ name: null, ownerName: null }`.
+ */
+export function topupWorkspaceText(workspaceId: string, workspace?: TopupWorkspaceRef | null): string {
+  if (workspace?.ownerName) return workspace.ownerName
+  if (workspace?.name) return workspace.name
+  return `…${workspaceId.slice(-6)}`
 }
 
 // ── FEAT-051 · channel and card ──────────────────────────────────────────────────────────────────────────────────────
