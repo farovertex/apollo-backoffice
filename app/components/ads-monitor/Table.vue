@@ -43,6 +43,10 @@
  * other edge — `sticky bottom-0 z-10 bg-elevated` on each `td` (a `tr` cannot be sticky in a `border-separate`
  * table, so the cells carry it, exactly like the `th`s) — so header and totals stay in view together while
  * the rows scroll between them. With fewer rows than the box's height it simply sits where it always did.
+ * `overscroll-contain` on the box stops scroll chaining: once the rows are scrolled to either end, the wheel /
+ * touch scroll no longer spills over into the panel body (which still scrolls, since interval + tabs + filters +
+ * the 70vh box + pagination exceed the viewport), so the pinned header and totals row stay put instead of the
+ * whole box sliding with the page. Scrolling with the pointer outside the table still moves the page as before.
  *
  * FEAT-067 — a collapsible "UTM" column (`AdsMonitorUtmCell`, spec "UI behaviour" → Cell / contract §4) is
  * inserted right after `name` on the ad-group / ad tabs and right after `cover` on the campaign tab; nothing
@@ -223,7 +227,7 @@ function scheduleText(row: MonitorRow): string {
 
 <template>
   <div
-    class="min-w-0 max-h-[70vh] overflow-auto"
+    class="min-w-0 max-h-[70vh] overflow-auto overscroll-contain"
     data-testid="am-table"
     :data-level="level"
     :data-name-collapsed="nameCollapsed ? 'true' : 'false'"
