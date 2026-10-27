@@ -18,11 +18,14 @@
  * for a background re-read, because the state we based the button on is stale by then.
  * `bp-proxy-current` reads `proxyRef` before the provider `proxy` snapshot on purpose: from the 202 on, the API
  * already answers the **new** `proxyRef` while the snapshot is still the old one until the worker confirms.
+ * FEAT-070 — also opened from the `ta-proxy-edit` action of `/tiktok-accounts` with the account's
+ * `browserProfile`: the prop is the minimal `ProxyModalProfile` (`id, name, providerProfileId, proxyRef, proxy` —
+ * the only fields read here), nothing else of the modal changed.
  */
 import type { FetchError } from 'ofetch'
 import type { ModalProps } from '@nuxt/ui'
 import type {
-  AvailableProfile,
+  ProxyModalProfile,
   SetProfileProxyBody,
   SetProfileProxyErrorBody,
   SetProfileProxyResponse
@@ -30,7 +33,7 @@ import type {
 
 const props = defineProps<{
   /** the row the admin clicked; `null` while the modal was never opened */
-  profile: AvailableProfile | null
+  profile: ProxyModalProfile | null
 }>()
 
 const emit = defineEmits<{

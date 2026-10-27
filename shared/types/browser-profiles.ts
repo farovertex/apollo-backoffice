@@ -231,6 +231,13 @@ export interface ProfileFingerprint {
   hardwareNoise: ProfileHardwareNoise
 }
 
+/**
+ * FEAT-070 — the minimal profile shape the shared Change-proxy modal (`BrowserProfilesProxyModal`) reads: an
+ * `AvailableProfile` of `/browser-profiles` and the account view's `browserProfile` of `/tiktok-accounts` both
+ * satisfy it, so one modal serves both pages.
+ */
+export type ProxyModalProfile = Pick<AvailableProfile, 'id' | 'name' | 'providerProfileId' | 'proxyRef' | 'proxy'>
+
 /** `proxies` row as joined onto a profile / defaults view — never username or password. */
 export interface ProxyRef {
   id: string
