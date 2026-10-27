@@ -162,6 +162,20 @@
  * `favorite` can never flip the star back right after a successful toggle. `rows` stable-sorts `filtered` with
  * favorites first (`ta-row[data-favorite]`), so a search or the "Launching only" switch still shows its favorites
  * on top; the API's own `createdAt desc` order is untouched inside each group.
+ * FEAT-070 (2026-10-27, api-contract.md v1 §6, spec "UI behaviour" AC-9..AC-16) — two columns right after Account
+ * (10 now): **Workspace** (`ta-workspace[data-workspace-id]`, `workspaceName` truncated with `title`, `—` +
+ * `title="Workspace not found"` when null) and **Proxy** (`TiktokAccountsProxyCell`, `ta-proxy`: proxy name, last
+ * check ✓/✗ or `never checked`, icon-only **Check** `ta-proxy-check` + **Change** `ta-proxy-edit`). Check = one
+ * `POST /backend/proxies/<proxyRef.id>/check` per click (row-scoped `loading`, concurrent rows allowed); the 200 is
+ * kept in `proxyCheckById` (by proxy id, the newer `at` wins over the row's `proxyLastCheck`) so the line flips
+ * at once with no list refetch; any error → toast `Could not check <label>`. Change opens the shared
+ * `BrowserProfilesProxyModal` (prop widened to `ProxyModalProfile`, `bp-proxy-*` unchanged) with the account's
+ * `browserProfile`; its 202 marks the profile id in `proxyChanging` (optimistic "Updating proxy…" badge) and one
+ * 2 s `refresh()` loop (`proxyPoll`) runs while any row is updating — ours or one that arrived `proxyUpdating:
+ * true` from the API — and stops when none is. Our own ids get one outcome toast when the API flag clears
+ * (`Proxy updated · …` / `Proxy change failed · <provisionError>`); rows we did not ask for get none (the
+ * `/browser-profiles` rule). A modal 409 asks for one background `refresh()`. The other columns, ids and polls
+ * are untouched.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -198,6 +212,8 @@ import type {
 } from '#shared/types/tiktok-accounts'
 import { FAILURE_SCREENSHOT_TYPE_LABEL } from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
+import type { ProxyModalProfile } from '#shared/types/browser-profiles'
+import type { CheckProxyResponse, ProxyLastCheck } from '#shared/types/proxies'
 import type { TopupViewer } from '~/utils/topup'
 
 useSeoMeta({ title: 'TikTok accounts' })
@@ -210,6 +226,7 @@ const UDropdownMenu = resolveComponent('UDropdownMenu')
 const TopupsStatusBadge = resolveComponent('TopupsStatusBadge')
 const TopupsRowActions = resolveComponent('TopupsRowActions')
 const TiktokAccountsFavoriteStar = resolveComponent('TiktokAccountsFavoriteStar')
+const TiktokAccountsProxyCell = resolveComponent('TiktokAccountsProxyCell')
 
 const POLL_MS = 2000
 
@@ -1468,11 +1485,166 @@ function openAdvertisers(account: TikTokAccount, org: BcOrganization | null = nu
   advOpen.value = true
 }
 
+// ── proxy column: check + change (FEAT-070) ─────────────────────────────────────────────────────────────────────────
+/**
+ * Fresh `POST /proxies/:id/check` results by **proxy id** (two accounts may show the same proxy row). Never cleared
+ * by a refresh: the effective last check is whichever of this and the row's own `proxyLastCheck` is newer, so a
+ * re-read that already carries the result agrees, and one that raced ahead of the check cannot flip it back.
+ */
+const proxyCheckById = shallowRef(new Map<string, ProxyLastCheck>())
+/** account ids whose check is in flight (row-scoped `loading`; other rows stay clickable) */
+const proxyChecking = ref(new Set<string>())
+
+function effectiveLastCheck(a: TikTokAccount): ProxyLastCheck | null {
+  const bp = a.browserProfile
+  const own = bp?.proxyLastCheck ?? null
+  const ref = bp?.proxyRef
+  if (!ref) return null
+  const fresh = proxyCheckById.value.get(ref.id)
+  if (!fresh) return own
+  if (!own) return fresh
+  return fresh.at.localeCompare(own.at) >= 0 ? fresh : own
+}
+
+function setProxyChecking(id: string, on: boolean) {
+  const next = new Set(proxyChecking.value)
+  if (on) next.add(id)
+  else next.delete(id)
+  proxyChecking.value = next
+}
+
+/** `checkOne` of `/proxies`: one POST, the 200 merged into the row (no refetch), any error → toast */
+async function onProxyCheck(account: TikTokAccount) {
+  const ref = account.browserProfile?.proxyRef
+  if (!ref || proxyChecking.value.has(account.id)) return
+  setProxyChecking(account.id, true)
+  try {
+    // retry: 0 — exactly one check per click (the endpoint answers 200 either way, ok/error is in the body)
+    const res = await api<CheckProxyResponse>(`/proxies/${encodeURIComponent(ref.id)}/check`, { method: 'POST', retry: 0 })
+    proxyCheckById.value = new Map(proxyCheckById.value).set(ref.id, { at: res.checkedAt, ok: res.ok, ip: res.ip, error: res.error })
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({
+      title: `Could not check ${ref.label}`,
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: 'error'
+    })
+  } finally {
+    setProxyChecking(account.id, false)
+  }
+}
+
+/**
+ * Profile ids we asked to re-point (202) and have not yet seen come back with `proxyUpdating: false` — the
+ * optimistic half of `isProxyUpdating` and the set that decides who gets an outcome toast.
+ */
+const proxyChanging = ref<string[]>([])
+/**
+ * Ids of `proxyChanging` whose post-202 re-read has landed: only those are judged by `settleProxyRows`, so a list
+ * read that was already in flight when the POST answered (still `proxyUpdating: false`) cannot end the watch early.
+ */
+const proxyArmed = new Set<string>()
+
+function isProxyUpdating(a: TikTokAccount): boolean {
+  const bp = a.browserProfile
+  return !!bp && (bp.proxyUpdating || proxyChanging.value.includes(bp.id))
+}
+
+const proxyTarget = ref<ProxyModalProfile | null>(null)
+const proxyModalOpen = ref(false)
+
+function askProxy(account: TikTokAccount) {
+  const bp = account.browserProfile
+  if (!bp) return
+  proxyTarget.value = { id: bp.id, name: bp.name, providerProfileId: bp.providerProfileId, proxyRef: bp.proxyRef, proxy: bp.proxy }
+  proxyModalOpen.value = true
+}
+
+/** the modal got its 202 (it closed itself and toasted) — mark the row, re-read once, then the poll follows it */
+async function onProxyRequested(profileId: string) {
+  if (!proxyChanging.value.includes(profileId)) proxyChanging.value = [...proxyChanging.value, profileId]
+  proxyArmed.delete(profileId)
+  await refresh()
+  proxyArmed.add(profileId)
+  settleProxyRows()
+}
+
+/** what the row's proxy is now, as the success toast says it */
+function proxyNow(a: TikTokAccount): string {
+  const bp = a.browserProfile
+  return bp?.proxyRef?.label ?? formatProxySnapshot(bp?.proxy ?? null) ?? 'No proxy'
+}
+
+/** a watched row came back with `proxyUpdating: false` → one toast with the outcome, and the id is dropped */
+function settleProxyRows() {
+  if (!proxyChanging.value.length) return
+  const list = data.value?.accounts ?? []
+  const keep: string[] = []
+  for (const id of proxyChanging.value) {
+    if (!proxyArmed.has(id)) {
+      keep.push(id)
+      continue
+    }
+    const a = list.find(r => r.browserProfile?.id === id)
+    // row gone / filtered out / profile gone: nothing left to report
+    if (!a?.browserProfile) {
+      proxyArmed.delete(id)
+      continue
+    }
+    if (a.browserProfile.proxyUpdating) {
+      keep.push(id)
+      continue
+    }
+    proxyArmed.delete(id)
+    const label = a.label ?? a.loginEmail
+    // the `setProxy` job never touches `runState` — `provisionError` is the only signal it failed
+    if (a.browserProfile.provisionError) {
+      toast.add({ title: `Proxy change failed · ${a.browserProfile.provisionError}`, description: label, color: 'error' })
+    } else {
+      toast.add({ title: `Proxy updated · ${proxyNow(a)}`, description: label, color: 'success' })
+    }
+  }
+  if (keep.length !== proxyChanging.value.length) proxyChanging.value = keep
+}
+watch(data, settleProxyRows)
+
+/**
+ * One 2 s `refresh()` loop (same pattern as `subCreatePolls`: one timer, never two reads in flight, cleared on
+ * unmount) while **any** row is updating — one we asked for, or one that arrived `proxyUpdating: true` from the
+ * API (another admin / tab: polled the same way, no toast). The list read is the only request; it stops as soon
+ * as no row is updating.
+ */
+const proxyPollNeeded = computed(() =>
+  proxyChanging.value.length > 0 || (data.value?.accounts ?? []).some(a => a.browserProfile?.proxyUpdating === true)
+)
+let proxyPoll: ReturnType<typeof setInterval> | null = null
+
+function stopProxyPoll() {
+  if (proxyPoll) clearInterval(proxyPoll)
+  proxyPoll = null
+}
+
+watch(proxyPollNeeded, (needed) => {
+  if (!needed) {
+    stopProxyPoll()
+    return
+  }
+  if (proxyPoll) return
+  proxyPoll = setInterval(() => {
+    // a read is already running (ours, a Refresh or another poll family) — never cancel it with a second one
+    if (status.value === 'pending') return
+    void refresh()
+  }, POLL_MS)
+}, { immediate: true })
+
+onUnmounted(stopProxyPoll)
+
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
  * The list is a computed because two cells read `canPay`: the Balance cell's auto-channel chip and the "⋯"
  * menu's cards item must not exist at all for an Admin (FEAT-053 AC-20 / FEAT-051 AC-35). Eight columns since
- * the 2026-10-16 declutter, the Login email + Browser profile merge and the 2026-10-20 Label merge.
+ * the 2026-10-16 declutter, the Login email + Browser profile merge and the 2026-10-20 Label merge; ten since
+ * FEAT-070 (Workspace + Proxy right after Account).
  */
 const columns = computed<TableColumn<TikTokAccount>[]>(() => [
   // 2026-10-11 (human request): the "Email password", "Recovery email" and "TikTok password" columns are no
@@ -1534,6 +1706,40 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
           }, pid ?? '—')
         ])
       ])
+    }
+  },
+  // FEAT-070 — the account's workspace, by name (one `$in` on the API side)
+  {
+    id: 'workspace',
+    header: 'Workspace',
+    cell: ({ row }) => {
+      const a = row.original
+      const name = a.workspaceName
+      return h('span', {
+        'class': ['block max-w-32 truncate', name ? '' : 'text-muted'],
+        'title': name ?? 'Workspace not found',
+        'data-testid': 'ta-workspace',
+        'data-workspace-id': a.workspaceId
+      }, name ?? '—')
+    }
+  },
+  // FEAT-070 — the proxy of the account's browser profile + Check / Change (see the file header)
+  {
+    id: 'proxy',
+    header: 'Proxy',
+    cell: ({ row }) => {
+      const a = row.original
+      const last = effectiveLastCheck(a)
+      return h(TiktokAccountsProxyCell, {
+        profileId: a.browserProfileId,
+        profile: a.browserProfile,
+        lastCheck: last,
+        checkedAgo: last ? shortAgo(last.at) : null,
+        updating: isProxyUpdating(a),
+        checking: proxyChecking.value.has(a.id),
+        onCheck: () => onProxyCheck(a),
+        onEdit: () => askProxy(a)
+      })
     }
   },
   {
@@ -2212,6 +2418,12 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         @requested="onTtLinkRequested"
         @settled="onTtLinkSettled"
         @linked="onTtLinked"
+      />
+      <BrowserProfilesProxyModal
+        v-model:open="proxyModalOpen"
+        :profile="proxyTarget"
+        @requested="onProxyRequested"
+        @refresh="refresh()"
       />
       <TopupsPayModal
         v-model:open="modalOpen"
