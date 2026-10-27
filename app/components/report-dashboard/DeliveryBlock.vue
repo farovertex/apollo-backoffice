@@ -5,17 +5,11 @@
  * translated through `monitorReasonTexts`, raw string on hover), ads by state, pending/failed switches and
  * deletes, banned advertisers; then the rejected-ads list (`rd-rejected`) and the not-delivering list
  * (`rd-not-delivering`), each absent when empty.
- *
- * `rd-banned-new` / `rd-banned-lifted` (bans/lifts in the range) come from `/reports/performance`'s
- * `results.bans/lifted`, which `/reports/dashboard` does not carry in contract v1 → the page passes `null` and
- * the cells show `—` (reported to the Lead in `bo.md`).
  */
 import type { DashboardNowResponse } from '#shared/types/report-dashboard'
 
 const props = defineProps<{
   now: DashboardNowResponse
-  bansInRange: number | null
-  liftedInRange: number | null
 }>()
 
 const ADS_STATES = [
@@ -144,10 +138,6 @@ const ndCount = computed(() => props.now.launching.notDelivering)
           data-testid="rd-banned-now"
           :data-value="now.banned.now"
         >{{ formatInt(now.banned.now) }} ตอนนี้</span>
-        <span class="flex flex-wrap gap-x-3 text-xs text-muted">
-          <span data-testid="rd-banned-new" :data-value="bansInRange ?? ''">ใหม่ในช่วง {{ formatInt(bansInRange) }}</span>
-          <span data-testid="rd-banned-lifted" :data-value="liftedInRange ?? ''">ปลดในช่วง {{ formatInt(liftedInRange) }}</span>
-        </span>
         <span class="text-xs text-muted">ดูรายการ →</span>
       </NuxtLink>
     </div>
