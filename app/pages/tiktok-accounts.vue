@@ -399,9 +399,12 @@ const loginOpen = ref(false)
 const loginTarget = ref<TikTokAccount | null>(null)
 // account id whose POST …/login is in flight (button spinner + no double click)
 const loginStarting = ref<string | null>(null)
+// FEAT-071 — login job id of the 202 / 409 that opened the modal (the modal matches its failure screenshot on it)
+const loginJobId = ref<string | null>(null)
 
-function openLoginModal(account: TikTokAccount) {
+function openLoginModal(account: TikTokAccount, jobId: string | null = null) {
   loginTarget.value = account
+  loginJobId.value = jobId
   loginOpen.value = true
 }
 
@@ -411,13 +414,13 @@ async function onLogin(account: TikTokAccount) {
   loginStarting.value = account.id
   try {
     // retry: 0 — exactly one POST per click (ofetch would otherwise re-issue it on 5xx)
-    await api<LoginJobResponse>(`/tiktok-accounts/${encodeURIComponent(account.id)}/login`, { method: 'POST', retry: 0 })
-    openLoginModal(account)
+    const started = await api<LoginJobResponse>(`/tiktok-accounts/${encodeURIComponent(account.id)}/login`, { method: 'POST', retry: 0 })
+    openLoginModal(account, started?.jobId ?? null)
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
     if (err.statusCode === 409) {
       // a job or human task already exists for this account → follow it in the modal (body: jobId / humanTaskId)
-      openLoginModal(account)
+      openLoginModal(account, err.data?.jobType === 'discover' ? null : (err.data?.jobId ?? null))
     } else {
       toast.add({
         title: 'Could not start the login',
@@ -2170,6 +2173,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         v-model:open="loginOpen"
         :account-id="loginTarget?.id ?? null"
         :account-label="loginTarget?.label ?? loginTarget?.loginEmail ?? null"
+        :job-id="loginJobId"
         @success="refreshAndFollowDiscovers()"
         @close="refreshAndFollowDiscovers()"
       />

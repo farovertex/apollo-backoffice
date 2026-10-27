@@ -47,9 +47,9 @@ const ERR_FALLBACK = 'โหลดภาพไม่ได้'
 
 const entries = ref<FailureScreenshotView[]>([])
 const selectedId = ref<string | null>(null)
-const images = reactive<Record<string, CachedImage>>({})
-const states = reactive<Record<string, ShotState>>({})
-const errors = reactive<Record<string, string>>({})
+const images = reactive(new Map<string, CachedImage>())
+const states = reactive(new Map<string, ShotState>())
+const errors = reactive(new Map<string, string>())
 // bumped on every open/close so a late response of a previous open is dropped
 let session = 0
 
@@ -57,9 +57,9 @@ const accountName = computed(() => props.account?.label || props.account?.loginE
 const selected = computed<FailureScreenshotView | null>(
   () => entries.value.find(e => e.jobId === selectedId.value) ?? null
 )
-const state = computed<ShotState>(() => (selectedId.value ? (states[selectedId.value] ?? 'loading') : 'loading'))
-const src = computed(() => (selectedId.value ? (images[selectedId.value]?.src ?? null) : null))
-const errorText = computed(() => (selectedId.value ? (errors[selectedId.value] ?? ERR_FALLBACK) : ERR_FALLBACK))
+const state = computed<ShotState>(() => (selectedId.value ? (states.get(selectedId.value) ?? 'loading') : 'loading'))
+const src = computed(() => (selectedId.value ? (images.get(selectedId.value)?.src ?? null) : null))
+const errorText = computed(() => (selectedId.value ? (errors.get(selectedId.value) ?? ERR_FALLBACK) : ERR_FALLBACK))
 const showList = computed(() => entries.value.length > 1)
 
 const modalContent = computed(() => ({
@@ -74,14 +74,14 @@ function isFresh(img: CachedImage): boolean {
 async function loadImage(jobId: string, force: boolean) {
   const accountId = props.account?.id
   if (!accountId) return
-  const cached = images[jobId]
+  const cached = images.get(jobId)
   if (!force && cached && isFresh(cached)) {
-    states[jobId] = 'ready'
+    states.set(jobId, 'ready')
     return
   }
   const s = session
-  states[jobId] = 'loading'
-  delete images[jobId]
+  states.set(jobId, 'loading')
+  images.delete(jobId)
   try {
     // retry: 0 — exactly one request per entry per open (per click on retry)
     const res = await api<FailureScreenshotImage>(
@@ -90,21 +90,21 @@ async function loadImage(jobId: string, force: boolean) {
     )
     if (s !== session) return
     if (isFailureScreenshotUrl(res)) {
-      images[jobId] = { src: res.url, expiresAt: new Date(res.expiresAt).getTime() }
+      images.set(jobId, { src: res.url, expiresAt: new Date(res.expiresAt).getTime() })
     } else if (res.base64) {
-      images[jobId] = { src: `data:${res.mimeType};base64,${res.base64}`, expiresAt: null }
+      images.set(jobId, { src: `data:${res.mimeType};base64,${res.base64}`, expiresAt: null })
     } else {
       throw new Error(ERR_FALLBACK)
     }
-    states[jobId] = 'ready'
+    states.set(jobId, 'ready')
   } catch (e) {
     if (s !== session) return
     const err = e as FetchError<Partial<ApiErrorBody>>
     if (err.statusCode === 404) {
-      states[jobId] = 'expired'
+      states.set(jobId, 'expired')
     } else {
-      errors[jobId] = err.data?.error ?? ERR_FALLBACK
-      states[jobId] = 'error'
+      errors.set(jobId, err.data?.error ?? ERR_FALLBACK)
+      states.set(jobId, 'error')
     }
   }
 }
@@ -144,17 +144,17 @@ function retry() {
 function onImgError() {
   const id = selectedId.value
   if (!id) return
-  errors[id] = ERR_FALLBACK
-  states[id] = 'error'
+  errors.set(id, ERR_FALLBACK)
+  states.set(id, 'error')
 }
 
 function reset() {
   session++
   entries.value = []
   selectedId.value = null
-  for (const k of Object.keys(images)) delete images[k]
-  for (const k of Object.keys(states)) delete states[k]
-  for (const k of Object.keys(errors)) delete errors[k]
+  images.clear()
+  states.clear()
+  errors.clear()
 }
 
 watch(open, (isOpen) => {
