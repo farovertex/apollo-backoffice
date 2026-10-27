@@ -36,7 +36,9 @@
  *
  * **FEAT-058** (api-contract v1 §1–§3 · spec AC-4..8, AC-10): a **Created by** select (`agt-filter-created-by`)
  * right after the search box filters the list by `workspaceId`. Default = `useAuth().context.homeWorkspaceId`
- * (fallback `all`); the first list request already carries it, before `GET /ad-group-templates/creators`
+ * (fallback `all`) for an Admin; **TASK-templates-default-filter (2026-10-27)**: a GOD opens on `Everyone`
+ * (`all`) instead — FEAT-058 decision A4 flipped by the human. The first list request already carries the
+ * default, before `GET /ad-group-templates/creators`
  * (fetched once per page lifetime) has answered — items fall back to `Everyone` + `<admin.username> (me)`
  * from the session until then or on a failed `/creators` (silent, `data-creators`). Changing the select resets
  * the page to 1 and collapses into one list request, like the search box. Three empty states beyond the
@@ -91,8 +93,10 @@ function labelOf(list: OptionItem[] | undefined, value: string | null | undefine
 const auth = useAuth()
 const homeWorkspaceId = computed(() => auth.context.value?.homeWorkspaceId ?? null)
 
-/** default = own workspace (fallback `all`); never waits for `/creators` */
-const createdBy = ref<string>(homeWorkspaceId.value ?? 'all')
+const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
+
+/** default = `Everyone` for a GOD, own workspace for an Admin (fallback `all`); never waits for `/creators` */
+const createdBy = ref<string>(isGod.value ? 'all' : (homeWorkspaceId.value ?? 'all'))
 
 const creators = ref<Creator[]>([])
 const creatorsStatus = ref<'pending' | 'ready' | 'error'>('pending')
