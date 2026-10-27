@@ -55,10 +55,11 @@ const sharedNote = computed(() => {
   <section class="flex flex-col gap-3" data-testid="rd-funnel-section">
     <!-- hero: Dep/Budget + the four numbers it is made of -->
     <div
-      class="grid grid-cols-1 gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]"
+      class="relative grid grid-cols-1 gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]"
       data-testid="rd-hero"
       :data-value="r.depPerBudget ?? ''"
     >
+      <ReportsInfoHint id="rd-hero" :text="REPORT_HELP['rd-hero']!" class="absolute right-2 top-2 z-[1]" />
       <ReportsMetricTile
         testid="rd-tile-depBudget"
         label="Dep / Budget"
@@ -67,6 +68,7 @@ const sharedNote = computed(() => {
         format="dec"
         caption="ยอดฝาก ÷ spend"
         child-ids
+        :help="REPORT_HELP['rd-tile-depBudget']"
         class="bg-default"
       />
       <dl class="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -114,6 +116,7 @@ const sharedNote = computed(() => {
         format="dec"
         caption="สกุลเงินของบัญชี ไม่แปลงค่า"
         child-ids
+        :help="REPORT_HELP['rd-tile-spend']"
       />
       <ReportsMetricTile
         testid="rd-tile-impressions"
@@ -121,6 +124,7 @@ const sharedNote = computed(() => {
         :value="m.impressions"
         :previous="pm?.impressions ?? null"
         child-ids
+        :help="REPORT_HELP['rd-tile-impressions']"
       >
         <ReportDashboardSubMetric
           testid="rd-sub-cpm"
@@ -136,6 +140,7 @@ const sharedNote = computed(() => {
         :value="m.clicks"
         :previous="pm?.clicks ?? null"
         child-ids
+        :help="REPORT_HELP['rd-tile-clicks']"
       >
         <span class="flex flex-wrap gap-x-3">
           <ReportDashboardSubMetric
@@ -160,6 +165,7 @@ const sharedNote = computed(() => {
         :value="m.conversions"
         :previous="pm?.conversions ?? null"
         child-ids
+        :help="REPORT_HELP['rd-tile-conversions']"
       >
         <span class="flex flex-wrap gap-x-3">
           <ReportDashboardSubMetric
@@ -184,6 +190,7 @@ const sharedNote = computed(() => {
         :value="funnel.utm.registers"
         :previous="previous?.utm.registers ?? null"
         child-ids
+        :help="REPORT_HELP['rd-tile-registers']"
       >
         <ReportDashboardSubMetric
           testid="rd-sub-costReg"
@@ -199,6 +206,7 @@ const sharedNote = computed(() => {
         :value="funnel.utm.depositors"
         :previous="previous?.utm.depositors ?? null"
         child-ids
+        :help="REPORT_HELP['rd-tile-depositors']"
       >
         <span class="flex flex-wrap gap-x-3">
           <ReportDashboardSubMetric
@@ -224,6 +232,7 @@ const sharedNote = computed(() => {
         :previous="previous?.utm.depositAmount ?? null"
         format="dec"
         child-ids
+        :help="REPORT_HELP['rd-tile-deposit']"
       >
         <ReportDashboardSubMetric
           testid="rd-sub-avgDep"
@@ -240,10 +249,14 @@ const sharedNote = computed(() => {
         format="dec"
         caption="ยอดฝาก − ยอดถอน"
         child-ids
+        :help="REPORT_HELP['rd-tile-winLose']"
       />
     </div>
 
     <div class="rounded-lg border border-default p-3" data-testid="rd-funnel">
+      <div class="mb-1.5 flex items-center justify-end gap-1">
+        <ReportsInfoHint id="rd-funnel" :text="REPORT_HELP['rd-funnel']!" />
+      </div>
       <ol class="flex flex-col gap-1.5">
         <li
           v-for="s in steps"

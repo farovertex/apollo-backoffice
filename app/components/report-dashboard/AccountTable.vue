@@ -18,6 +18,18 @@ function depBudget(row: DashboardAccountRow): number | null {
 const shown = computed(() => [...props.rows].sort((a, b) =>
   perfCompare(depBudget(a), depBudget(b), -1) || b.metrics.spend - a.metrics.spend))
 
+/** FEAT-069 (T2c) — the 8 numeric columns in the order they are rendered below */
+const NUM_HEADERS: { label: string, key: string }[] = [
+  { label: 'Spend', key: 'rd-table-account-col-spend' },
+  { label: 'Impr', key: 'rd-table-account-col-impressions' },
+  { label: 'Clicks', key: 'rd-table-account-col-clicks' },
+  { label: 'Conv', key: 'rd-table-account-col-conversions' },
+  { label: 'Register', key: 'rd-table-account-col-registers' },
+  { label: 'Deposit', key: 'rd-table-account-col-depositors' },
+  { label: 'Amount', key: 'rd-table-account-col-depositAmount' },
+  { label: 'Dep/Budget', key: 'rd-table-account-col-depBudget' }
+]
+
 const totals = computed(() => {
   const t = { spend: 0, impressions: 0, clicks: 0, conversions: 0, registers: 0, depositors: 0, depositAmount: 0 }
   for (const r of props.rows) {
@@ -48,15 +60,21 @@ const totals = computed(() => {
             Advertiser
           </th>
           <th
-            v-for="h in ['Spend', 'Impr', 'Clicks', 'Conv', 'Register', 'Deposit', 'Amount', 'Dep/Budget']"
-            :key="h"
+            v-for="h in NUM_HEADERS"
+            :key="h.label"
             scope="col"
             class="bg-elevated px-3 py-2 text-right"
           >
-            {{ h }}
+            <span class="inline-flex items-center justify-end gap-1">
+              <span>{{ h.label }}</span>
+              <ReportsInfoHint :id="h.key" :text="REPORT_HELP[h.key]!" />
+            </span>
           </th>
           <th scope="col" class="bg-elevated px-3 py-2 text-left">
-            Status now
+            <span class="inline-flex items-center gap-1">
+              <span>Status now</span>
+              <ReportsInfoHint id="rd-table-account-col-state" :text="REPORT_HELP['rd-table-account-col-state']!" />
+            </span>
           </th>
         </tr>
       </thead>

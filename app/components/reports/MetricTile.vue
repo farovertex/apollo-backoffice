@@ -21,12 +21,19 @@ const props = withDefaults(defineProps<{
    * FEAT-020 fixed `rp-tile-delta`; off by default so `/reports` and `/reports/summary` keep their ids.
    */
   childIds?: boolean
+  /**
+   * FEAT-069 (T2c) — the "i" info-hint text, rendered next to the label via `ReportsInfoHint` keyed on
+   * `testid`. Opt-in and `undefined` by default so `/reports` and `/reports/summary` (FEAT-020/035) render
+   * exactly as before.
+   */
+  help?: string
 }>(), {
   previous: null,
   format: 'int',
   caption: undefined,
   lowerIsBetter: false,
-  childIds: false
+  childIds: false,
+  help: undefined
 })
 
 const text = computed(() => {
@@ -64,7 +71,10 @@ const worseNote = computed(() => (delta.value && !delta.value.good && props.lowe
     :data-testid="testid"
     :data-value="value ?? ''"
   >
-    <span class="text-xs text-muted">{{ label }}</span>
+    <span class="flex items-center gap-1 text-xs text-muted">
+      <span>{{ label }}</span>
+      <ReportsInfoHint v-if="help" :id="testid" :text="help" />
+    </span>
     <span
       class="truncate text-xl font-semibold tabular-nums text-highlighted"
       :title="text"

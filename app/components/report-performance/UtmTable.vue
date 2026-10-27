@@ -128,6 +128,8 @@ const footer = computed(() => {
             :label="c.label"
             :sort-state="sort.ariaSort(c.key)"
             numeric
+            :help-id="`rf-table-utm-col-${c.key}`"
+            :help-text="REPORT_HELP[`rf-table-utm-col-${c.key}`]"
             @sort="sort.toggle(c.key)"
           />
         </tr>

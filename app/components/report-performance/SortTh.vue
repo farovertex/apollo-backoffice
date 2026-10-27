@@ -9,6 +9,9 @@ defineProps<{
   sortState: 'ascending' | 'descending' | 'none'
   numeric?: boolean
   sticky?: boolean
+  /** FEAT-069 (T2c) — the owner id of the "i" info hint rendered next to the sort button, e.g. `rf-table-day-col-spend` */
+  helpId?: string
+  helpText?: string
 }>()
 
 defineEmits<{ sort: [] }>()
@@ -21,15 +24,26 @@ defineEmits<{ sort: [] }>()
     class="bg-elevated p-0 text-xs font-medium text-muted"
     :class="sticky ? 'sticky left-0 z-[2]' : ''"
   >
-    <button
-      type="button"
-      class="flex w-full items-center gap-1 px-3 py-2 uppercase hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary"
-      :class="[numeric ? 'justify-end' : 'justify-start', sortState !== 'none' ? 'text-highlighted' : '']"
-      :data-testid="testid"
-      @click="$emit('sort')"
+    <div
+      class="flex items-center gap-1 px-3 py-2"
+      :class="numeric ? 'justify-end' : 'justify-start'"
     >
-      <span>{{ label }}</span>
-      <span aria-hidden="true" class="w-2">{{ sortState === 'descending' ? '↓' : sortState === 'ascending' ? '↑' : '' }}</span>
-    </button>
+      <button
+        type="button"
+        class="flex items-center gap-1 uppercase hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary"
+        :class="sortState !== 'none' ? 'text-highlighted' : ''"
+        :data-testid="testid"
+        @click="$emit('sort')"
+      >
+        <span>{{ label }}</span>
+        <span aria-hidden="true" class="w-2">{{ sortState === 'descending' ? '↓' : sortState === 'ascending' ? '↑' : '' }}</span>
+      </button>
+      <ReportsInfoHint
+        v-if="helpId"
+        :id="helpId"
+        :text="helpText!"
+        class="shrink-0"
+      />
+    </div>
   </th>
 </template>

@@ -42,6 +42,11 @@ const cols = computed(() => {
   return list
 })
 
+/** FEAT-069 (T2c) — only `spend` and `state` have a help text; the name/account/workspace/UTM columns do not */
+function helpKeyOf(key: Col): string | undefined {
+  return key === 'spend' || key === 'state' ? `rf-table-account-col-${key}` : undefined
+}
+
 const shown = computed(() => [...props.rows].sort((a, b) =>
   perfCompare(valueOf(a, sort.col.value), valueOf(b, sort.col.value), sort.dir.value)
   || String(a.advertiser.name ?? '').localeCompare(String(b.advertiser.name ?? ''))
@@ -63,6 +68,8 @@ const totalSpend = computed(() => props.rows.reduce((sum, r) => sum + r.spend, 0
             :sort-state="sort.ariaSort(c.key)"
             :numeric="c.numeric"
             :sticky="i === 0"
+            :help-id="helpKeyOf(c.key)"
+            :help-text="helpKeyOf(c.key) ? REPORT_HELP[helpKeyOf(c.key)!] : undefined"
             @sort="sort.toggle(c.key)"
           />
         </tr>
