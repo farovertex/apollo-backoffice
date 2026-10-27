@@ -39,8 +39,10 @@
  * real scroll container for both axes, so `sticky top-0` on each `th` pins against the box the horizontal
  * scroll already lives in — same container, so it also scrolls sideways with the body (no misalignment).
  * `bg-elevated` (opaque, not `/50`) on both the row and each `th` keeps rows from showing through underneath;
- * `z-10` keeps it above `USwitch` / badges. `am-total` is not sticky (not required) — reachable by scrolling
- * the same box to the end.
+ * `z-10` keeps it above `USwitch` / badges. `am-total` (the `tfoot` totals row) is pinned the same way at the
+ * other edge — `sticky bottom-0 z-10 bg-elevated` on each `td` (a `tr` cannot be sticky in a `border-separate`
+ * table, so the cells carry it, exactly like the `th`s) — so header and totals stay in view together while
+ * the rows scroll between them. With fewer rows than the box's height it simply sits where it always did.
  *
  * FEAT-067 — a collapsible "UTM" column (`AdsMonitorUtmCell`, spec "UI behaviour" → Cell / contract §4) is
  * inserted right after `name` on the ad-group / ad tabs and right after `cover` on the campaign tab; nothing
@@ -454,13 +456,13 @@ function scheduleText(row: MonitorRow): string {
 
       <tfoot>
         <tr data-testid="am-total" class="bg-elevated font-semibold">
-          <td :colspan="labelSpan" class="rounded-bl-lg border-t border-l border-default px-2 py-2">
+          <td :colspan="labelSpan" class="sticky bottom-0 z-10 rounded-bl-lg border-t border-l border-default bg-elevated px-2 py-2">
             รวมทั้งหมด
           </td>
           <td
             v-for="(column, index) in footColumns"
             :key="column.key"
-            class="border-t border-default px-2 py-2 text-right tabular-nums"
+            class="sticky bottom-0 z-10 border-t border-default bg-elevated px-2 py-2 text-right tabular-nums"
             :class="index === footColumns.length - 1 ? 'rounded-br-lg border-r' : ''"
             :data-field="column.key"
           >
