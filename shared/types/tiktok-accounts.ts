@@ -64,9 +64,16 @@
  * caller** (the admin reading the view) has starred the account, computed server-side from
  * `ADMINS.preferences.favoriteAccountIds`, never shared between admins. `PUT`/`DELETE /tiktok-accounts/:id/favorite`
  * toggle it (idempotent, no body) and answer `{ id, favorite }`.
+ * FEAT-070 (api-contract.md v1 §1/§2/§6) — the view gains `workspaceName` (key 42, right after `workspaceId`:
+ * `workspaces.name`, `null` when the workspace row is gone) and the embedded `browserProfile` grows from 4 to
+ * **11** keys (`runState`, `provisionError`, `proxyId`, `proxyRef`, `proxy`, `proxyLastCheck`, `proxyUpdating` —
+ * the same meaning as on `/browser-profiles/available` and `/proxies`), so the accounts page can show, check and
+ * change the account's proxy from one list read.
  */
 
+import type { AvailableProfileProxy, ProfileRunState, ProxyRef } from './browser-profiles'
 import type { HumanTaskKind } from './human-tasks'
+import type { ProxyLastCheck } from './proxies'
 import type { TopupChannel, TopupView } from './topups'
 
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
@@ -128,6 +135,20 @@ export interface AccountBrowserProfile {
   /** FEAT-024 — `null` while the profile row is only reserved (create job still running) or the create failed */
   providerProfileId: string | null
   groupName: string | null
+  /** FEAT-070 — the profile row's provider-side lifecycle (same enum as 2.1) */
+  runState: ProfileRunState
+  /** FEAT-070 — why the last provider op failed; a failed `provider{setProxy}` job writes its text here */
+  provisionError: string | null
+  /** FEAT-070 — `proxies._id` chosen in the BO (2.3 / 2.13); null for a synced profile or none */
+  proxyId: string | null
+  /** FEAT-070 — joined from `proxies` by `proxyId` (never username/password); null when none or the row is gone */
+  proxyRef: ProxyRef | null
+  /** FEAT-070 — the provider snapshot (what AdsPower has); a synced profile may have this and no `proxyRef` */
+  proxy: AvailableProfileProxy | null
+  /** FEAT-070 — the proxy row's last connectivity check; null without `proxyRef` or when never checked */
+  proxyLastCheck: ProxyLastCheck | null
+  /** FEAT-070 — `true` while a `provider{setProxy}` job of this profile is `waiting|active` */
+  proxyUpdating: boolean
 }
 
 /**
@@ -174,6 +195,8 @@ export interface RunningJob {
 export interface TikTokAccount {
   id: string
   workspaceId: string
+  /** FEAT-070 — `workspaces.name` of `workspaceId`; null when that workspace row no longer exists */
+  workspaceName: string | null
   browserProfileId: string
   browserProfile: AccountBrowserProfile | null
   label: string | null
