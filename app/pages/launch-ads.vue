@@ -98,6 +98,17 @@
  * and the box is checked — omitted otherwise (A5), so Save as draft never sends it and every FEAT-016/062
  * exact-body assertion stays valid. The value is passed to `LaunchAdsPublishConfirmModal` to render its
  * `la-confirm-pause` line. No other layout of FEAT-062 changes.
+ *
+ * FEAT-073 (api-contract.md v1 §2, spec "UI behaviour"/"Template scope") — the step-1 `la-acc-ws` workspace
+ * select now also scopes step 2: `templateWorkspaceIds` (from `useAuth()` — GOD vs Admin's `context.workspaceIds`
+ * — composed with `workspaceFilter`) is sent as `workspaceIds` on the two list requests of `loadTemplates()`,
+ * omitted entirely for a GOD on "All workspaces". The two `/options` requests stay a one-time fetch
+ * (`optionsLoaded`, FEAT-016 AC-14); only the two lists repeat when `templateWorkspaceIdsKey` changes **after**
+ * step 2 was opened at least once (a change before that causes no request). `templatesSession` drops a stale
+ * answer exactly like `targetsSession` above. After every list answer a selection the new scope no longer
+ * serves is cleared (A6, answer-driven, not computed from the template's own workspace). The scope line
+ * `la-tpl-scope` (absent for `none`) and the three empty-state texts of `la-agt-empty` / `la-adt-empty` follow
+ * `templateScopeKind`. `retryTemplates()` always re-runs with the current scope.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -131,6 +142,7 @@ const FALLBACK_MAX_COPIES = 8
 
 const api = useApi()
 const toast = useToast()
+const auth = useAuth()
 
 // ── step 1 · targets ─────────────────────────────────────────────────────────────────────────────────────────────────
 const accounts = ref<LaunchAccount[]>([])
@@ -277,6 +289,61 @@ const workspaceItems = computed(() => {
 })
 /** with a single workspace the filter carries no information (spec AC-13) */
 const showWorkspaceFilter = computed(() => workspaceItems.value.length > 2)
+
+/** the label `la-acc-ws` would show for `id` — also used for the FEAT-073 scope line (id as fallback) */
+function workspaceLabel(id: string): string {
+  return workspaceItems.value.find(item => item.value === id)?.label ?? id
+}
+
+/**
+ * FEAT-073 (api-contract.md v1 §2, spec "Template scope") — scope the step-2 template lists follow, derived
+ * from the caller's role and the step-1 `workspaceFilter` (the same select that already filters the accounts
+ * client-side). `isGod` / `accessible` mirror the pattern of `ad-templates.vue`'s Created-by filter.
+ */
+const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
+const accessibleWorkspaceIds = computed<string[]>(
+  () => auth.context.value?.workspaceIds ?? (auth.admin.value?.homeWorkspaceId ? [auth.admin.value.homeWorkspaceId] : [])
+)
+
+/** `string[] | undefined` sent as `workspaceIds` on the two list requests — `undefined` omits the key */
+const templateWorkspaceIds = computed<string[] | undefined>(() => {
+  if (workspaceFilter.value !== 'all') return [workspaceFilter.value]
+  if (isGod.value) return undefined
+  return accessibleWorkspaceIds.value.length > 0 ? accessibleWorkspaceIds.value : undefined
+})
+/** joined once so the re-fetch watcher below has a single primitive to compare */
+const templateWorkspaceIdsKey = computed(() => templateWorkspaceIds.value?.join(',') ?? '')
+
+const templateScopeKind = computed<'none' | 'one' | 'mine'>(() => {
+  if (workspaceFilter.value !== 'all') return 'one'
+  if (isGod.value) return 'none'
+  const n = accessibleWorkspaceIds.value.length
+  if (n === 0) return 'none'
+  return n === 1 ? 'one' : 'mine'
+})
+
+/** `la-tpl-scope` text — `null` hides the element (`none`) */
+const templateScopeLine = computed<string | null>(() => {
+  if (templateScopeKind.value === 'mine') return 'Templates of your workspaces'
+  if (templateScopeKind.value === 'one') {
+    const id = workspaceFilter.value !== 'all' ? workspaceFilter.value : accessibleWorkspaceIds.value[0]
+    return id ? `Templates of ${workspaceLabel(id)}` : null
+  }
+  return null
+})
+
+const AGT_EMPTY_TEXT: Record<'none' | 'one' | 'mine', string> = {
+  none: 'No ad group template yet — create one under Ad group templates first.',
+  one: 'No ad group template in this workspace yet — create one under Ad group templates first.',
+  mine: 'No ad group template in your workspaces yet — create one under Ad group templates first.'
+}
+const ADT_EMPTY_TEXT: Record<'none' | 'one' | 'mine', string> = {
+  none: 'No ad template yet — create one under Ad templates first.',
+  one: 'No ad template in this workspace yet — create one under Ad templates first.',
+  mine: 'No ad template in your workspaces yet — create one under Ad templates first.'
+}
+const agtEmptyText = computed(() => AGT_EMPTY_TEXT[templateScopeKind.value])
+const adtEmptyText = computed(() => ADT_EMPTY_TEXT[templateScopeKind.value])
 
 /** available ∩ workspace ∩ search — the funded filter composes on top (`filteredAccounts`) */
 const searchFilteredAccounts = computed(() => {
@@ -473,31 +540,60 @@ const templatesPending = ref(false)
 const templatesError = ref<string | null>(null)
 const templateFieldError = ref<string | null>(null)
 let templatesRequested = false
+/** the `/options` pair is fetched exactly once per page lifetime (FEAT-016 AC-14) — never on a FEAT-073 re-fetch */
+let optionsLoaded = false
+// FEAT-073 (spec AC-8) — bumped on every list request so a late answer of a superseded scope never overwrites
+// the current one; mirrors `targetsSession` above.
+let templatesSession = 0
 
 async function loadTemplates() {
+  const s = ++templatesSession
   templatesPending.value = true
   templatesError.value = null
+  const ids = templateWorkspaceIds.value
+  const query: Record<string, unknown> = { page: 1, limit: TEMPLATE_LIMIT }
+  // FEAT-073 (api-contract.md v1 §2) — the key is omitted entirely for a GOD on "All workspaces"
+  if (ids) query.workspaceIds = ids.join(',')
+  const needOptions = !optionsLoaded
   try {
-    // retry: 0 — four requests, once per page lifetime (a failure allows one retry)
-    const [groups, groupOptions, ads, adOptions] = await Promise.all([
-      api<AdGroupTemplatesResponse>('/ad-group-templates', { retry: 0, query: { page: 1, limit: TEMPLATE_LIMIT } }),
-      api<AdGroupTemplateOptions>('/ad-group-templates/options', { retry: 0 }),
-      api<AdTemplatesResponse>('/ad-templates', { retry: 0, query: { page: 1, limit: TEMPLATE_LIMIT } }),
-      api<AdTemplateOptions>('/ad-templates/options', { retry: 0 })
+    // retry: 0 — two list requests every time, the two `/options` requests only on the first open
+    const [groups, ads, groupOptions, adOptions] = await Promise.all([
+      api<AdGroupTemplatesResponse>('/ad-group-templates', { retry: 0, query }),
+      api<AdTemplatesResponse>('/ad-templates', { retry: 0, query }),
+      needOptions ? api<AdGroupTemplateOptions>('/ad-group-templates/options', { retry: 0 }) : Promise.resolve(agtOptions.value),
+      needOptions ? api<AdTemplateOptions>('/ad-templates/options', { retry: 0 }) : Promise.resolve(adtOptions.value)
     ])
+    // a superseded scope's answer arrived after a newer one already rendered — ignore it (AC-8)
+    if (s !== templatesSession) return
     agtItems.value = groups.templates ?? []
     agtTotal.value = groups.total ?? agtItems.value.length
-    agtOptions.value = groupOptions
     adtItems.value = ads.templates ?? []
     adtTotal.value = ads.total ?? adtItems.value.length
-    adtOptions.value = adOptions
+    if (needOptions) {
+      agtOptions.value = groupOptions
+      adtOptions.value = adOptions
+      optionsLoaded = true
+    }
+    // FEAT-073 (spec "Selection reset", A6) — answer-driven: a selection the new scope no longer serves is
+    // dropped, one it still serves survives untouched.
+    let resetAny = false
+    if (adGroupTemplateId.value && !agtItems.value.some(t => t.id === adGroupTemplateId.value)) {
+      adGroupTemplateId.value = null
+      resetAny = true
+    }
+    if (adTemplateId.value && !adtItems.value.some(t => t.id === adTemplateId.value)) {
+      adTemplateId.value = null
+      resetAny = true
+    }
+    if (resetAny) templateFieldError.value = null
   } catch (e) {
+    if (s !== templatesSession) return
     const err = e as FetchError<Partial<ApiErrorBody>>
     // allow exactly one more attempt through the Retry button
     templatesRequested = false
     templatesError.value = err.data?.error ?? err.message ?? 'Unexpected error'
   } finally {
-    templatesPending.value = false
+    if (s === templatesSession) templatesPending.value = false
   }
 }
 
@@ -507,9 +603,17 @@ function ensureTemplates() {
   void loadTemplates()
 }
 
+/** FEAT-073 (spec AC-12) — always re-runs with the **current** scope, not just the first-open gate */
 function retryTemplates() {
-  ensureTemplates()
+  void loadTemplates()
 }
+
+// FEAT-073 (spec "Re-fetch on scope change") — repeats the two list requests (not `/options`) once the lists
+// were requested at least once; a change made before step 2 was ever opened causes no request.
+watch(templateWorkspaceIdsKey, () => {
+  if (!templatesRequested) return
+  void loadTemplates()
+})
 
 const adGroupTemplateId = ref<string | null>(null)
 const adTemplateId = ref<string | null>(null)
@@ -964,6 +1068,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   targetsSession++
+  templatesSession++
 })
 </script>
 
@@ -1095,6 +1200,8 @@ onUnmounted(() => {
                     :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
                     class="min-w-36"
                     aria-label="Workspace"
+                    title="Filters the accounts and the templates"
+                    aria-description="Filters the accounts and the templates"
                     data-testid="la-acc-ws"
                   />
                   <USwitch
@@ -1457,6 +1564,15 @@ onUnmounted(() => {
 
               <!-- step 2 · templates -->
               <div v-else-if="step === 2" class="flex flex-col gap-4">
+                <!-- FEAT-073 — scope line under the step title; absent for a GOD on "All workspaces" -->
+                <p
+                  v-if="templateScopeLine"
+                  class="text-xs text-muted"
+                  data-testid="la-tpl-scope"
+                >
+                  {{ templateScopeLine }}
+                </p>
+
                 <UAlert
                   v-if="templatesError"
                   color="error"
@@ -1528,7 +1644,7 @@ onUnmounted(() => {
                     />
                   </div>
                   <p v-if="!templatesPending && agtItems.length === 0" class="text-sm text-muted" data-testid="la-agt-empty">
-                    No ad group template yet — create one under Ad group templates first.
+                    {{ agtEmptyText }}
                   </p>
                   <!-- exactly 5 rows (5 × 52 px + the frame's own 2 px borders), the rest scrolls (AC-13) -->
                   <div
@@ -1687,7 +1803,7 @@ onUnmounted(() => {
                     />
                   </div>
                   <p v-if="!templatesPending && adtItems.length === 0" class="text-sm text-muted" data-testid="la-adt-empty">
-                    No ad template yet — create one under Ad templates first.
+                    {{ adtEmptyText }}
                   </p>
                   <!--
                     below `lg`: exactly 5 rows (5 × 60 px + the frame's 2 px borders) like the ad-group frame;
