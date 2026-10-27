@@ -95,6 +95,10 @@ async function loadCards() {
 // ── the form ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** ★ the only place the typed card lives; wiped by `resetForm()` on every close and after a successful create */
 const form = reactive({ number: '', expiry: '', cvv: '', holderName: '' })
+/**
+ * errors are shown only after the first "จ่ายเงิน" click (`askConfirm`), never on blur: the modal focuses the first
+ * field on open, so a blur-based flag painted all four errors before the admin typed anything (2026-10-27)
+ */
 const touched = ref(false)
 const later = ref(false)
 const serverError = ref<string | null>(null)
@@ -317,7 +321,6 @@ function succeed(topup: TopupView) {
               :disabled="submitting"
               data-testid="tp-card-number"
               @update:model-value="form.number = String($event)"
-              @blur="touched = true"
             >
               <template v-if="typedBrand" #trailing>
                 <span class="text-xs whitespace-nowrap text-muted">{{ cardBrandLabel(typedBrand) }}</span>
@@ -338,7 +341,6 @@ function succeed(topup: TopupView) {
                 :disabled="submitting"
                 data-testid="tp-card-expiry"
                 @update:model-value="onExpiryInput($event)"
-                @blur="touched = true"
               />
             </UFormField>
             <UFormField label="CVV/CVC" class="min-w-24 flex-1" :error="touched ? cvvError ?? undefined : undefined">
@@ -353,7 +355,6 @@ function succeed(topup: TopupView) {
                 :disabled="submitting"
                 data-testid="tp-card-cvv"
                 @update:model-value="form.cvv = onlyDigits(String($event))"
-                @blur="touched = true"
               />
             </UFormField>
           </div>
@@ -368,7 +369,6 @@ function succeed(topup: TopupView) {
               class="w-full"
               :disabled="submitting"
               data-testid="tp-card-holder"
-              @blur="touched = true"
             />
           </UFormField>
 
