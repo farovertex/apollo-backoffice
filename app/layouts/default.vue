@@ -144,6 +144,22 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-069 — performance (port of to-the-mars' My/Team Performance), directly after UTM; same role gate
+      label: 'Performance',
+      icon: 'i-lucide-gauge',
+      to: '/reports/performance',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
+      // FEAT-069 — dashboard D1 (Dep/Budget funnel, charts, delivery now), directly after Performance
+      label: 'Dashboard',
+      icon: 'i-lucide-layout-dashboard',
+      to: '/reports/dashboard',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), ...(canSeeCashier.value
   ? [{

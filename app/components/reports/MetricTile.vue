@@ -16,11 +16,17 @@ const props = withDefaults(defineProps<{
   /** small caption under the value, e.g. the currency note of the spend tile (spec A8) */
   caption?: string
   lowerIsBetter?: boolean
+  /**
+   * FEAT-069 — child test ids derived from `testid` (`<testid>-value`, `<testid>-delta`) instead of the
+   * FEAT-020 fixed `rp-tile-delta`; off by default so `/reports` and `/reports/summary` keep their ids.
+   */
+  childIds?: boolean
 }>(), {
   previous: null,
   format: 'int',
   caption: undefined,
-  lowerIsBetter: false
+  lowerIsBetter: false,
+  childIds: false
 })
 
 const text = computed(() => {
@@ -59,13 +65,19 @@ const worseNote = computed(() => (delta.value && !delta.value.good && props.lowe
     :data-value="value ?? ''"
   >
     <span class="text-xs text-muted">{{ label }}</span>
-    <span class="truncate text-xl font-semibold tabular-nums text-highlighted" :title="text">{{ text }}</span>
+    <span
+      class="truncate text-xl font-semibold tabular-nums text-highlighted"
+      :title="text"
+      :data-testid="childIds ? `${testid}-value` : undefined"
+    >{{ text }}</span>
     <span v-if="caption" class="text-[11px] text-dimmed">{{ caption }}</span>
+    <!-- FEAT-069 — optional sub-lines (e.g. "4 advertiser · 3 บัญชี", CPM under impressions) -->
+    <slot />
     <span
       v-if="deltaText"
       class="text-xs tabular-nums"
       :class="deltaClass"
-      data-testid="rp-tile-delta"
+      :data-testid="childIds ? `${testid}-delta` : 'rp-tile-delta'"
     >{{ deltaText }}{{ worseNote }} <span class="text-dimmed">เทียบช่วงก่อน</span></span>
   </div>
 </template>

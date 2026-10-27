@@ -37,10 +37,10 @@ export type AdState = 'delivering' | 'pending' | 'rejected' | 'ended' | 'unknown
 
 /**
  * FEAT-065 (api-contract.md §6.1) — the one range vocabulary of **every** report page and endpoint.
- * `ReportRangeKey` = the four shortcuts in the picker's order; `ReportRange` adds the `custom` pair.
+ * `ReportRangeKey` = the five shortcuts in the picker's order (FEAT-069 added `30d`); `ReportRange` adds the `custom` pair.
  * No other file re-declares it (`report-banned.ts` and `ads-monitor.ts` alias these).
  */
-export type ReportRangeKey = 'today' | 'yesterday' | '7d' | 'all'
+export type ReportRangeKey = 'today' | 'yesterday' | '7d' | '30d' | 'all'
 export type ReportRange = ReportRangeKey | 'custom'
 
 /**
