@@ -364,7 +364,7 @@ function succeed(topup: TopupView) {
               type="text"
               autocomplete="off"
               maxlength="64"
-              placeholder="NARUTCHAI SOMBUN"
+              placeholder="NARUXONG SOMBUN"
               class="w-full"
               :disabled="submitting"
               data-testid="tp-card-holder"

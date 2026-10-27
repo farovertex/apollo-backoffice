@@ -365,7 +365,7 @@ export function cardMask(last4: string | null | undefined): string {
   return `****${last4 ?? '????'}`
 }
 
-/** `Mastercard ****9706 · NARUTCHAI SOMBUN (10/29)` — the one line the modal, the dialog and the row share */
+/** `Mastercard ****9706 · NARUXONG SOMBUN (10/29)` — the one line the modal, the dialog and the row share */
 export function cardSummary(card: TopupCardSnapshot | PaymentCardView | null | undefined): string {
   if (!card) return ''
   const parts = [`${cardBrandLabel(card.brand)} ${cardMask(card.last4)}`]
