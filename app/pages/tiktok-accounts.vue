@@ -196,6 +196,7 @@ import type {
   SessionStatus,
   TikTokAccount
 } from '#shared/types/tiktok-accounts'
+import { FAILURE_SCREENSHOT_TYPE_LABEL } from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
 
@@ -398,9 +399,12 @@ const loginOpen = ref(false)
 const loginTarget = ref<TikTokAccount | null>(null)
 // account id whose POST …/login is in flight (button spinner + no double click)
 const loginStarting = ref<string | null>(null)
+// FEAT-071 — login job id of the 202 / 409 that opened the modal (the modal matches its failure screenshot on it)
+const loginJobId = ref<string | null>(null)
 
-function openLoginModal(account: TikTokAccount) {
+function openLoginModal(account: TikTokAccount, jobId: string | null = null) {
   loginTarget.value = account
+  loginJobId.value = jobId
   loginOpen.value = true
 }
 
@@ -410,13 +414,13 @@ async function onLogin(account: TikTokAccount) {
   loginStarting.value = account.id
   try {
     // retry: 0 — exactly one POST per click (ofetch would otherwise re-issue it on 5xx)
-    await api<LoginJobResponse>(`/tiktok-accounts/${encodeURIComponent(account.id)}/login`, { method: 'POST', retry: 0 })
-    openLoginModal(account)
+    const started = await api<LoginJobResponse>(`/tiktok-accounts/${encodeURIComponent(account.id)}/login`, { method: 'POST', retry: 0 })
+    openLoginModal(account, started?.jobId ?? null)
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
     if (err.statusCode === 409) {
       // a job or human task already exists for this account → follow it in the modal (body: jobId / humanTaskId)
-      openLoginModal(account)
+      openLoginModal(account, err.data?.jobType === 'discover' ? null : (err.data?.jobId ?? null))
     } else {
       toast.add({
         title: 'Could not start the login',
@@ -1428,6 +1432,15 @@ function openCards(account: TikTokAccount) {
   cardsOpen.value = true
 }
 
+// FEAT-071 — failure screenshot modal (one instance, opened from the Session status cell)
+const failShotOpen = ref(false)
+const failShotTarget = ref<TikTokAccount | null>(null)
+
+function openFailShot(account: TikTokAccount) {
+  failShotTarget.value = account
+  failShotOpen.value = true
+}
+
 // 2026-10-16 — FEAT-053's `setAutoChannel()` / `autoChannelBusy` left this page with the column: the channel is
 // now one of the fields of the Edit modal and is written by that modal's single diff PATCH.
 
@@ -1547,6 +1560,23 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       // to the status badge now. Nothing to say → nothing is appended (no `—`, no `ta-first-login`).
       const firstLogin = firstLoginNode(a)
       if (firstLogin) children.push(firstLogin)
+      // FEAT-071 — failure screenshot of the newest failed login / sync / top-up job (summary rides on the list)
+      const fail = a.failureScreenshot
+      if (fail) {
+        children.push(h(UButton, {
+          'icon': 'i-lucide-image',
+          'size': 'xs',
+          'variant': 'ghost',
+          'color': 'neutral',
+          'class': 'shrink-0',
+          'aria-label': `ภาพหน้าจอตอน job ล้มของ ${a.label ?? a.loginEmail}`,
+          'title': `ภาพหน้าจอตอน job ล้ม · ${FAILURE_SCREENSHOT_TYPE_LABEL[fail.jobType] ?? fail.jobType} · ${fail.error} · ${formatDateTime(fail.at)}`,
+          'data-testid': 'ta-fail-shot',
+          'data-job-id': fail.jobId,
+          'data-job-type': fail.jobType,
+          'onClick': () => openFailShot(a)
+        }))
+      }
       return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
     }
   },
@@ -2143,6 +2173,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         v-model:open="loginOpen"
         :account-id="loginTarget?.id ?? null"
         :account-label="loginTarget?.label ?? loginTarget?.loginEmail ?? null"
+        :job-id="loginJobId"
         @success="refreshAndFollowDiscovers()"
         @close="refreshAndFollowDiscovers()"
       />
@@ -2152,6 +2183,10 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         :bc-org-id="advOrgId"
         :org-name="advOrgName"
         @sync="onSync"
+      />
+      <TiktokAccountsFailureScreenshotModal
+        v-model:open="failShotOpen"
+        :account="failShotTarget"
       />
       <TiktokAccountsCardsModal
         v-model:open="cardsOpen"

@@ -28,6 +28,8 @@ const props = defineProps<{
   accountId: string | null
   /** shown under the title (label or login email) */
   accountLabel?: string | null
+  /** FEAT-071 — id of the login job that opened the modal (202 / 409 body `jobId`), when the page knows it */
+  jobId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -54,6 +56,8 @@ const pollError = ref<string | null>(null)
 const forceRunning = ref(false)
 const expired = ref(false)
 const succeeded = ref(false)
+/** FEAT-071 (A9) — the login job this modal follows: the 202/409 `jobId`, else the `runningJob.id` seen while running */
+const followedJobId = ref<string | null>(null)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let pollInFlight = false
@@ -70,6 +74,7 @@ async function poll() {
     const next = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(id)}`, { retry: 0 })
     if (session !== pollSession) return
     account.value = next
+    if (next.runningJob?.type === 'login') followedJobId.value = next.runningJob.id
     pollError.value = null
     forceRunning.value = false
   } catch (e) {
@@ -142,6 +147,13 @@ const stepText = computed<string>(() => {
 })
 
 const errorText = computed(() => loginErrorText(account.value?.lastLoginError))
+
+// FEAT-071 (AC-15) — the inline screenshot only when the account's newest failure IS the login job this modal followed
+const failShotJobId = computed<string | null>(() => {
+  const f = account.value?.failureScreenshot
+  if (!f || f.jobType !== 'login' || !followedJobId.value) return null
+  return f.jobId === followedJobId.value ? f.jobId : null
+})
 
 // FEAT-031 — `on <id>` under the step text while an active login job carries a WORKER_INSTANCE (`ta-login-worker`)
 const loginWorkerInstance = computed<string | null>(() => {
@@ -284,12 +296,14 @@ async function restartLogin() {
   if (!id || restarting.value) return
   restarting.value = true
   try {
-    await api<LoginJobResponse>(`/tiktok-accounts/${encodeURIComponent(id)}/login`, { method: 'POST', retry: 0 })
+    const res = await api<LoginJobResponse>(`/tiktok-accounts/${encodeURIComponent(id)}/login`, { method: 'POST', retry: 0 })
+    followedJobId.value = res?.jobId ?? null
     backToRunning()
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
     if (err.statusCode === 409) {
       // a job / task already exists for this account → just follow it
+      followedJobId.value = err.data?.jobType === 'discover' ? null : (err.data?.jobId ?? null)
       backToRunning()
     } else {
       toast.add({
@@ -312,12 +326,14 @@ function reset() {
   succeeded.value = false
   submitting.value = false
   restarting.value = false
+  followedJobId.value = null
   resetTask()
 }
 
 watch(open, (isOpen) => {
   if (isOpen) {
     reset()
+    followedJobId.value = props.jobId ?? null
     startPolling()
   } else {
     const id = props.accountId
@@ -457,16 +473,23 @@ onUnmounted(() => {
         />
 
         <!-- error -->
-        <div
-          v-else-if="state === 'error'"
-          class="flex items-start gap-3 rounded-lg bg-error/10 p-3 text-error"
-          role="alert"
-        >
-          <UIcon name="i-lucide-triangle-alert" class="mt-0.5 size-5 shrink-0" />
-          <p class="text-sm" data-testid="ta-login-error-text">
-            {{ errorText }}
-          </p>
-        </div>
+        <template v-else-if="state === 'error'">
+          <div
+            class="flex items-start gap-3 rounded-lg bg-error/10 p-3 text-error"
+            role="alert"
+          >
+            <UIcon name="i-lucide-triangle-alert" class="mt-0.5 size-5 shrink-0" />
+            <p class="text-sm" data-testid="ta-login-error-text">
+              {{ errorText }}
+            </p>
+          </div>
+          <TiktokAccountsLoginFailShot
+            v-if="failShotJobId && accountId"
+            :key="failShotJobId"
+            :account-id="accountId"
+            :job-id="failShotJobId"
+          />
+        </template>
 
         <!-- success (visible for a frame before the modal closes itself) -->
         <div v-else class="flex items-center gap-3 text-success">

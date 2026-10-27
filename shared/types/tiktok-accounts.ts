@@ -248,9 +248,57 @@ export interface TikTokAccount {
   lastDiscoverError: DiscoverError | null
   openHumanTask: OpenHumanTask | null
   runningJob: RunningJob | null
+  /**
+   * FEAT-071 (api-contract §4, key 42) — summary of the newest screenshot a failed login / discover / topup job
+   * left for this account (no request on page load: it rides on the list body); `null` = none (or all expired,
+   * retention 30 days). History is not cleared by a later success.
+   */
+  failureScreenshot: FailureScreenshotView | null
   createdBy: string
   createdAt: string
   updatedAt: string
+}
+
+/** FEAT-071 — job types that keep a failure screenshot */
+export type FailureScreenshotJobType = 'login' | 'discover' | 'topup'
+
+/** FEAT-071 — type label shown on the badge / tooltip of a failure screenshot */
+export const FAILURE_SCREENSHOT_TYPE_LABEL: Record<FailureScreenshotJobType, string> = {
+  login: 'Login',
+  discover: 'Sync',
+  topup: 'Top up'
+}
+
+/** FEAT-071 — one failed job's screenshot, summary only (`at` = ISO) */
+export interface FailureScreenshotView {
+  jobId: string
+  jobType: FailureScreenshotJobType
+  stage: string | null
+  error: string
+  at: string
+}
+
+/** FEAT-071 — `GET /tiktok-accounts/:id/failure-screenshots` 200 body, newest first */
+export interface FailureScreenshotsResponse {
+  count: number
+  screenshots: FailureScreenshotView[]
+}
+
+/** FEAT-071 — `GET /tiktok-accounts/:id/failure-screenshots/:jobId` 200: presigned URL (15 min) or inline bytes */
+export interface FailureScreenshotImageUrl {
+  mimeType: string
+  url: string
+  /** ISO */
+  expiresAt: string
+}
+export interface FailureScreenshotImageInline {
+  mimeType: string
+  base64: string
+}
+export type FailureScreenshotImage = FailureScreenshotImageUrl | FailureScreenshotImageInline
+
+export function isFailureScreenshotUrl(img: FailureScreenshotImage): img is FailureScreenshotImageUrl {
+  return 'url' in img
 }
 
 /**
