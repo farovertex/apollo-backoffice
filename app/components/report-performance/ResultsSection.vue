@@ -51,6 +51,7 @@ const sharedNote = computed(() => {
           format="dec"
           caption="สกุลเงินของบัญชี ไม่แปลงค่า"
           child-ids
+          :help="REPORT_HELP['rf-tile-spend']"
           class="h-full"
         >
           <ReportPerformanceSpendChart :days="chartDays" :mode="chartMode" />
@@ -62,6 +63,7 @@ const sharedNote = computed(() => {
         :value="results.usedAdvertisers"
         :previous="previous?.usedAdvertisers ?? null"
         child-ids
+        :help="REPORT_HELP['rf-tile-used']"
       >
         <span class="text-xs text-muted" data-testid="rf-tile-used-sub">
           {{ formatInt(results.usedAdvertisers) }} advertiser · {{ formatInt(results.usedAccounts) }} บัญชี
@@ -73,6 +75,7 @@ const sharedNote = computed(() => {
         :value="results.utm.registers"
         :previous="previous?.utm.registers ?? null"
         child-ids
+        :help="REPORT_HELP['rf-tile-registers']"
       />
       <ReportsMetricTile
         testid="rf-tile-depositors"
@@ -80,6 +83,7 @@ const sharedNote = computed(() => {
         :value="results.utm.depositors"
         :previous="previous?.utm.depositors ?? null"
         child-ids
+        :help="REPORT_HELP['rf-tile-depositors']"
       />
       <ReportsMetricTile
         testid="rf-tile-deposit"
@@ -88,6 +92,7 @@ const sharedNote = computed(() => {
         :previous="previous?.utm.depositAmount ?? null"
         format="dec"
         child-ids
+        :help="REPORT_HELP['rf-tile-deposit']"
       />
     </div>
     <p
@@ -112,6 +117,7 @@ const sharedNote = computed(() => {
         format="dec"
         lower-is-better
         child-ids
+        :help="REPORT_HELP['rf-tile-costReg']"
       />
       <ReportsMetricTile
         testid="rf-tile-costDep"
@@ -121,6 +127,7 @@ const sharedNote = computed(() => {
         format="dec"
         lower-is-better
         child-ids
+        :help="REPORT_HELP['rf-tile-costDep']"
       />
       <ReportsMetricTile
         testid="rf-tile-avgDep"
@@ -129,6 +136,7 @@ const sharedNote = computed(() => {
         :previous="prevRatios?.averageDeposit ?? null"
         format="dec"
         child-ids
+        :help="REPORT_HELP['rf-tile-avgDep']"
       />
       <ReportsMetricTile
         testid="rf-tile-depReg"
@@ -137,6 +145,7 @@ const sharedNote = computed(() => {
         :previous="prevRatios?.depRegPct ?? null"
         format="pct"
         child-ids
+        :help="REPORT_HELP['rf-tile-depReg']"
       />
       <ReportsMetricTile
         testid="rf-tile-depBudget"
@@ -146,6 +155,7 @@ const sharedNote = computed(() => {
         format="dec"
         caption="ยอดฝาก ÷ spend"
         child-ids
+        :help="REPORT_HELP['rf-tile-depBudget']"
         class="col-span-2 lg:col-span-1"
       />
     </div>

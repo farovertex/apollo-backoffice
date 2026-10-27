@@ -124,16 +124,19 @@ const tableRows = computed(() => mode.value === 'daily'
           @click="$emit('chart', 'hourly')"
         />
       </div>
-      <ul class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted" data-testid="rd-chart-legend">
-        <li v-for="s in legend" :key="s.key + s.label" class="flex items-center gap-1">
-          <span
-            class="inline-block shrink-0"
-            :class="s.kind === 'bar' ? 'size-2.5 rounded-sm' : 'h-0.5 w-3'"
-            :style="{ background: s.color }"
-          />
-          {{ s.label }}
-        </li>
-      </ul>
+      <div class="flex items-center gap-2">
+        <ul class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted" data-testid="rd-chart-legend">
+          <li v-for="s in legend" :key="s.key + s.label" class="flex items-center gap-1">
+            <span
+              class="inline-block shrink-0"
+              :class="s.kind === 'bar' ? 'size-2.5 rounded-sm' : 'h-0.5 w-3'"
+              :style="{ background: s.color }"
+            />
+            {{ s.label }}
+          </li>
+        </ul>
+        <ReportsInfoHint id="rd-chart" :text="REPORT_HELP['rd-chart']!" />
+      </div>
     </div>
 
     <div

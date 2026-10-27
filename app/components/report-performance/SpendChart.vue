@@ -39,11 +39,12 @@ const bars = computed(() => {
 
 <template>
   <figure
-    class="mt-2 min-w-0"
+    class="relative mt-2 min-w-0"
     data-testid="rf-spend-chart"
     :data-mode="mode"
     :data-points="days.length"
   >
+    <ReportsInfoHint id="rf-spend-chart" :text="REPORT_HELP['rf-spend-chart']!" class="absolute right-0 top-0" />
     <svg
       v-if="days.length > 0"
       :viewBox="`0 0 ${W} ${H}`"

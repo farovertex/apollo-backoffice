@@ -29,8 +29,9 @@ const ndCount = computed(() => props.now.launching.notDelivering)
 <template>
   <section class="flex min-w-0 flex-col gap-3" data-testid="rd-delivery">
     <div class="flex flex-wrap items-baseline gap-2">
-      <h2 class="text-sm font-semibold text-highlighted">
-        การส่งโฆษณาตอนนี้
+      <h2 class="flex items-center gap-1 text-sm font-semibold text-highlighted">
+        <span>การส่งโฆษณาตอนนี้</span>
+        <ReportsInfoHint id="rd-delivery" :text="REPORT_HELP['rd-delivery']!" />
       </h2>
       <span class="text-xs text-muted">สถานะล่าสุด ไม่เปลี่ยนตามช่วงวัน · ข้อมูลรอบ kpi {{ formatClock(now.refreshedAt) }}</span>
     </div>
@@ -43,14 +44,35 @@ const ndCount = computed(() => props.now.launching.notDelivering)
         data-testid="rd-delivery-launching"
         :data-value="now.launching.total"
       >
-        <span class="text-xs text-muted">กำลังยิง</span>
-        <span class="text-xl font-semibold tabular-nums text-highlighted">{{ formatInt(now.launching.total) }} advertiser</span>
-        <span class="flex flex-wrap gap-x-3 text-xs">
-          <span class="text-success" data-testid="rd-delivery-delivering" :data-value="now.launching.delivering">ส่ง {{ formatInt(now.launching.delivering) }}</span>
-          <span :class="ndCount > 0 ? 'font-semibold text-warning' : 'text-muted'" data-testid="rd-delivery-notDelivering" :data-value="ndCount">ไม่ส่ง {{ formatInt(ndCount) }}</span>
-          <span class="text-muted" data-testid="rd-delivery-unknown" :data-value="now.launching.unknown">ไม่ทราบ {{ formatInt(now.launching.unknown) }}</span>
+        <span class="flex items-center gap-1 text-xs text-muted">
+          <span>กำลังยิง</span>
+          <ReportsInfoHint id="rd-delivery-launching" :text="REPORT_HELP['rd-delivery-launching']!" />
         </span>
-        <ul v-if="now.reasons.length > 0" class="mt-1 flex flex-col gap-0.5 text-xs" data-testid="rd-delivery-reasons">
+        <span class="text-xl font-semibold tabular-nums text-highlighted">{{ formatInt(now.launching.total) }} advertiser</span>
+        <span class="flex flex-wrap items-center gap-x-3 text-xs">
+          <span class="flex items-center gap-0.5 text-success" data-testid="rd-delivery-delivering" :data-value="now.launching.delivering">
+            <span>ส่ง {{ formatInt(now.launching.delivering) }}</span>
+            <ReportsInfoHint id="rd-delivery-delivering" :text="REPORT_HELP['rd-delivery-delivering']!" />
+          </span>
+          <span
+            class="flex items-center gap-0.5"
+            :class="ndCount > 0 ? 'font-semibold text-warning' : 'text-muted'"
+            data-testid="rd-delivery-notDelivering"
+            :data-value="ndCount"
+          >
+            <span>ไม่ส่ง {{ formatInt(ndCount) }}</span>
+            <ReportsInfoHint id="rd-delivery-notDelivering" :text="REPORT_HELP['rd-delivery-notDelivering']!" />
+          </span>
+          <span class="flex items-center gap-0.5 text-muted" data-testid="rd-delivery-unknown" :data-value="now.launching.unknown">
+            <span>ไม่ทราบ {{ formatInt(now.launching.unknown) }}</span>
+            <ReportsInfoHint id="rd-delivery-unknown" :text="REPORT_HELP['rd-delivery-unknown']!" />
+          </span>
+        </span>
+        <div v-if="now.reasons.length > 0" class="mt-1 flex items-center gap-1 text-xs text-muted">
+          <span>เหตุผลที่ไม่ส่ง</span>
+          <ReportsInfoHint id="rd-delivery-reasons" :text="REPORT_HELP['rd-delivery-reasons']!" />
+        </div>
+        <ul v-if="now.reasons.length > 0" class="flex flex-col gap-0.5 text-xs" data-testid="rd-delivery-reasons">
           <li
             v-for="r in now.reasons"
             :key="r.reason"
@@ -67,7 +89,10 @@ const ndCount = computed(() => props.now.launching.notDelivering)
 
       <!-- ads by state -->
       <div class="flex min-w-0 flex-col gap-1 rounded-lg border border-default p-3" data-testid="rd-ads-states" :data-value="now.ads.total">
-        <span class="text-xs text-muted">โฆษณา {{ formatInt(now.ads.total) }} ตัว</span>
+        <span class="flex items-center gap-1 text-xs text-muted">
+          <span>โฆษณา {{ formatInt(now.ads.total) }} ตัว</span>
+          <ReportsInfoHint id="rd-ads-states" :text="REPORT_HELP['rd-ads-states']!" />
+        </span>
         <dl class="grid grid-cols-2 gap-x-3 gap-y-1">
           <div
             v-for="s in ADS_STATES"
@@ -88,7 +113,10 @@ const ndCount = computed(() => props.now.launching.notDelivering)
 
       <!-- pending switches / deletes -->
       <div class="flex min-w-0 flex-col gap-1 rounded-lg border border-default p-3" data-testid="rd-pending">
-        <span class="text-xs text-muted">สวิตช์ / การลบ</span>
+        <span class="flex items-center gap-1 text-xs text-muted">
+          <span>สวิตช์ / การลบ</span>
+          <ReportsInfoHint id="rd-pending" :text="REPORT_HELP['rd-pending']!" />
+        </span>
         <dl class="grid grid-cols-2 gap-x-3 gap-y-1">
           <div class="flex flex-col" data-testid="rd-pending-optPending" :data-value="now.pending.optPending">
             <dt class="text-xs text-muted">
@@ -131,7 +159,10 @@ const ndCount = computed(() => props.now.launching.notDelivering)
         class="flex min-w-0 flex-col gap-1 rounded-lg border border-default p-3 hover:bg-elevated/50"
         data-testid="rd-banned"
       >
-        <span class="text-xs text-muted">ถูกระงับ</span>
+        <span class="flex items-center gap-1 text-xs text-muted">
+          <span>ถูกระงับ</span>
+          <ReportsInfoHint id="rd-banned" :text="REPORT_HELP['rd-banned']!" />
+        </span>
         <span
           class="text-xl font-semibold tabular-nums"
           :class="now.banned.now > 0 ? 'text-error' : 'text-highlighted'"
@@ -143,8 +174,9 @@ const ndCount = computed(() => props.now.launching.notDelivering)
     </div>
 
     <div v-if="now.rejected.length > 0" class="rounded-lg border border-error/30 p-3" data-testid="rd-rejected">
-      <h3 class="mb-2 text-xs font-semibold text-error">
-        โฆษณาไม่ผ่าน ({{ formatInt(now.ads.rejected) }})
+      <h3 class="mb-2 flex items-center gap-1 text-xs font-semibold text-error">
+        <span>โฆษณาไม่ผ่าน ({{ formatInt(now.ads.rejected) }})</span>
+        <ReportsInfoHint id="rd-rejected" :text="REPORT_HELP['rd-rejected']!" />
       </h3>
       <ul class="flex flex-col divide-y divide-default">
         <li
@@ -165,8 +197,9 @@ const ndCount = computed(() => props.now.launching.notDelivering)
     </div>
 
     <div v-if="now.notDelivering.length > 0" class="rounded-lg border border-warning/40 p-3" data-testid="rd-not-delivering">
-      <h3 class="mb-2 text-xs font-semibold text-warning">
-        กำลังยิงแต่ไม่ส่ง ({{ formatInt(now.notDelivering.length) }})
+      <h3 class="mb-2 flex items-center gap-1 text-xs font-semibold text-warning">
+        <span>กำลังยิงแต่ไม่ส่ง ({{ formatInt(now.notDelivering.length) }})</span>
+        <ReportsInfoHint id="rd-not-delivering" :text="REPORT_HELP['rd-not-delivering']!" />
       </h3>
       <ul class="flex flex-col divide-y divide-default">
         <li

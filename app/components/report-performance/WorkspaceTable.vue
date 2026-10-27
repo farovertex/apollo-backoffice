@@ -109,6 +109,8 @@ const footer = computed(() => valuesOf(props.results, {
             :label="c.label"
             :sort-state="sort.ariaSort(c.key)"
             numeric
+            :help-id="`rf-table-workspace-col-${c.key}`"
+            :help-text="REPORT_HELP[`rf-table-workspace-col-${c.key}`]"
             @sort="sort.toggle(c.key)"
           />
         </tr>

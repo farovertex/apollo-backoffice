@@ -28,7 +28,18 @@ const totals = computed(() => {
   return t
 })
 
-const HEADERS = ['Day', 'Spend', 'Used', 'New bans', 'Lifted', 'Runs', 'Done', 'Failed', 'Stopped', 'Running']
+const HEADERS: { label: string, key?: string }[] = [
+  { label: 'Day' },
+  { label: 'Spend', key: 'rf-table-day-col-spend' },
+  { label: 'Used', key: 'rf-table-day-col-used' },
+  { label: 'New bans', key: 'rf-table-day-col-bans' },
+  { label: 'Lifted', key: 'rf-table-day-col-lifted' },
+  { label: 'Runs', key: 'rf-table-day-col-runs' },
+  { label: 'Done', key: 'rf-table-day-col-done' },
+  { label: 'Failed', key: 'rf-table-day-col-failed' },
+  { label: 'Stopped', key: 'rf-table-day-col-stopped' },
+  { label: 'Running', key: 'rf-table-day-col-running' }
+]
 
 function dim(value: number): string {
   return value === 0 ? 'text-dimmed' : ''
@@ -49,12 +60,15 @@ function dim(value: number): string {
         <tr class="border-b border-default">
           <th
             v-for="(h, i) in HEADERS"
-            :key="h"
+            :key="h.label"
             scope="col"
             class="bg-elevated px-3 py-2 text-xs font-medium text-muted uppercase"
             :class="i === 0 ? 'sticky left-0 z-[2] text-left' : 'text-right'"
           >
-            {{ h }}
+            <span class="inline-flex items-center gap-1" :class="i === 0 ? '' : 'justify-end'">
+              <span>{{ h.label }}</span>
+              <ReportsInfoHint v-if="h.key" :id="h.key" :text="REPORT_HELP[h.key]!" />
+            </span>
           </th>
         </tr>
       </thead>

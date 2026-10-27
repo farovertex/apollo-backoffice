@@ -27,7 +27,21 @@ function balanceText(row: DashboardWorkspaceRow): string {
   return row.now.balance.map(b => `${formatDecimal(b.amount)} ${b.currency ?? ''}`.trim()).join(' · ')
 }
 
-const HEADERS = ['Spend', 'Impr', 'Clicks', 'Conv', 'Register', 'Deposit', 'Amount', 'Dep/Budget', 'Accounts', 'Launching', 'Banned', 'Balance']
+const HEADERS: { label: string, key?: string }[] = [
+  { label: 'Spend', key: 'rd-table-workspace-col-spend' },
+  { label: 'Impr', key: 'rd-table-workspace-col-impressions' },
+  { label: 'Clicks', key: 'rd-table-workspace-col-clicks' },
+  { label: 'Conv', key: 'rd-table-workspace-col-conversions' },
+  { label: 'Register', key: 'rd-table-workspace-col-registers' },
+  { label: 'Deposit', key: 'rd-table-workspace-col-depositors' },
+  { label: 'Amount', key: 'rd-table-workspace-col-depositAmount' },
+  { label: 'Dep/Budget', key: 'rd-table-workspace-col-depBudget' },
+  { label: 'Accounts', key: 'rd-table-workspace-col-accounts' },
+  { label: 'Launching', key: 'rd-table-workspace-col-launching' },
+  { label: 'Banned', key: 'rd-table-workspace-col-banned' },
+  // FEAT-069 (T2c) — no text in the brief's §Texts for Balance, so no hint
+  { label: 'Balance' }
+]
 </script>
 
 <template>
@@ -40,11 +54,14 @@ const HEADERS = ['Spend', 'Impr', 'Clicks', 'Conv', 'Register', 'Deposit', 'Amou
           </th>
           <th
             v-for="h in HEADERS"
-            :key="h"
+            :key="h.label"
             scope="col"
             class="bg-elevated px-3 py-2 text-right text-xs font-medium text-muted uppercase"
           >
-            {{ h }}
+            <span class="inline-flex items-center justify-end gap-1">
+              <span>{{ h.label }}</span>
+              <ReportsInfoHint v-if="h.key" :id="h.key" :text="REPORT_HELP[h.key]!" />
+            </span>
           </th>
         </tr>
       </thead>

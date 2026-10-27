@@ -94,7 +94,10 @@ const rows = computed<WatchRow[]>(() => {
         data-testid="rf-now-accounts"
         :data-value="now.accounts"
       >
-        <span class="text-xs text-muted">บัญชีที่ถืออยู่</span>
+        <span class="flex items-center gap-1 text-xs text-muted">
+          <span>บัญชีที่ถืออยู่</span>
+          <ReportsInfoHint id="rf-now-accounts" :text="REPORT_HELP['rf-now-accounts']!" />
+        </span>
         <span class="text-xl font-semibold tabular-nums text-highlighted">{{ formatInt(now.accounts) }} บัญชี</span>
         <span class="text-xs text-muted">{{ formatInt(now.advertisers) }} advertiser</span>
       </NuxtLink>
@@ -104,7 +107,10 @@ const rows = computed<WatchRow[]>(() => {
         data-testid="rf-now-banned"
         :data-value="now.banned.count"
       >
-        <span class="text-xs text-muted">Advertiser ถูกระงับ</span>
+        <span class="flex items-center gap-1 text-xs text-muted">
+          <span>Advertiser ถูกระงับ</span>
+          <ReportsInfoHint id="rf-now-banned" :text="REPORT_HELP['rf-now-banned']!" />
+        </span>
         <span
           class="text-xl font-semibold tabular-nums"
           :class="now.banned.count > 0 ? 'text-error' : 'text-highlighted'"
@@ -117,7 +123,10 @@ const rows = computed<WatchRow[]>(() => {
         data-testid="rf-now-launching"
         :data-value="now.launching"
       >
-        <span class="text-xs text-muted">Advertiser กำลังยิง</span>
+        <span class="flex items-center gap-1 text-xs text-muted">
+          <span>Advertiser กำลังยิง</span>
+          <ReportsInfoHint id="rf-now-launching" :text="REPORT_HELP['rf-now-launching']!" />
+        </span>
         <span class="text-xl font-semibold tabular-nums text-success">{{ formatInt(now.launching) }}</span>
         <span
           v-if="now.notDelivering.count > 0"
@@ -133,8 +142,9 @@ const rows = computed<WatchRow[]>(() => {
       class="rounded-lg border border-warning/40 bg-warning/5 p-3"
       data-testid="rf-watch"
     >
-      <h3 class="mb-2 text-xs font-semibold text-warning">
-        ต้องดู
+      <h3 class="mb-2 flex items-center gap-1 text-xs font-semibold text-warning">
+        <span>ต้องดู</span>
+        <ReportsInfoHint id="rf-watch" :text="REPORT_HELP['rf-watch']!" />
       </h3>
       <ul class="flex flex-col divide-y divide-default">
         <li
