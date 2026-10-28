@@ -29,6 +29,12 @@
  * the request does not answer 200 nothing is shown and the fallback table of `app/utils/topup.ts` is used, so
  * the FEAT-051 behaviour is untouched. A currency with a per-day cap also renders one extra read-only line,
  * `<prefix>-remaining-today` ("เหลือวันนี้ X <CUR>"), which does not exist without a cap.
+ *
+ * FEAT-077 (spec "UI behaviour", AC-20, api-contract §6.5/§10) — when that same options answer says
+ * `telegram.available === true` and the QR channel is selected, a switch `ta-adv-topup-telegram`
+ * ("ส่ง Telegram (<chatTitle>)", **on** by default) sits under the channel chooser. On → the `POST` body is
+ * byte-identical to before (no `sendTelegram` key); off → `sendTelegram: false`. Card channel, `available: false`
+ * or no options answer → no element and never the key.
  */
 import type { FetchError } from 'ofetch'
 import type { PopoverProps } from '@nuxt/ui'
@@ -109,6 +115,14 @@ const cardBlocked = computed(() => cardChannelBlockedReason(props.balanceCurrenc
 const qrBlocked = computed(() => qrChannelBlockedReason(props.balanceCurrency, topupOptions.value))
 const isCard = computed(() => channel.value === 'card')
 
+// ── FEAT-077 · "ส่ง Telegram" (manual QR round of an account whose prefix is linked to a group) ──────────────────────
+const telegramOption = computed(() => topupOptions.value?.telegram?.available === true ? topupOptions.value.telegram : null)
+const showTelegram = computed(() => telegramOption.value !== null && !isCard.value)
+const sendTelegram = ref(true)
+const telegramLabel = computed(() => `ส่ง Telegram (${telegramOption.value?.chatTitle || REPORT_DASH})`)
+/** spread into the QR body: nothing while the switch is on (or absent), `{ sendTelegram: false }` when switched off */
+const telegramBody = computed<{ sendTelegram?: false }>(() => (showTelegram.value && !sendTelegram.value ? { sendTelegram: false } : {}))
+
 function selectChannel(next: TopupChannel) {
   if (next === 'card' && cardBlocked.value) return
   if (next === 'qr' && qrBlocked.value) return
@@ -164,6 +178,7 @@ watch(open, (isOpen) => {
   amount.value = props.defaultAmount
   serverError.value = null
   touched.value = false
+  sendTelegram.value = true
   channel.value = startChannel()
   // FEAT-053 — exactly one `GET /topups/options` per open
   void loadOptions(props.tiktokAccountId)
@@ -202,7 +217,7 @@ async function submit() {
       const res = await api<AccountTopupResponse>('/topups/accounts', {
         method: 'POST',
         retry: 0,
-        body: { tiktokAccountIds: [props.tiktokAccountId], amount: amount.value }
+        body: { tiktokAccountIds: [props.tiktokAccountId], amount: amount.value, ...telegramBody.value }
       })
       const row = res.results?.[0]
       open.value = false
@@ -217,7 +232,8 @@ async function submit() {
       body: {
         tiktokAccountId: props.tiktokAccountId,
         advertiserId: props.advertiserId,
-        amount: amount.value
+        amount: amount.value,
+        ...telegramBody.value
       }
     })
     open.value = false
@@ -340,6 +356,16 @@ function failToast(message: string, status: number | undefined) {
             {{ qrBlocked }}
           </p>
         </div>
+
+        <!-- FEAT-077 — only when this account's manual QR round would go to its prefix's Telegram group -->
+        <USwitch
+          v-if="showTelegram"
+          v-model="sendTelegram"
+          :label="telegramLabel"
+          size="sm"
+          :ui="{ label: 'text-xs break-words' }"
+          data-testid="ta-adv-topup-telegram"
+        />
 
         <UButton
           v-if="!isCard"

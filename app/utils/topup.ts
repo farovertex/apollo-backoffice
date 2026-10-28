@@ -25,14 +25,21 @@
  * through it, `accountAutoTopupLabel()` is the text of the list chip `ta-auto-config`, and `isAutoTopupCard()` /
  * `autoTopupCardLabel()` are what the Edit modal's card select offers. Nothing here reads the system settings any
  * more — `rules` / `minAmounts` are gone from `/settings/auto-topup`.
+ *
+ * FEAT-077 (api-contract v1 §6.3/§6.4, spec "UI behaviour") — a QR round whose prefix is linked to a Telegram group
+ * is **paid in the group**: `topupInTelegram()` is the one gate (block `pending`/`sent` while the round is still in
+ * its QR phase), `topupRowActions()` answers `NO_ACTIONS` for it (the API would 409 a claim anyway),
+ * `topupTelegramLine()` is the text of `<prefix>-telegram`, `topupBadgeLabel()`/`topupBadgeColor()` read
+ * `รอจ่ายใน Telegram` for `readyToPay` + `sent`, and `topupCheckInfo()` prefixes `แจ้งจาก Telegram (<name>) · ` on a
+ * `verifying` round somebody confirmed from the group. A missing/`null` block changes nothing.
  */
 // `formatInt` is auto-imported inside the Nuxt app; the explicit import is what makes `tests/unit/*.test.ts`
 // (plain vitest, no Nuxt runtime) able to import this module by relative path.
-import { formatInt } from './reports'
+import { REPORT_DASH, formatClock, formatInt } from './reports'
 import type { AdminRole } from '#shared/types/auth'
 import type { PaymentCardView } from '#shared/types/payment-cards'
 import type { AccountAutoTopupCard, TikTokAccount } from '#shared/types/tiktok-accounts'
-import type { TopupCardLimit, TopupCardSnapshot, TopupChannel, TopupOptionsResponse, TopupStatus, TopupTrigger, TopupView, TopupWorkspaceRef } from '#shared/types/topups'
+import type { TopupCardLimit, TopupCardSnapshot, TopupChannel, TopupOptionsResponse, TopupStatus, TopupTelegramStatus, TopupTrigger, TopupView, TopupWorkspaceRef } from '#shared/types/topups'
 
 /** `TOPUP_MIN_AMOUNT` of the API (api-contract §1). The API's 400 body stays the authority — this is the hint. */
 export const TOPUP_MIN_AMOUNT = 400
@@ -243,6 +250,8 @@ export const TOPUP_STATUSES = Object.keys(TOPUP_BADGE) as TopupStatus[]
 /** badge text of a row: `paying` carries the name of the admin holding the lease (v1.1 §C) */
 export function topupBadgeLabel(topup: TopupView | null | undefined): string {
   if (!topup) return ''
+  // FEAT-077 — the one override: a QR posted to the group waits for a payer **there**
+  if (isTelegramReadyToPay(topup)) return TOPUP_TELEGRAM_BADGE.label
   const base = TOPUP_BADGE[topup.status]?.label ?? topup.status
   if (topup.status === 'paying' && topup.payingBy?.displayName) {
     return `${base} · ${topup.payingBy.displayName}`
@@ -251,6 +260,7 @@ export function topupBadgeLabel(topup: TopupView | null | undefined): string {
 }
 
 export function topupBadgeColor(topup: TopupView | null | undefined): TopupBadgeColor {
+  if (topup && isTelegramReadyToPay(topup)) return TOPUP_TELEGRAM_BADGE.color
   return topup ? (TOPUP_BADGE[topup.status]?.color ?? 'neutral') : 'neutral'
 }
 
@@ -353,6 +363,9 @@ export function topupRowActions(topup: TopupView | null | undefined, viewer: Top
 
   if (!topup) return { ...NO_ACTIONS, pay: true }
 
+  // FEAT-077 — paid in the Telegram group: no pay / open / claim / release (claim + qr answer 409 `reason: 'telegram'`)
+  if (topupInTelegram(topup)) return NO_ACTIONS
+
   switch (topup.status) {
     case 'qrFailed':
       return { ...NO_ACTIONS, pay: true, retry: true }
@@ -393,7 +406,71 @@ export function topupCheckInfo(topup: TopupView | null | undefined): string {
   const parts: string[] = [`ตรวจแล้ว ${topup.checkCount ?? 0} ครั้ง`]
   if (topup.lastCheckAt) parts.push(`ล่าสุด ${formatClock(topup.lastCheckAt)}`)
   if (topup.error) parts.push(topup.error)
+  // FEAT-077 — somebody pressed "แจ้งจ่ายแล้ว" in the group (nobody in the BO confirmed this round)
+  const pressedBy = topup.status === 'verifying' ? topup.telegram?.paidPressedBy?.name : null
+  if (pressedBy) parts.unshift(`แจ้งจาก Telegram (${pressedBy})`)
   return parts.join(' · ')
+}
+
+// ── FEAT-077 · Telegram QR group ─────────────────────────────────────────────────────────────────────────────────────
+
+/** `none` = not a Telegram round (`telegram` null or missing — every row before the feature, every card round) */
+export type TopupTelegramState = 'none' | TopupTelegramStatus
+
+export function topupTelegramState(topup: Pick<TopupView, 'telegram'> | null | undefined): TopupTelegramState {
+  const status = topup?.telegram?.status
+  return status === 'pending' || status === 'sent' || status === 'failed' ? status : 'none'
+}
+
+/**
+ * The statuses in which the QR of a round is still waiting to be paid. A Telegram block outlives them (a `sent`
+ * round that reached `paid` keeps `telegram.status: 'sent'`), so every Telegram rule of the row is limited to this
+ * phase — afterwards the row is an ordinary finished round (new round / "ตรวจอีกครั้ง" as before, spec B7).
+ */
+const TELEGRAM_QR_PHASE: readonly TopupStatus[] = ['waitingQr', 'readyToPay', 'paying']
+
+/** FEAT-077 — the round is paid in the group: no pay button, the `<prefix>-telegram` line instead (spec "UI behaviour") */
+export function topupInTelegram(topup: TopupView | null | undefined): boolean {
+  if (!topup || !TELEGRAM_QR_PHASE.includes(topup.status)) return false
+  const state = topupTelegramState(topup)
+  return state === 'pending' || state === 'sent'
+}
+
+function isTelegramReadyToPay(topup: TopupView): boolean {
+  return topup.status === 'readyToPay' && topupTelegramState(topup) === 'sent'
+}
+
+/** spec "UI behaviour" — `readyToPay` + `sent` reads this instead of `TOPUP_BADGE.readyToPay` (`TOPUP_BADGE` untouched) */
+export const TOPUP_TELEGRAM_BADGE: { label: string, color: TopupBadgeColor } = { label: 'รอจ่ายใน Telegram', color: 'info' }
+
+/** what `<prefix>-telegram` shows (`data-tg-status` = `status`) */
+export interface TopupTelegramLine {
+  status: TopupTelegramStatus
+  /** `Telegram · <chatTitle>` — `null` for the muted `failed` line, which has no title row */
+  title: string | null
+  text: string
+  /** the `title` attribute (the API's `lastError` on `failed`) */
+  hint: string | null
+}
+
+/**
+ * The Telegram line of a row, or `null` when there is none: `pending` / `sent` while the round is in the group,
+ * `failed` while the fallen-back round still waits for a payer in the BO (the normal buttons are back next to it).
+ */
+export function topupTelegramLine(topup: TopupView | null | undefined): TopupTelegramLine | null {
+  if (!topup?.telegram || !TELEGRAM_QR_PHASE.includes(topup.status)) return null
+  const tg = topup.telegram
+  const title = `Telegram · ${tg.chatTitle || REPORT_DASH}`
+  switch (tg.status) {
+    case 'pending':
+      return { status: 'pending', title, text: 'รอ QR แล้วจะส่งเข้ากลุ่ม', hint: null }
+    case 'sent':
+      return { status: 'sent', title, text: `ส่งแล้ว ${formatClock(tg.sentAt)} · รอจ่ายในกลุ่ม`, hint: null }
+    case 'failed':
+      return { status: 'failed', title: null, text: 'ส่ง Telegram ไม่สำเร็จ — จ่ายที่นี่', hint: tg.lastError || null }
+    default:
+      return null
+  }
 }
 
 /** what the round tops up: the advertiser's name, or for an account-level round the BC name / account label */

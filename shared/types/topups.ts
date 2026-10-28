@@ -124,6 +124,29 @@ export interface TopupHumanTaskRef {
   expiresAt: string
 }
 
+/** FEAT-077 (api-contract v1 §6.3) — where a Telegram round is: decided (`pending`), posted (`sent`), or back in the BO (`failed`) */
+export type TopupTelegramStatus = 'pending' | 'sent' | 'failed'
+
+/** FEAT-077 — what the group message currently shows */
+export type TopupTelegramBadge = 'none' | 'paid' | 'expired' | 'notFound'
+
+/**
+ * FEAT-077 (api-contract v1 §6.3) — the Telegram block of a QR round whose prefix is linked to a group.
+ * `null` (or missing on an API/stub that predates the feature) = not a Telegram round → the BO renders exactly as before.
+ * Never carries `chatId`, `messageId` or the raw error object.
+ */
+export interface TopupTelegram {
+  status: TopupTelegramStatus
+  chatTitle: string | null
+  /** ISO | null — when the QR was posted to the group */
+  sentAt: string | null
+  badge: TopupTelegramBadge
+  /** who pressed "แจ้งจ่ายแล้ว" in the group (`@username` or first name) */
+  paidPressedBy: { name: string, at: string } | null
+  /** the client's error kind + Telegram's description (no secret by construction) */
+  lastError: string | null
+}
+
 /** api-contract §3.1 — the one view used by the list, the detail, the stream, `advertiser.topup` and `account.topup`. */
 export interface TopupView {
   id: string
@@ -177,6 +200,11 @@ export interface TopupView {
    * here for the same reason as `workspace` above: an API/stub without the key must render like `null`.
    */
   source?: TopupSource | null
+  /**
+   * FEAT-077 (api-contract v1 §6.3) — 41st key, right after `source`. Optional for the same reason as `source`:
+   * missing ⇒ read like `null` (not a Telegram round).
+   */
+  telegram?: TopupTelegram | null
   createdAt: string
   updatedAt: string
   /** FEAT-051 — `qr` | `card`; **missing ⇒ `qr`** (every row written before the feature) */
@@ -228,6 +256,11 @@ export interface TopupChannelBody {
   cardId?: string
   /** the card to save and use (first payment of that account, or "ใช้บัตรใบอื่น") */
   card?: TopupCardInput
+  /**
+   * FEAT-077 (api-contract v1 §6.1) — `false` = keep this manual QR round in the BO although the account's prefix is
+   * linked to a Telegram group. The BO sends the key **only** as `false` (switch off); absent = `true`.
+   */
+  sendTelegram?: boolean
 }
 
 /** `POST /topups` body (advertiser level) */
@@ -319,6 +352,18 @@ export interface TopupOptionsResponse {
     limits: Record<string, TopupCardLimit>
     account: TopupOptionsAccount | null
   }
+  /**
+   * FEAT-077 (api-contract v1 §6.5) — would a manual QR round of this account go to its prefix's Telegram group?
+   * Missing on an API that predates the feature ⇒ read like `available: false`.
+   */
+  telegram?: TopupOptionsTelegram
+}
+
+/** FEAT-077 — `reason` is the API's routing skip reason (`card` · `disabled` · `notConfigured` · `noPrefix` · `notLinked` · `chatFailed` · `switchedOff` · `noAccount`) */
+export interface TopupOptionsTelegram {
+  available: boolean
+  chatTitle: string | null
+  reason: string | null
 }
 
 /** `POST /topups/accounts/:id/balance` 202 — `reused` = a balance job of this account was already queued */
