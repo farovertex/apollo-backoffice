@@ -9,8 +9,9 @@ const colorMode = useColorMode()
 const appConfig = useAppConfig()
 const auth = useAuth()
 
-const colors = ['red', 'orange', 'amber', 'yellow', 'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose']
-const neutrals = ['slate', 'gray', 'zinc', 'neutral', 'stone', 'taupe', 'mauve', 'mist', 'olive']
+// TASK-theme-cbo-cap — one list with `plugins/theme-colors.client.ts`, which remembers the choice in `localStorage`
+const colors = THEME_PRIMARY_COLORS
+const neutrals = THEME_NEUTRAL_COLORS
 
 const displayName = computed(() => auth.admin.value?.displayName || auth.admin.value?.username || 'Account')
 const roles = computed(() => auth.admin.value?.roles ?? [])
