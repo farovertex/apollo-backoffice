@@ -626,10 +626,21 @@ const hasStoredCode = computed(() => {
   return post?.selection === POST_AUTH_CODE && 'hasCode' in post && post.hasCode === true
 })
 
-/** the last 4 characters the masked view carries, `null` when the API served none (code shorter than 5) */
+/**
+ * The last 4 characters of the stored code, `null` when it is shorter than 5 characters (spec L-11).
+ * FEAT-079: the owner's view carries the **full** `code` (not the masked `hasCode`/`codeLast4` shape — only a
+ * non-owner view is masked, `ad-templates.dto.ts` `canEdit ? d.config : maskAdConfig(d.config)`), so the locked
+ * hint (which renders from this value regardless of who is viewing) derives the last 4 from whichever shape the
+ * served view actually has.
+ */
 const codeLast4 = computed(() => {
   const post = sourceRow.value?.config?.identity?.post
-  return post?.selection === POST_AUTH_CODE && 'codeLast4' in post ? post.codeLast4 : null
+  if (post?.selection !== POST_AUTH_CODE) return null
+  if ('codeLast4' in post) return post.codeLast4
+  if ('code' in post && typeof post.code === 'string') {
+    return post.code.length >= 5 ? post.code.slice(-4) : null
+  }
+  return null
 })
 
 /**
@@ -654,8 +665,14 @@ const codeKeepHelp = computed(() =>
  */
 const codeMode = ref<'keep' | 'new'>('new')
 
+/**
+ * FEAT-079 fix round 1: `codeLocked` (declared below, needs `postInfo` which this function also reads through
+ * it) must win over `hasStoredCode` — the owner's view has the full `code`, not the masked `hasCode`, so
+ * `hasStoredCode` alone is `false` for an owner and would default to `new` (prefilled input, editable) even for
+ * a verified template. Every other state keeps today's rule (masked view → `keep`, everything else → `new`).
+ */
 function resetCodeMode() {
-  codeMode.value = hasStoredCode.value ? 'keep' : 'new'
+  codeMode.value = (codeLocked.value || hasStoredCode.value) ? 'keep' : 'new'
 }
 
 /** the input is shown (and therefore required) whenever the stored code is not being kept */
@@ -1156,8 +1173,12 @@ function resetForm() {
 
 watch(open, (isOpen) => {
   if (isOpen) {
-    resetForm()
+    // FEAT-079 fix round 1: `initPostInfo()` first — `resetForm()` → `resetCodeMode()` reads `codeLocked`,
+    // which needs `postInfo` to already carry the row's status, not the previous session's (or a closed
+    // modal's `null`). `initPostInfo()`'s own read is synchronous for this part (`editing.value?.postInfo`);
+    // the network refresh it also starts stays async and unaffected by the order.
     initPostInfo()
+    resetForm()
     return
   }
   stopPostPolling()
