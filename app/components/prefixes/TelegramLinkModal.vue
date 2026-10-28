@@ -58,12 +58,25 @@ let codePending = false
 let prefixId = ''
 let prefixCode = ''
 
-const { now, pause: pauseClock, resume: resumeClock } = useNow({ interval: 1000, controls: true })
+/** wall clock of the countdown — ticks only while a link is shown, restarted (and read fresh) on every answer */
+const nowMs = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | null = null
+function startClock() {
+  stopClock()
+  nowMs.value = Date.now()
+  clock = setInterval(() => {
+    nowMs.value = Date.now()
+  }, 1000)
+}
+function stopClock() {
+  if (clock) clearInterval(clock)
+  clock = null
+}
 
 const remainingMs = computed(() => {
   if (!link.value) return 0
   const t = new Date(link.value.expiresAt).getTime()
-  return Number.isNaN(t) ? 0 : Math.max(0, t - now.value.getTime())
+  return Number.isNaN(t) ? 0 : Math.max(0, t - nowMs.value)
 })
 const countdown = computed(() => {
   const total = Math.ceil(remainingMs.value / 1000)
@@ -122,7 +135,7 @@ async function requestLink() {
     const res = await api<TelegramLinkResponse>(`/prefixes/${encodeURIComponent(prefixId)}/telegram/link`, { method: 'POST', retry: 0 })
     if (s !== session) return
     link.value = res
-    resumeClock()
+    startClock()
     const expiresAt = new Date(res.expiresAt).getTime()
     state.value = Number.isFinite(expiresAt) && expiresAt > Date.now() ? 'ready' : 'expired'
     if (state.value === 'ready') schedulePoll(s)
@@ -152,7 +165,7 @@ function cancelPending() {
 function teardown() {
   session++
   stopPolling()
-  pauseClock()
+  stopClock()
   cancelPending()
 }
 

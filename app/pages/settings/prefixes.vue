@@ -354,7 +354,8 @@ const emptyText = computed(() => (isGod.value ? 'ยังไม่มี prefix
                 />
               </td>
               <td class="px-3 py-2" data-testid="st-prefix-telegram" :data-tg="tgState(prefix)">
-                <div class="flex flex-wrap items-center gap-1.5">
+                <!-- FEAT-077 — a minimum width so a long group title does not turn into a one-word column on narrow screens -->
+                <div class="flex min-w-52 flex-wrap items-center gap-1.5">
                   <template v-if="tgState(prefix) === 'none'">
                     <span class="text-muted whitespace-nowrap">ยังไม่ผูก</span>
                     <UButton
