@@ -9,6 +9,7 @@
  * registered — `god-only` on each `app/pages/settings/*.vue` is the guard, and the API (`@Roles('GOD')`) is
  * the authority.
  * FEAT-076 — third tab `Prefixes` (`/settings/prefixes`, GOD + Admin; an Admin sees only that tab).
+ * FEAT-077 — fourth tab `Telegram` (`/settings/telegram`, GOD only, after `Prefixes`).
  */
 import type { NavigationMenuItem } from '@nuxt/ui'
 
@@ -36,6 +37,12 @@ const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
       label: 'Prefixes',
       icon: 'i-lucide-tag',
       to: '/settings/prefixes'
+    }]
+  : []), ...(isGod.value
+  ? [{
+      label: 'Telegram',
+      icon: 'i-lucide-send',
+      to: '/settings/telegram'
     }]
   : [])]])
 </script>

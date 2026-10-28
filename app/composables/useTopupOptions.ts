@@ -13,6 +13,9 @@ import type { TopupOptionsResponse } from '#shared/types/topups'
  *   - **a failure is not an error state**: `options` stays `null`, nothing is shown to the admin, and every
  *     caller falls back to `TOPUP_CARD_LIMITS` / `TOPUP_MIN_AMOUNT` (spec assumption 9 — the new endpoint must
  *     never block a payment or invent a number).
+ *
+ * FEAT-077 (api-contract §6.5) — the same answer now carries `telegram { available, chatTitle, reason }`; it is passed
+ * through untouched (the pay popover shows its "ส่ง Telegram" switch only for `available === true`). No new request.
  */
 export function useTopupOptions() {
   const api = useApi()

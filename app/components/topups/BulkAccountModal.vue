@@ -6,6 +6,10 @@
  * account-level round still running can be picked. One `POST /topups/accounts` queues one round + one pay job per
  * account; the answer is per account, so the modal stays open on partial failure and lists the API's own error text
  * next to each account that could not start.
+ *
+ * FEAT-077 (spec "UI behaviour", AC-20, A9) — switch `tp-bulk-telegram` ("ส่ง Telegram ให้บัญชีที่ผูกกลุ่ม", on by
+ * default, always visible): on → the body is unchanged (no key), off → `sendTelegram: false`. The API decides per
+ * account whether a round goes to its prefix's group; an account that cannot simply gets an ordinary BO round.
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
@@ -33,6 +37,8 @@ const touched = ref(false)
 const submitting = ref(false)
 const serverError = ref<string | null>(null)
 const failures = ref<AccountTopupResult[]>([])
+/** FEAT-077 — on = let the API route each account to its prefix's Telegram group when it can */
+const sendTelegram = ref(true)
 
 function accountName(a: TikTokAccount): string {
   return a.label || a.loginEmail
@@ -93,6 +99,7 @@ watch(open, (isOpen) => {
   touched.value = false
   serverError.value = null
   failures.value = []
+  sendTelegram.value = true
   void load()
 })
 
@@ -120,7 +127,7 @@ async function submit() {
     const res = await api<AccountTopupResponse>('/topups/accounts', {
       method: 'POST',
       retry: 0,
-      body: { tiktokAccountIds: [...selected.value], amount: amount.value }
+      body: { tiktokAccountIds: [...selected.value], amount: amount.value, ...(sendTelegram.value ? {} : { sendTelegram: false }) }
     })
     const results = res.results ?? []
     const okCount = results.filter(r => r.ok).length
@@ -183,6 +190,15 @@ const failureById = computed(() => new Map(failures.value.map(f => [f.tiktokAcco
             data-testid="tp-bulk-search"
           />
         </div>
+
+        <!-- FEAT-077 — off = every round of this batch stays in the BO, even for accounts linked to a group -->
+        <USwitch
+          v-model="sendTelegram"
+          label="ส่ง Telegram ให้บัญชีที่ผูกกลุ่ม"
+          size="sm"
+          :disabled="submitting"
+          data-testid="tp-bulk-telegram"
+        />
 
         <UAlert
           v-if="loadError"

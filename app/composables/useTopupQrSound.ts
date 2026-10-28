@@ -37,12 +37,26 @@ import type { TopupStatus, TopupView } from '#shared/types/topups'
  * `tp-page[data-sound-otp-events]`) so the QR counters keep meaning what FEAT-033 asserts, and it is "once per
  * task": the id of the `paymentOtp` task is remembered, so a re-render, a poll tick or a reconnect never replays
  * the same code. No new audio file (G-1).
+ *
+ * **FEAT-077 (AC-19).** A round paid in the prefix's Telegram group (`telegram.status` `pending` / `sent`) is not a
+ * QR waiting in the BO, so the detector records it under the pseudo-status `'telegram'` instead of its real status:
+ * it never counts as `readyToPay`. When the send fails for good the row turns `telegram.status: 'failed'` while
+ * still `readyToPay`; the detector then sees `'telegram' → 'readyToPay'`, i.e. a **new** `readyToPay` → one event,
+ * one sound. A row without a Telegram block is recorded exactly as before, and the counters/ids do not change.
  */
 
 /** the file already tracked in `public/sounds/` (G-1) — nobody adds another one */
 export const TOPUP_SOUND_SRC = '/sounds/topup-sound.mp3'
 /** "several rounds within 1 s → one sound" (G-8) */
 export const TOPUP_SOUND_COALESCE_MS = 1000
+
+/** FEAT-077 — what the detector records for a round that is paid in Telegram (never equal to `readyToPay`) */
+type SeenStatus = TopupStatus | 'telegram'
+
+function seenStatus(row: TopupView): SeenStatus {
+  const tg = row.telegram?.status
+  return tg === 'pending' || tg === 'sent' ? 'telegram' : row.status
+}
 
 /** `loading` until the preference GET settled, then the saved value (`tp-page[data-sound]`) */
 export type TopupSoundState = 'loading' | 'on' | 'off'
@@ -71,7 +85,7 @@ export function useTopupQrSound() {
   )
 
   /** `null` = disarmed (no successful list load yet, or the filter just changed); otherwise id → last seen status */
-  let seen: Map<string, TopupStatus> | null = null
+  let seen: Map<string, SeenStatus> | null = null
   let lastPlayAt = 0
   /** FEAT-051 — ids of the `paymentOtp` tasks that already rang (one alert per code, never a replay) */
   const otpTasksSeen = new Set<string>()
@@ -164,7 +178,7 @@ export function useTopupQrSound() {
           return
         }
 
-        const next = new Map(list.map(row => [row.id, row.status]))
+        const next = new Map(list.map(row => [row.id, seenStatus(row)]))
         if (!seen) {
           // first armed evaluation: whatever is on screen is "already known", nothing chimes (G-9)
           seen = next
@@ -179,7 +193,7 @@ export function useTopupQrSound() {
         let detected = 0
         let otpDetected = 0
         for (const row of list) {
-          if (row.status === 'readyToPay' && seen.get(row.id) !== 'readyToPay') detected += 1
+          if (seenStatus(row) === 'readyToPay' && seen.get(row.id) !== 'readyToPay') detected += 1
           // FEAT-051 — one alert per `paymentOtp` task, whatever path brought the row in
           const taskId = row.status === 'awaitingOtp' ? row.humanTask?.id : null
           if (taskId && !otpTasksSeen.has(taskId)) {

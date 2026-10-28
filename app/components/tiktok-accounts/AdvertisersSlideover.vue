@@ -566,9 +566,10 @@ function onSync() {
                     {{ statusBadge(adv.status).label }}
                   </UBadge>
                 </UTooltip>
-                <!-- `readyToPay` has no badge here: the primary button already reads "Ready to pay" (spec status table) -->
+                <!-- `readyToPay` has no badge here: the primary button already reads "Ready to pay" (spec status table) —
+                     except a round paid in Telegram (FEAT-077), which has no button and reads "รอจ่ายใน Telegram" -->
                 <TopupsStatusBadge
-                  v-if="adv.topup?.status !== 'readyToPay'"
+                  v-if="adv.topup?.status !== 'readyToPay' || topupInTelegram(adv.topup)"
                   :topup="adv.topup"
                   testid="ta-adv-topup-badge"
                 />

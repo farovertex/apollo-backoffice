@@ -10,11 +10,21 @@
  *
  * Exactly one `GET /backend/prefixes?status=all` per mount / Retry / after every successful write (`retry: 0`),
  * rows in the API order (createdAt asc). The table is the only wide thing here; it scrolls inside its card on
- * narrow viewports. `st-prefix-telegram` is "—" in this feature (FEAT-C links chats).
+ * narrow viewports.
+ *
+ * FEAT-077 (spec "UI behaviour", AC-16/AC-17, api-contract §4/§5/§10) — the Telegram column is live: one
+ * `GET /backend/telegram/status` per mount / Retry decides whether the feature is usable (`enabled && configured`);
+ * when it is not, `st-prefixes-tg-off` says why and the column shows only its text states. Otherwise each row
+ * (`st-prefix-telegram[data-tg]` = `none` | `linked` | `failed`) gets `ผูกกลุ่ม` (`st-prefix-tg-link`) /
+ * `ผูกใหม่` (`st-prefix-tg-relink`) → `PrefixesTelegramLinkModal`, and `ถอด` (`st-prefix-tg-unlink`) → confirm
+ * (`st-prefix-tg-unlink-confirm`) → `DELETE /prefixes/:id/telegram` → row patched + toast + list re-read. GOD and the
+ * managing Admin both see the buttons; the API (`canManagePrefix`) is the authority and its 404/409 text is toasted.
  */
+import type { ModalProps } from '@nuxt/ui'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
-import type { PrefixView, PrefixesResponse } from '#shared/types/prefixes'
+import type { PrefixDetailView, PrefixView, PrefixesResponse } from '#shared/types/prefixes'
+import type { TelegramStatus } from '#shared/types/telegram'
 
 definePageMeta({ middleware: 'prefixes-access' })
 
@@ -23,6 +33,7 @@ useSeoMeta({ title: 'Prefixes' })
 const LOAD_FALLBACK = 'โหลดรายการ Prefix ไม่สำเร็จ'
 
 const api = useApi()
+const toast = useToast()
 const { admin } = useAuth()
 const isGod = computed(() => admin.value?.roles.includes('GOD') === true)
 
@@ -60,12 +71,107 @@ async function load() {
   }
 }
 
+// ── FEAT-077 · Telegram status (once per mount / Retry) ─────────────────────────────────────────────────────────────
+const TG_DISABLED = 'Telegram ปิดอยู่ — GOD เปิดได้ที่ Settings → Telegram'
+const TG_NOT_CONFIGURED = 'Telegram ปิดอยู่ — ยังไม่ได้ตั้ง token ที่เซิร์ฟเวอร์'
+const TG_STATUS_FALLBACK = 'โหลดสถานะ Telegram ไม่สำเร็จ'
+
+const tgStatus = ref<TelegramStatus | null>(null)
+const tgError = ref<string | null>(null)
+let tgSession = 0
+
+async function loadTelegramStatus() {
+  const s = ++tgSession
+  tgError.value = null
+  try {
+    const res = await api<TelegramStatus>('/telegram/status', { retry: 0 })
+    if (s !== tgSession) return
+    tgStatus.value = res
+  } catch (e) {
+    if (s !== tgSession) return
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    tgStatus.value = null
+    tgError.value = err.data?.error ?? err.message ?? TG_STATUS_FALLBACK
+  }
+}
+
+/** link / relink / unlink buttons exist only while the feature can actually send */
+const tgOn = computed(() => tgStatus.value?.enabled === true && tgStatus.value.configured === true)
+/** `st-prefixes-tg-off`: why the column has no buttons (null while the status is loading, or when it is on) */
+const tgOff = computed<{ reason: 'disabled' | 'notConfigured' | 'error', text: string } | null>(() => {
+  if (tgError.value) return { reason: 'error', text: tgError.value }
+  const st = tgStatus.value
+  if (!st) return null
+  if (!st.enabled) return { reason: 'disabled', text: TG_DISABLED }
+  if (!st.configured) return { reason: 'notConfigured', text: TG_NOT_CONFIGURED }
+  return null
+})
+
+type TgState = 'none' | 'linked' | 'failed'
+function tgState(prefix: PrefixView): TgState {
+  if (!prefix.telegram?.linked) return 'none'
+  return prefix.telegram.failedAt ? 'failed' : 'linked'
+}
+
+function retry() {
+  void load()
+  void loadTelegramStatus()
+}
+
 onMounted(() => {
   void load()
+  void loadTelegramStatus()
 })
 onUnmounted(() => {
   session++
+  tgSession++
 })
+
+// ── FEAT-077 · link modal ───────────────────────────────────────────────────────────────────────────────────────────
+const linkOpen = ref(false)
+const linking = ref<PrefixView | null>(null)
+
+function openLink(prefix: PrefixView) {
+  linking.value = prefix
+  linkOpen.value = true
+}
+
+function onLinked(prefix: PrefixDetailView) {
+  list.value = prefixes.value.map(p => (p.id === prefix.id ? { ...p, telegram: prefix.telegram } : p))
+  void load()
+}
+
+// ── FEAT-077 · unlink ───────────────────────────────────────────────────────────────────────────────────────────────
+const unlinkTarget = ref<PrefixView | null>(null)
+const unlinkOpen = ref(false)
+const unlinking = ref(false)
+const unlinkContent = { 'data-testid': 'st-prefix-tg-unlink-confirm' } as ModalProps['content']
+
+function askUnlink(prefix: PrefixView) {
+  unlinkTarget.value = prefix
+  unlinkOpen.value = true
+}
+
+async function confirmUnlink() {
+  const prefix = unlinkTarget.value
+  if (!prefix || unlinking.value) return
+  unlinking.value = true
+  try {
+    // retry: 0 — exactly one DELETE per confirm
+    await api(`/prefixes/${encodeURIComponent(prefix.id)}/telegram`, { method: 'DELETE', retry: 0 })
+    list.value = prefixes.value.map(p => (p.id === prefix.id
+      ? { ...p, telegram: { linked: false, chatTitle: null, failedAt: null } }
+      : p))
+    toast.add({ title: `ถอดกลุ่มของ prefix ${prefix.code} แล้ว`, icon: 'i-lucide-check', color: 'success' })
+    void load()
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({ title: 'ถอดกลุ่มไม่สำเร็จ', description: err.data?.error ?? err.message ?? 'ลองอีกครั้ง', color: 'error' })
+  } finally {
+    unlinking.value = false
+    unlinkOpen.value = false
+  }
+}
 
 // ── GOD modal ───────────────────────────────────────────────────────────────────────────────────────────────────────
 const modalOpen = ref(false)
@@ -129,6 +235,16 @@ const emptyText = computed(() => (isGod.value ? 'ยังไม่มี prefix
       data-testid="st-prefixes-readonly"
     />
 
+    <UAlert
+      v-if="tgOff"
+      color="warning"
+      variant="subtle"
+      icon="i-lucide-send"
+      :description="tgOff.text"
+      :data-reason="tgOff.reason"
+      data-testid="st-prefixes-tg-off"
+    />
+
     <div v-if="pageState === 'loading'" class="flex flex-col gap-2" data-testid="st-prefixes-loading">
       <USkeleton class="h-10 w-full" />
       <USkeleton class="h-24 w-full" />
@@ -155,7 +271,7 @@ const emptyText = computed(() => (isGod.value ? 'ยังไม่มี prefix
           size="xs"
           :loading="pending"
           data-testid="st-prefixes-retry"
-          @click="load()"
+          @click="retry()"
         />
       </template>
     </UAlert>
@@ -237,8 +353,57 @@ const emptyText = computed(() => (isGod.value ? 'ยังไม่มี prefix
                   class="whitespace-nowrap"
                 />
               </td>
-              <td class="px-3 py-2" :class="prefix.telegram.linked ? '' : 'text-muted'" data-testid="st-prefix-telegram">
-                {{ prefix.telegram.linked ? (prefix.telegram.chatTitle ?? '—') : '—' }}
+              <td class="px-3 py-2" data-testid="st-prefix-telegram" :data-tg="tgState(prefix)">
+                <!-- FEAT-077 — a minimum width so a long group title does not turn into a one-word column on narrow screens -->
+                <div class="flex min-w-52 flex-wrap items-center gap-1.5">
+                  <template v-if="tgState(prefix) === 'none'">
+                    <span class="text-muted whitespace-nowrap">ยังไม่ผูก</span>
+                    <UButton
+                      v-if="tgOn"
+                      label="ผูกกลุ่ม"
+                      icon="i-lucide-send"
+                      color="primary"
+                      variant="soft"
+                      size="xs"
+                      data-testid="st-prefix-tg-link"
+                      @click="openLink(prefix)"
+                    />
+                  </template>
+                  <template v-else>
+                    <UBadge
+                      v-if="tgState(prefix) === 'failed'"
+                      label="กลุ่มใช้ไม่ได้"
+                      color="error"
+                      variant="subtle"
+                      size="sm"
+                      icon="i-lucide-triangle-alert"
+                      class="whitespace-nowrap"
+                      :title="`ตั้งแต่ ${formatDateTime(prefix.telegram.failedAt)}`"
+                      data-testid="st-prefix-tg-failed"
+                    />
+                    <span class="break-words text-highlighted" data-testid="st-prefix-tg-title">{{ prefix.telegram.chatTitle || '—' }}</span>
+                    <UButton
+                      v-if="tgOn && tgState(prefix) === 'failed'"
+                      label="ผูกใหม่"
+                      icon="i-lucide-send"
+                      color="primary"
+                      variant="soft"
+                      size="xs"
+                      data-testid="st-prefix-tg-relink"
+                      @click="openLink(prefix)"
+                    />
+                    <UButton
+                      v-if="tgOn"
+                      label="ถอด"
+                      icon="i-lucide-unlink"
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      data-testid="st-prefix-tg-unlink"
+                      @click="askUnlink(prefix)"
+                    />
+                  </template>
+                </div>
               </td>
               <td v-if="isGod" class="px-3 py-1.5 text-right">
                 <UButton
@@ -256,6 +421,42 @@ const emptyText = computed(() => (isGod.value ? 'ยังไม่มี prefix
         </table>
       </div>
     </UPageCard>
+
+    <PrefixesTelegramLinkModal
+      v-model:open="linkOpen"
+      :prefix="linking"
+      @linked="onLinked"
+    />
+
+    <UModal
+      v-model:open="unlinkOpen"
+      :title="`ถอดกลุ่ม Telegram ของ prefix ${unlinkTarget?.code ?? ''}`"
+      :description="`กลุ่ม ${unlinkTarget?.telegram.chatTitle || '—'} จะไม่ได้รับ QR เติมเงินใหม่ของ prefix นี้อีก · รอบที่ส่งไปแล้วยังจ่ายในกลุ่มได้`"
+      :dismissible="!unlinking"
+      :ui="{ content: 'max-w-md' }"
+      :content="unlinkContent"
+    >
+      <template #footer>
+        <div class="flex w-full flex-wrap justify-end gap-2">
+          <UButton
+            label="ยกเลิก"
+            color="neutral"
+            variant="subtle"
+            :disabled="unlinking"
+            data-testid="st-prefix-tg-unlink-no"
+            @click="unlinkOpen = false"
+          />
+          <UButton
+            label="ถอด"
+            icon="i-lucide-unlink"
+            color="error"
+            :loading="unlinking"
+            data-testid="st-prefix-tg-unlink-yes"
+            @click="confirmUnlink()"
+          />
+        </div>
+      </template>
+    </UModal>
 
     <PrefixesFormModal
       v-if="isGod"
