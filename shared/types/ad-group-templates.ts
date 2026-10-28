@@ -38,7 +38,16 @@ export type Currency = 'THB'
 export type ScheduleMode = 'continuous' | 'dateRange'
 export type StartTimeMode = 'now' | 'scheduled'
 export type Timezone = 'Asia/Bangkok'
-export type Dayparting = 'allDay'
+export type Dayparting = 'allDay' | 'specific'
+/** TASK-adgroup-dayparting — the seven day keys of `config.daypartingSchedule` (order on screen = `options.daypartingDays`) */
+export type DaypartingDay = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+/** `HH:MM` on the granularity boundary; `to` may be `'24:00'` */
+export interface DaypartingRange {
+  from: string
+  to: string
+}
+/** TASK-adgroup-dayparting — all 7 keys, each a sorted, non-overlapping list of ranges */
+export type DaypartingSchedule = Record<DaypartingDay, DaypartingRange[]>
 /** FEAT-061 — `config.campaign.budgetStrategy`: CBO (campaign budget) or one budget per ad group */
 export type BudgetStrategy = 'cbo' | 'adGroup'
 /** FEAT-061 — `config.campaign.bidStrategy`; `costCap` is the only one that uses `config.targetCpa` */
@@ -149,6 +158,12 @@ export interface AdGroupConfig {
   schedule: AdGroupSchedule
   timezone: Timezone
   dayparting: Dayparting
+  /**
+   * TASK-adgroup-dayparting (contract v3.2, 18 keys) — `null` while `dayparting = 'allDay'`; with `'specific'` an
+   * object with the 7 day keys and at least one range overall. Optional in this type only so a response of an API
+   * that predates v3.2 still type-checks (such a row reads as `null`).
+   */
+  daypartingSchedule?: DaypartingSchedule | null
   /** audience names to include / exclude (≤ `listLimits.maxItems` each) — pass-through, no control edits it */
   audiences: AdGroupAudiences
   /** interest & behaviour names (≤ `listLimits.maxItems`) */
@@ -245,6 +260,12 @@ export interface AdGroupTemplateOptions {
   startTimeMode: OptionItem[]
   timezone: OptionItem[]
   dayparting: OptionItem[]
+  /** TASK-adgroup-dayparting — `mon`…`sun` with the page's row headers, in the page's order. Optional: absent on an API that predates v3.2 → the grid is hidden */
+  daypartingDays?: OptionItem[]
+  /** TASK-adgroup-dayparting — 30 (48 cells a day) or 60 */
+  daypartingGranularityMinutes?: number
+  /** TASK-adgroup-dayparting — the sentence under the grid */
+  daypartingHint?: string
   /** `inherit` ↔ `null`, `on` ↔ `true`, `off` ↔ `false` */
   advancedPlacementState: OptionItem[]
   /** the five `config.advancedPlacement` keys, in the order the advanced section renders them */

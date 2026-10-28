@@ -99,6 +99,15 @@
  * 3. **Graceful degradation.** Everything in 2 hangs off `options.targetingMode` being served: without it the
  *    radio, the hint, the spending power and the suffixes are not rendered and `configFromState()` leaves both
  *    keys out of the body, so this form still creates and patches templates on an API that predates v3.1.
+ *
+ * **TASK-adgroup-dayparting** (contract v3.1 → **v3.2**, 18 config keys — `daypartingSchedule` right after
+ * `dayparting`): the dayparting radio gets its second value `specific` ("เวลาที่กำหนด") and, under it, the week
+ * grid `DaypartingGrid.vue` (rows = `options.daypartingDays`, cells = 24 h / `options.daypartingGranularityMinutes`,
+ * click or drag to paint). The grid's booleans live in `state.config.daypartingCells` (UI-only, like
+ * `schedule.startMode`, so switching back to `allDay` and again to `specific` does not lose the painting);
+ * `configFromState()` converts them with `app/utils/dayparting.ts` into `daypartingSchedule` — `null` while the
+ * radio is `allDay`. **Graceful degradation:** everything hangs off `options.daypartingDays` being served; without
+ * it the grid is hidden and `daypartingSchedule` is left out of the body (the radio still shows `options.dayparting`).
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -115,6 +124,7 @@ import type {
   AdGroupTemplateKind,
   AdGroupTemplateOptions,
   CreateAdGroupTemplateBody,
+  DaypartingSchedule,
   MigrateBody,
   MigrationDraft,
   MigrationResponse,
@@ -122,6 +132,10 @@ import type {
   PatchAdGroupTemplateBody,
   TriState
 } from '#shared/types/ad-group-templates'
+import type { DaypartingCells } from '~/utils/dayparting'
+import {
+  DEFAULT_GRANULARITY_MINUTES, cellsToSchedule, countRanges, rangesToCells
+} from '~/utils/dayparting'
 
 const props = withDefaults(defineProps<{
   /** null = create, a row = edit (`mode: 'form'`) or migrate (`mode: 'migrate'`) */
@@ -243,6 +257,8 @@ interface ConfigState {
   schedule: ScheduleState
   timezone: string
   dayparting: string
+  /** TASK-adgroup-dayparting — UI-only: one boolean per grid cell, per day; never sent as is */
+  daypartingCells: DaypartingCells
   /** FEAT-013 pass-through: no control edits it, kept as read so the POST/PATCH round-trip is lossless */
   audiences: { include: string[], exclude: string[] }
   interests: string[]
@@ -329,6 +345,10 @@ function moneyToInput(amount: number | null | undefined): string {
  * migration draft) written before v3.1 reads as "automatic targeting, spending power unlimited", exactly as the
  * API's view mapper fills it.
  */
+const DAYPARTING_SPECIFIC = 'specific'
+const daypartingSupported = computed(() => (props.options.daypartingDays?.length ?? 0) > 0)
+const daypartingDayKeys = computed(() => (props.options.daypartingDays ?? []).map(day => day.value))
+const daypartingGranularity = computed(() => props.options.daypartingGranularityMinutes ?? DEFAULT_GRANULARITY_MINUTES)
 const TARGETING_AUTO = 'auto'
 const SPENDING_ALL = 'all'
 
@@ -374,6 +394,11 @@ function configStateFrom(config: FillableConfig): ConfigState {
     },
     timezone: config.timezone,
     dayparting: config.dayparting,
+    daypartingCells: rangesToCells(
+      (config as { daypartingSchedule?: DaypartingSchedule | null }).daypartingSchedule,
+      daypartingDayKeys.value,
+      daypartingGranularity.value
+    ),
     audiences: {
       include: [...(config.audiences?.include ?? [])],
       exclude: [...(config.audiences?.exclude ?? [])]
@@ -578,7 +603,7 @@ const SECTIONS = [
   {
     id: 'budget' as const,
     heading: 'งบประมาณและกำหนดการ',
-    keys: ['budget', 'schedule', 'timezone', 'dayparting'] as const
+    keys: ['budget', 'schedule', 'timezone', 'dayparting', 'daypartingSchedule'] as const
   },
   {
     id: 'bidding' as const,
@@ -721,7 +746,7 @@ const sectionIsDefault = computed<Record<string, boolean>>(() => {
   const base = props.options.systemDefault
   return Object.fromEntries(
     SECTIONS.map(section =>
-      [section.id, section.keys.every(key => deepEqual(next[key], base?.[key]))] as [string, boolean]
+      [section.id, section.keys.every(key => deepEqual(next[key] ?? null, base?.[key] ?? null))] as [string, boolean]
     )
   )
 })
@@ -786,6 +811,8 @@ const SUMMARY_TEXT = {
   languages: (n: number) => `${n} ภาษา`,
   /** TASK-adgroup-targeting — the interests control is back, so the summary counts its tags like the languages' */
   interests: (n: number) => `${n} ความสนใจ`,
+  /** TASK-adgroup-dayparting — `เวลาที่กำหนด · N ช่วง` */
+  dayparting: (n: number) => `${n} ช่วง`,
   advancedDefault: 'ตามค่าเริ่มต้น',
   advancedSet: (n: number) => `ตั้งเอง ${n} รายการ`
 } as const
@@ -816,7 +843,10 @@ const sectionSummary = computed<Record<string, string | null>>(() => {
       // TASK-smart-plus-publish: under `cbo` the ad-group page has no budget — say so instead of repeating a hidden value
       c.campaign.budgetStrategy === 'cbo' ? PAGE_TEXT.budgetCboSummary : budget,
       labelOf(props.options.scheduleMode, c.schedule.mode),
-      labelOf(props.options.dayparting, c.dayparting)
+      labelOf(props.options.dayparting, c.dayparting),
+      daypartingSupported.value && c.dayparting === DAYPARTING_SPECIFIC
+        ? SUMMARY_TEXT.dayparting(countRanges(currentConfig.value.daypartingSchedule))
+        : ''
     ]),
     bidding: customAdvanced.length === 0
       ? SUMMARY_TEXT.advancedDefault
@@ -972,6 +1002,8 @@ const MSG = {
   targetCpaRequired: 'กรอกค่าใช้จ่ายต่อผลลัพธ์เป้าหมาย',
   /** TASK-adgroup-targeting — the API's own sentence for the spendingPower-vs-mode rule (contract v3.1) */
   spendingPowerAuto: 'กำลังซื้อ ตั้งได้เฉพาะการกำหนดเป้าหมายด้วยตนเอง',
+  /** TASK-adgroup-dayparting — the API's own sentence (contract v3.2) */
+  daypartingEmpty: 'เวลาที่กำหนด ต้องมีอย่างน้อยหนึ่งช่วงเวลา',
   money: (label: string) => ({
     number: `${label}ต้องเป็นตัวเลข`,
     positive: `${label}ต้องมากกว่า 0`,
@@ -1005,7 +1037,12 @@ function moneyIssue(
   return null
 }
 
-function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits, campaignMin: Record<string, number> | null) {
+function makeSchema(
+  minBudget: Record<string, number>,
+  limits: AdGroupListLimits,
+  campaignMin: Record<string, number> | null,
+  daypartingOn: boolean
+) {
   return z.object({
     name: z.string().trim().min(1, 'Name is required').max(100, 'Name must be at most 100 characters'),
     description: z.string().trim().max(500, 'Description must be at most 500 characters'),
@@ -1041,6 +1078,7 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
       }),
       timezone: z.string().min(1, 'Timezone is required'),
       dayparting: z.string().min(1, 'Dayparting is required'),
+      daypartingCells: z.record(z.string(), z.array(z.boolean())),
       // FEAT-013 pass-through: no control can produce a value, so nothing is validated client-side (an API issue
       // at `config.audiences.*` goes to `agt-form-error`)
       audiences: z.object({ include: z.array(z.string()), exclude: z.array(z.string()) }),
@@ -1133,6 +1171,15 @@ function makeSchema(minBudget: Record<string, number>, limits: AdGroupListLimits
       }
     }
 
+    // TASK-adgroup-dayparting — `specific` needs at least one painted cell (mirrors the API's 400)
+    if (
+      daypartingOn
+      && data.config.dayparting === DAYPARTING_SPECIFIC
+      && !Object.values(data.config.daypartingCells).some(row => row.some(Boolean))
+    ) {
+      ctx.addIssue({ code: 'custom', path: ['config', 'daypartingSchedule'], message: MSG.daypartingEmpty })
+    }
+
     // FEAT-011 — the two free-text lists (the tag inputs already refuse these; zod is the backstop)
     const lists: { path: string[], items: string[] }[] = [
       { path: ['config', 'interests'], items: data.config.interests },
@@ -1158,7 +1205,8 @@ type Schema = z.output<ReturnType<typeof makeSchema>>
 const schema = computed(() => makeSchema(
   props.options.minBudget ?? {},
   listLimits.value,
-  props.options.campaignMinBudget ?? null
+  props.options.campaignMinBudget ?? null,
+  daypartingSupported.value
 ))
 
 // ── body building ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1221,6 +1269,14 @@ function configFromState(): AdGroupConfig {
     schedule,
     timezone: c.timezone as AdGroupConfig['timezone'],
     dayparting: c.dayparting as AdGroupConfig['dayparting'],
+    // TASK-adgroup-dayparting — left out entirely while `/options` serves no day list (API predates v3.2)
+    ...(daypartingSupported.value
+      ? {
+          daypartingSchedule: c.dayparting === DAYPARTING_SPECIFIC
+            ? cellsToSchedule(c.daypartingCells, daypartingDayKeys.value, daypartingGranularity.value)
+            : null
+        }
+      : {}),
     audiences: { include: [...c.audiences.include], exclude: [...c.audiences.exclude] },
     interests: [...c.interests],
     languages: [...c.languages],
@@ -1251,13 +1307,14 @@ function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
- * the 17 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-061 api-contract §1.1 — TASK-adgroup-targeting
- * inserted `targetingMode` / `spendingPower` right after `gender`)
+ * the 18 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-061 api-contract §1.1 — TASK-adgroup-targeting
+ * inserted `targetingMode` / `spendingPower` right after `gender`, TASK-adgroup-dayparting `daypartingSchedule`
+ * right after `dayparting`)
  */
 const CONFIG_KEYS = [
   'adGroupNamePrefix', 'campaign', 'targetCpa', 'placement', 'locations', 'ageGroups', 'gender', 'targetingMode',
-  'spendingPower', 'budget', 'schedule', 'timezone', 'dayparting', 'audiences', 'interests', 'languages',
-  'advancedPlacement'
+  'spendingPower', 'budget', 'schedule', 'timezone', 'dayparting', 'daypartingSchedule', 'audiences', 'interests',
+  'languages', 'advancedPlacement'
 ] as const satisfies readonly (keyof AdGroupConfig)[]
 
 /** only the keys whose value really changed; each changed `config` key is sent whole (A3) */
@@ -1272,7 +1329,9 @@ function patchBodyFrom(original: AdGroupTemplate, name: string, description: str
   for (const key of CONFIG_KEYS) {
     // TASK-adgroup-targeting — a key this form does not send (no v3.1 `/options`) is never part of the diff
     if (next[key] === undefined) continue
-    if (!deepEqual(next[key], original.config?.[key])) {
+    // TASK-adgroup-dayparting — a row written before v3.2 has no `daypartingSchedule`: it reads as `null`
+    const stored = key === 'daypartingSchedule' ? (original.config?.[key] ?? null) : original.config?.[key]
+    if (!deepEqual(next[key], stored)) {
       // each key carries its complete value — the API replaces it wholesale
       Object.assign(changed, { [key]: next[key] })
       hasConfigChange = true
@@ -1304,6 +1363,7 @@ const visibleFieldNames = computed(() => {
   ]
   // rendered with `v-if`: while it does not exist, its issue belongs in the form alert (Lead ruling 2026-09-25)
   // TASK-adgroup-targeting — both controls only exist while `/options` serves the mode list
+  if (daypartingSupported.value) names.push('config.daypartingSchedule')
   if (targetingSupported.value) names.push('config.targetingMode', 'config.spendingPower')
   if (showCampaignBudget.value) names.push('config.campaign.budget.type', 'config.campaign.budget.amount')
   if (showTargetCpa.value) names.push('config.targetCpa')
@@ -1321,7 +1381,9 @@ const visibleFieldNames = computed(() => {
  * paths `config.audiences.include.0`, the manual-template refusal at `config` (api-contract §2.3) and an empty
  * path (empty PATCH body).
  */
-function resolveFieldName(path: string): string | null {
+function resolveFieldName(rawPath: string): string | null {
+  // TASK-adgroup-dayparting — `config.daypartingSchedule.mon[0]` folds onto `config.daypartingSchedule`
+  const path = rawPath.replace(/\[(\d+)\]/g, '.$1')
   if (path === 'config.campaign.budget' && showCampaignBudget.value) return 'config.campaign.budget.amount'
   let candidate = path
   while (candidate !== '') {
@@ -2180,6 +2242,24 @@ const submitLabel = computed(() => {
                   />
                 </UFormField>
               </div>
+
+              <!-- TASK-adgroup-dayparting — the week grid, only for `เวลาที่กำหนด` and only when /options serves the days -->
+              <UFormField
+                v-if="daypartingSupported"
+                v-show="state.config.dayparting === DAYPARTING_SPECIFIC"
+                label="เวลาที่กำหนด"
+                name="config.daypartingSchedule"
+                :error="serverErrors['config.daypartingSchedule']"
+                class="min-w-0 xl:col-span-2"
+              >
+                <AdGroupTemplatesDaypartingGrid
+                  v-model="state.config.daypartingCells"
+                  :days="options.daypartingDays ?? []"
+                  :granularity="daypartingGranularity"
+                  :hint="options.daypartingHint"
+                  :disabled="submitting"
+                />
+              </UFormField>
             </div>
           </section>
 
