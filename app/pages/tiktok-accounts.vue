@@ -62,17 +62,20 @@
  * FEAT-053 (AC-19/AC-20, api-contract §2/§3) — the account's auto top-up channel: which channel the system uses
  * when it opens an auto top-up round for this account. It was a column **ช่องทาง auto** (`ta-auto-channel`) with
  * the two-value switch `ta-auto-channel-qr` / `ta-auto-channel-card`; since 2026-10-16 the column is gone, the
- * table only *shows* the value (read-only chip `ta-auto-channel` in the Balance cell) and the switch lives in the
- * Edit modal (`ta-edit-auto-channel*`). What the API sees is unchanged: the key still travels in a
- * `PATCH /tiktok-accounts/:id` (now inside the modal's one diff PATCH, AC-19), 400 (no usable card) / 403 (role) /
- * 503 (no card key) still leave the old value in place and still show the API's own text. Like the cards the
- * chip exists for **GOD / Payment only** — for an Admin nothing is rendered and the page issues no request for
- * it (the key is 403 for them, AC-20).
+ * table only *shows* the value and the switch lives in the Edit modal (`ta-edit-auto-channel*`).
+ * FEAT-075 (api-contract §2/§3, spec "UI behaviour", AC-16) — the whole auto top-up **rule** is per account now
+ * (`autoTopupConfig`: switch, channel, card, `minBalance`/`amount` in the account's currency), so the
+ * GOD/Payment-only chip `ta-auto-channel` is replaced by `ta-auto-config` for **every role** (`data-enabled` /
+ * `data-channel` / `data-card`, text `Auto: ปิด` · `Auto: QR 500/2,000 THB` · `Auto: บัตร ****1234 500/2,000 USD`,
+ * title "ตั้งค่าได้ที่ปุ่ม Edit"), appended to the `ta-autotopup-last` line of the **Balance** cell. It stays
+ * read-only here: the Edit modal's section "เติมเงินอัตโนมัติ" is where it is set, in that modal's one diff PATCH
+ * (the API's gate is GOD or an Admin of the account's workspace — a Payment-only admin gets 403 there). The page
+ * still issues no extra request for it: the block rides on the list body.
  * 2026-10-16 (human request) — **declutter**: the table went from 13 to 10 columns. Three columns that rendered
  * the same controls on every row are gone and their content moved:
- *   · **ช่องทาง auto** (2 buttons per row) → a read-only `UBadge` `ta-auto-channel` (`data-channel`) appended to
- *     the `ta-autotopup-last` line of the **Balance** cell, GOD/Payment only; changing the channel is now a
- *     field of the Edit modal and is saved by that modal's single diff PATCH (atomic, no separate request), so
+ *   · **ช่องทาง auto** (2 buttons per row) → a read-only `UBadge` appended to the `ta-autotopup-last` line of the
+ *     **Balance** cell (`ta-auto-channel` then, `ta-auto-config` since FEAT-075); changing it is now a field of
+ *     the Edit modal and is saved by that modal's single diff PATCH (atomic, no separate request), so
  *     `setAutoChannel()` / `autoChannelBusy` and `ta-auto-channel-qr` / `ta-auto-channel-card` are gone here.
  *   · **บัตร** (1 button per row) and **Delete** → items of a new "⋯" `UDropdownMenu` (`ta-more`) at the end of
  *     the **Actions** cell: `ta-cards-open` (GOD/Payment only) and `ta-delete`. A Nuxt UI menu item object is
@@ -1724,8 +1727,8 @@ onUnmounted(stopProxyPoll)
 
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
- * The list is a computed because two cells read `canPay`: the Balance cell's auto-channel chip and the "⋯"
- * menu's cards item must not exist at all for an Admin (FEAT-053 AC-20 / FEAT-051 AC-35). Eight columns since
+ * The list is a computed because some cells read `canPay`: the Balance cell's reload button and the "⋯" menu's
+ * cards item must not exist at all for an Admin (FEAT-051 AC-35). Eight columns since
  * the 2026-10-16 declutter, the Login email + Browser profile merge and the 2026-10-20 Label merge; ten since
  * FEAT-070 (Workspace + Proxy right after Account).
  */
@@ -2126,21 +2129,25 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
         'data-testid': 'ta-autotopup-last',
         'data-at': autoAt ?? ''
       }, autoAt ? `เติมอัตโนมัติล่าสุด ${formatDateTime(autoAt)}` : 'ยังไม่เคยเติมอัตโนมัติ'))
-      // 2026-10-16 — FEAT-053's auto channel, read-only (the switch moved into the Edit modal). GOD/Payment
-      // only: an Admin gets no element at all and the page still issues no request for the key (AC-20).
-      if (canPay.value) {
-        const channel = accountAutoTopupChannel(a)
-        children.push(h(UBadge, {
-          'color': 'neutral',
-          'variant': 'subtle',
-          'size': 'sm',
-          'icon': channel === 'card' ? 'i-lucide-credit-card' : 'i-lucide-qr-code',
-          'class': 'whitespace-nowrap',
-          'title': 'ช่องทางที่ระบบใช้เมื่อเติมเงินอัตโนมัติ — แก้ได้ที่ปุ่ม Edit',
-          'data-testid': 'ta-auto-channel',
-          'data-channel': channel
-        }, () => `auto: ${TOPUP_CHANNEL_LABEL[channel]}`))
-      }
+      // FEAT-075 — the account's own auto top-up rule, read-only and for **every** role (the GOD/Payment-only
+      // `ta-auto-channel` chip is gone): switch, channel, card and the two numbers in the account's currency.
+      // Configuring it is a field of the Edit modal, saved by that modal's single diff PATCH.
+      const auto = accountAutoTopupConfig(a)
+      children.push(h(UBadge, {
+        'color': auto.enabled ? 'primary' : 'neutral',
+        'variant': 'subtle',
+        'size': 'sm',
+        'icon': !auto.enabled
+          ? 'i-lucide-power-off'
+          : auto.channel === 'card' ? 'i-lucide-credit-card' : 'i-lucide-qr-code',
+        // the card form of the text is long: let it wrap inside the cell instead of widening the column
+        'class': 'max-w-44 text-left whitespace-normal',
+        'title': 'ตั้งค่าได้ที่ปุ่ม Edit',
+        'data-testid': 'ta-auto-config',
+        'data-enabled': auto.enabled ? 'true' : 'false',
+        'data-channel': auto.channel,
+        'data-card': auto.card?.last4 ?? ''
+      }, () => accountAutoTopupLabel(a)))
       return h('div', { class: 'flex flex-col items-start gap-0.5' }, children)
     }
   },
@@ -2564,7 +2571,6 @@ const showTable = computed(() => !error.value && !isEmpty.value)
       <TiktokAccountsEditModal
         v-model:open="editOpen"
         :account="editTarget"
-        :can-pay="canPay"
         @updated="refresh()"
       />
       <TiktokAccountsDeleteModal
