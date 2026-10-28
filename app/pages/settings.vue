@@ -8,6 +8,7 @@
  * kept as a **computed** over the session so they only render for a GOD admin. The routes themselves stay
  * registered — `god-only` on each `app/pages/settings/*.vue` is the guard, and the API (`@Roles('GOD')`) is
  * the authority.
+ * FEAT-080 — GOD-only `อัตราแลกเปลี่ยน` tab (`/settings/fx`, exchange rates; an Admin does not see it).
  * FEAT-076 — third tab `Prefixes` (`/settings/prefixes`, GOD + Admin; an Admin sees only that tab).
  */
 import type { NavigationMenuItem } from '@nuxt/ui'
@@ -30,6 +31,10 @@ const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
       label: 'UTM',
       icon: 'i-lucide-link',
       to: '/settings/utm'
+    }, {
+      label: 'อัตราแลกเปลี่ยน',
+      icon: 'i-lucide-badge-dollar-sign',
+      to: '/settings/fx'
     }]
   : []), ...(isGod.value || isAdmin.value
   ? [{
