@@ -197,6 +197,15 @@ function reconcileSelection() {
   manualPicks.value = nextManual
 }
 
+/**
+ * Refresh button: targets as always; FEAT-079 — once step 2 has loaded the templates they are re-read too, so a
+ * post that TikTok deleted meanwhile shows up (and clears a selection that points at it).
+ */
+function refreshAll() {
+  void loadTargets()
+  if (templatesRequested) void loadTemplates()
+}
+
 async function loadTargets() {
   const s = ++targetsSession
   targetsPending.value = true
@@ -713,7 +722,9 @@ function isAdtStale(template: AdTemplate): boolean {
  */
 const agtUsable = computed(() => agtFiltered.value.filter(t => !isAgtManual(t)))
 const agtFolded = computed(() => agtFiltered.value.filter(isAgtManual))
+// the rows of the first group include the deleted ones (rendered disabled, FEAT-079) — the count tells how many can be picked
 const adtUsable = computed(() => adtFiltered.value.filter(t => !isAdtStale(t)))
+const adtPickableCount = computed(() => adtUsable.value.filter(t => !isAdtDeleted(t)).length)
 const adtFolded = computed(() => adtFiltered.value.filter(isAdtStale))
 
 const agtFoldOpen = ref(false)
@@ -728,7 +739,7 @@ function countText(usable: number, folded: number, reason: string): string {
 }
 
 const agtCountText = computed(() => countText(agtUsable.value.length, agtFolded.value.length, AGT_FOLD_REASON))
-const adtCountText = computed(() => countText(adtUsable.value.length, adtFolded.value.length, ADT_FOLD_REASON))
+const adtCountText = computed(() => countText(adtPickableCount.value, adtFolded.value.length, ADT_FOLD_REASON))
 
 const agtMoreText = computed(() =>
   agtFoldOpen.value
@@ -1126,7 +1137,7 @@ onUnmounted(() => {
             :loading="targetsPending"
             :ui="{ label: 'hidden sm:inline' }"
             data-testid="la-refresh"
-            @click="loadTargets()"
+            @click="refreshAll()"
           />
           <UButton
             label="Orders"
