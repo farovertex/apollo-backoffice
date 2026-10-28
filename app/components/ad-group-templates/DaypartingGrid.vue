@@ -16,6 +16,10 @@
  * `v-model` is the cells (`day → boolean[]`); the form converts to / from ranges with `app/utils/dayparting.ts`.
  * Test ids: `agt-dayparting-grid`, `agt-dayparting-cell-<day>-<index>`, `agt-dayparting-row-all-<day>`,
  * `agt-dayparting-row-clear-<day>`, `agt-dayparting-all`, `agt-dayparting-clear`, `agt-dayparting-summary`.
+ *
+ * **FEAT-074** verified this component against the real `/options` body (`evidence/options.json`): `days` arrives
+ * `sun`…`sat` with labels `Sun`…`Sat` (rendered verbatim, never hard-coded), `granularity` is `30`, `hint` is
+ * `options.daypartingHint` — all already correct from the part-1 commit `01f6515`.
  */
 import type { OptionItem } from '#shared/types/ad-group-templates'
 import type { DaypartingCells } from '~/utils/dayparting'

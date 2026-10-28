@@ -108,6 +108,11 @@
  * `configFromState()` converts them with `app/utils/dayparting.ts` into `daypartingSchedule` — `null` while the
  * radio is `allDay`. **Graceful degradation:** everything hangs off `options.daypartingDays` being served; without
  * it the grid is hidden and `daypartingSchedule` is left out of the body (the radio still shows `options.dayparting`).
+ *
+ * **FEAT-074** took the paragraph above (part-1 commit `01f6515`) as its baseline and verified it against the real
+ * `/options` body (day order `sun`…`sat`, English labels `Sun`…`Sat`, the `daypartingHint` sentence, the 400 path
+ * form `.<day>.<i>` and its bracket form `[<i>]`) — all already correct, nothing changed here beyond this note and
+ * the unit-test additions in `tests/unit/dayparting.test.ts`.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
