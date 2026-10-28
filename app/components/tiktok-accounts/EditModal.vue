@@ -16,8 +16,12 @@
  * `ta-edit-auto-amount` with the account's currency as suffix. Channel / card / amount are always rendered but
  * **disabled while the switch is off** — their values still travel, the API stores them for later.
  *  - the card list is one `GET /tiktok-accounts/:id/payment-cards` per open (usable = `pending|bound` with an
- *    expiry that is not past, `isAutoTopupCard()`); **any** failure — 403 for a role that may not read cards, 404,
- *    a 5xx — reads as "this account has no usable card": the section keeps working, nothing is shown as an error;
+ *    expiry that is not past, `isAutoTopupCard()`); a failure reads as "this account has no usable card" — the
+ *    section keeps working and nothing is shown as an error. Since contract **v1.1 §8** that GET is open to the
+ *    account's Admin too (read-only), so a 403/404 now only happens for an admin who may not see the account at
+ *    all; a **503** (the server has no `CARD_ENCRYPTION_KEY`) is the one case with its own words: the card radio
+ *    is disabled exactly the same way, but `ta-edit-auto-card-none` carries the API's `error` text
+ *    (fallback `ช่องทางบัตรปิดอยู่ที่เซิร์ฟเวอร์`) instead of the per-account "no card yet" sentence;
  *  - the minimum hints come from one `GET /topups/options` per open (`useTopupOptions`, silent fallback to the
  *    local table), exactly like the pay popovers;
  *  - `balanceCurrency` null → the two number inputs are disabled, `ta-edit-auto-currency-unknown` explains why and
@@ -57,6 +61,8 @@ const AUTO_MIN_MESSAGE = 'minBalance ต้องเป็นจำนวนเ�
 const AUTO_AMOUNT_MESSAGE = 'amount ต้องเป็นจำนวนเต็ม ≥ 1'
 const AUTO_CHOOSE_CARD = 'เลือกบัตรที่จะใช้'
 const AUTO_NO_CARD = 'บัญชีนี้ยังไม่มีบัตรที่ใช้ได้ — กรอกบัตรตอนกดจ่ายเงินครั้งแรกก่อน'
+/** contract v1.1 §8 — fallback when the 503 of the cards request carries no `error` text of its own */
+const AUTO_CARD_CHANNEL_CLOSED = 'ช่องทางบัตรปิดอยู่ที่เซิร์ฟเวอร์'
 const AUTO_CURRENCY_UNKNOWN = 'ยังไม่รู้สกุลเงินของบัญชีนี้ — กด Login/Sync ก่อน'
 const AUTO_BALANCE_LABEL = 'ดึงยอดตอนนี้'
 const AUTO_BALANCE_READING = 'กำลังอ่าน…'
@@ -134,11 +140,15 @@ const state = reactive<FormState>(stateOf(null))
 // ── the account's usable cards (one GET per open, never an error state) ──────────────────────────────────────────────
 const cards = ref<PaymentCardView[]>([])
 const cardsPending = ref(false)
+/** contract v1.1 §8 — the server's reason why the card channel is closed (503 = no `CARD_ENCRYPTION_KEY`); else null */
+const cardsClosed = ref<string | null>(null)
 let cardsSession = 0
 
 /** §2.3 gate 6 — only these may be configured; a 403/404/5xx on the request leaves the list empty on purpose */
 const usableCards = computed(() => cards.value.filter(card => isAutoTopupCard(card)))
 const noUsableCards = computed(() => !cardsPending.value && usableCards.value.length === 0)
+/** what `ta-edit-auto-card-none` says: the server's 503 reason wins over the per-account "no card yet" sentence */
+const cardNoneText = computed(() => cardsClosed.value ?? AUTO_NO_CARD)
 
 /**
  * what `ta-edit-auto-card` offers: the usable cards, plus the card the row is configured with when that one is no
@@ -172,15 +182,22 @@ const cardSelection = computed<string | undefined>({
 async function loadCards(accountId: string) {
   const session = ++cardsSession
   cardsPending.value = true
+  cardsClosed.value = null
   try {
     // retry: 0 — exactly one read per open
     const res = await api<PaymentCardsResponse>(`/tiktok-accounts/${encodeURIComponent(accountId)}/payment-cards`, { retry: 0 })
     if (session !== cardsSession) return
     cards.value = res.cards ?? []
-  } catch {
-    // 403 (a role that may not read cards) / 404 / anything else ⇒ "no usable card", never an error on the form
+  } catch (e) {
+    // 403 (a Payment-less admin without access) / 404 / anything else ⇒ "no usable card", never an error on the form.
+    // 503 is different (contract v1.1 §8): the server has no `CARD_ENCRYPTION_KEY`, so the card channel is closed
+    // for everybody — the same disabled radio, but with the server's own reason.
     if (session !== cardsSession) return
     cards.value = []
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    cardsClosed.value = err.status === 503 || err.response?.status === 503
+      ? (err.data?.error || AUTO_CARD_CHANNEL_CLOSED)
+      : null
   } finally {
     if (session === cardsSession) cardsPending.value = false
   }
@@ -299,6 +316,7 @@ watch(open, (isOpen) => {
   const account = props.account
   if (isOpen) {
     cards.value = []
+    cardsClosed.value = null
     resetForm()
     if (account) {
       // exactly one `GET payment-cards` + one `GET /topups/options` per open
@@ -310,6 +328,7 @@ watch(open, (isOpen) => {
     cardsSession++
     cards.value = []
     cardsPending.value = false
+    cardsClosed.value = null
     resetOptions()
   }
 })
@@ -574,7 +593,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             </div>
             <template #help>
               <span v-if="qrBlocked" class="block text-warning" data-testid="ta-edit-auto-channel-qr-reason">{{ qrBlocked }}</span>
-              <span v-if="noUsableCards" class="block text-warning" data-testid="ta-edit-auto-card-none">{{ AUTO_NO_CARD }}</span>
+              <span v-if="noUsableCards" class="block text-warning" data-testid="ta-edit-auto-card-none">{{ cardNoneText }}</span>
             </template>
           </UFormField>
 
