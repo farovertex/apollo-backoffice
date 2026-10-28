@@ -21,6 +21,7 @@
  */
 import type { MonitorUtm } from '#shared/types/ads-monitor'
 import type { ApiErrorBody } from './auth'
+import type { TopupFxView } from './fx'
 
 /**
  * `topups.status` — the state machine of one round (spec "สถานะของหนึ่งรอบ").
@@ -165,6 +166,8 @@ export interface TopupView {
   paidAt: string | null
   balanceAmount: string | null
   balanceCurrency: string | null
+  /** FEAT-080 — rate stamped when the round became `paid`; `null` otherwise / paid before the feature / no rate that day */
+  fx: TopupFxView | null
   /** `qrFailed` reason, or the error of the last check — shown as-is (Thai) */
   error: string | null
   /** FEAT-029 — `manual` for a human round, `auto` for one the system opened */

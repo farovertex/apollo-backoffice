@@ -77,6 +77,7 @@
  * `autoTopupChannel` stays for one release (derived from the effective config) but nothing in the BO reads it
  * directly any more — go through `accountAutoTopupConfig()` / `accountAutoTopupChannel()` (`app/utils/topup.ts`).
  */
+import type { ThbBlock } from './fx'
 
 import type { AvailableProfileProxy, ProfileRunState, ProxyRef } from './browser-profiles'
 import type { HumanTaskKind } from './human-tasks'
@@ -286,6 +287,8 @@ export interface TikTokAccount {
   balanceAt: string | null
   /** why the last balance read failed (Thai, shown as-is); null after a success */
   balanceError: string | null
+  /** FEAT-080 — `balanceAmount` at the latest rate; `null` for THB / unknown currency / no rate (types only, not rendered yet) */
+  balanceThb: ThbBlock | null
   /** the account-level top-up round of this row (active, or the latest `notFound`); null when none */
   topup: TopupView | null
   /**
