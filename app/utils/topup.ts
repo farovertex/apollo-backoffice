@@ -18,10 +18,20 @@
  * `topupQrMinAmount()` and `topupRemainingToday()` read what `GET /topups/options` sent (`useTopupOptions`) and
  * fall back to `TOPUP_CARD_LIMITS` / `TOPUP_MIN_AMOUNT` **silently** when it did not answer, so every FEAT-051
  * rule still holds when the new endpoint is down. `accountAutoTopupChannel()` reads the account's auto channel.
+ *
+ * FEAT-075 (api-contract v1 §1.1/§3, spec "UI behaviour") — the auto top-up **rule** is per account now:
+ * `accountAutoTopupConfig()` mirrors the API's `effectiveAutoTopupConfig()` (the block of the view wins, a row
+ * without it is "off" with the legacy `autoTopupChannel` as its channel), `accountAutoTopupChannel()` reads
+ * through it, `accountAutoTopupLabel()` is the text of the list chip `ta-auto-config`, and `isAutoTopupCard()` /
+ * `autoTopupCardLabel()` are what the Edit modal's card select offers. Nothing here reads the system settings any
+ * more — `rules` / `minAmounts` are gone from `/settings/auto-topup`.
  */
+// `formatInt` is auto-imported inside the Nuxt app; the explicit import is what makes `tests/unit/*.test.ts`
+// (plain vitest, no Nuxt runtime) able to import this module by relative path.
+import { formatInt } from './reports'
 import type { AdminRole } from '#shared/types/auth'
 import type { PaymentCardView } from '#shared/types/payment-cards'
-import type { TikTokAccount } from '#shared/types/tiktok-accounts'
+import type { AccountAutoTopupCard, TikTokAccount } from '#shared/types/tiktok-accounts'
 import type { TopupCardLimit, TopupCardSnapshot, TopupChannel, TopupOptionsResponse, TopupStatus, TopupTrigger, TopupView, TopupWorkspaceRef } from '#shared/types/topups'
 
 /** `TOPUP_MIN_AMOUNT` of the API (api-contract §1). The API's 400 body stays the authority — this is the hint. */
@@ -121,14 +131,86 @@ export function remainingTodayText(remaining: number, currency: string | null | 
   return currency ? `เหลือวันนี้ ${formatInt(remaining)} ${currency}` : `เหลือวันนี้ ${formatInt(remaining)}`
 }
 
+/** FEAT-075 — the account's auto top-up rule as the BO reads it: never `undefined`, never a partial block */
+export interface AccountAutoTopupState {
+  enabled: boolean
+  channel: TopupChannel
+  cardId: string | null
+  minBalance: number | null
+  amount: number | null
+  card: AccountAutoTopupCard | null
+}
+
+/** FEAT-075 — "nothing configured": what a row written before the feature reads as (api-contract §1.1) */
+export const AUTO_TOPUP_CONFIG_OFF: AccountAutoTopupState = {
+  enabled: false,
+  channel: 'qr',
+  cardId: null,
+  minBalance: null,
+  amount: null,
+  card: null
+}
+
+/** an account as this module reads it — `null`/missing keys are the normal case for an older API or a stub */
+type AccountConfigSource = Partial<Pick<TikTokAccount, 'autoTopupConfig' | 'autoTopupChannel'>> | null | undefined
+
+function intOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * FEAT-075 (api-contract §1.1 `effectiveAutoTopupConfig`, mirrored for the browser) — **the one** reader of an
+ * account's auto top-up rule. The block of the new view wins; a row/stub without it degrades to "off" with the
+ * legacy `autoTopupChannel` as the channel (so a GOD who had picked `card` before the feature still sees `card`).
+ * Numbers that are not finite (hand-written Mongo) read as `null`, exactly like the API's reader.
+ */
+export function accountAutoTopupConfig(account: AccountConfigSource): AccountAutoTopupState {
+  const block = account?.autoTopupConfig
+  if (!block) {
+    return { ...AUTO_TOPUP_CONFIG_OFF, channel: account?.autoTopupChannel === 'card' ? 'card' : 'qr' }
+  }
+  return {
+    enabled: block.enabled === true,
+    channel: block.channel === 'card' ? 'card' : 'qr',
+    cardId: block.cardId ?? null,
+    minBalance: intOrNull(block.minBalance),
+    amount: intOrNull(block.amount),
+    card: block.card ?? null
+  }
+}
+
 /**
  * FEAT-053 — the auto top-up channel of an account: a row written before the feature (and an API that predates
  * it) reads `qr`, exactly like the API's schema default (api-contract §3).
+ *
+ * FEAT-075 — the channel now lives in `autoTopupConfig`; the legacy top-level `autoTopupChannel` is only the
+ * fallback for a row/stub without the block.
  */
-export function accountAutoTopupChannel(
-  account: Pick<TikTokAccount, 'autoTopupChannel'> | null | undefined
-): TopupChannel {
-  return account?.autoTopupChannel === 'card' ? 'card' : 'qr'
+export function accountAutoTopupChannel(account: AccountConfigSource): TopupChannel {
+  return accountAutoTopupConfig(account).channel
+}
+
+/** FEAT-075 — `?` is what a configured-but-incomplete number reads as on the chip (never an empty gap) */
+function configNumberText(value: number | null): string {
+  return value === null ? '?' : formatInt(value)
+}
+
+/**
+ * FEAT-075 (spec "UI behaviour" → accounts list) — the text of the `ta-auto-config` chip of one account:
+ * `Auto: ปิด` · `Auto: QR 500/2,000 THB` · `Auto: บัตร ****1234 500/2,000 USD`. The numbers are
+ * `minBalance/amount` (`?` when one of them is null), the currency the account's `balanceCurrency` (omitted while
+ * it is unknown) and the mask only exists on the card channel once the API resolved a card.
+ */
+export function accountAutoTopupLabel(
+  account: Partial<Pick<TikTokAccount, 'autoTopupConfig' | 'autoTopupChannel' | 'balanceCurrency'>> | null | undefined
+): string {
+  const config = accountAutoTopupConfig(account)
+  if (!config.enabled) return 'Auto: ปิด'
+  const parts = [`Auto: ${TOPUP_CHANNEL_LABEL[config.channel]}`]
+  if (config.channel === 'card' && config.card?.last4) parts.push(cardMask(config.card.last4))
+  parts.push(`${configNumberText(config.minBalance)}/${configNumberText(config.amount)}`)
+  if (account?.balanceCurrency) parts.push(account.balanceCurrency)
+  return parts.join(' ')
 }
 
 export type TopupBadgeColor = 'neutral' | 'primary' | 'info' | 'warning' | 'success' | 'error'
@@ -398,6 +480,30 @@ export function cardSummary(card: TopupCardSnapshot | PaymentCardView | null | u
 /** a card the API would accept for a new round: `removed` and `expired` cards are not offered */
 export function isUsableCard(card: PaymentCardView): boolean {
   return card.status !== 'removed' && card.status !== 'expired'
+}
+
+/**
+ * FEAT-075 (api-contract §2.3 gate 6 `isUsableCard`) — a card the **auto** round may be configured with: status
+ * `pending` or `bound` **and** an expiry that is not in the past (a card is valid through the last day of its
+ * month). `isUsableCard()` above only looks at the status, which is right for the manual pay modal (the admin
+ * retypes the card anyway) but not for a rule that will be used months later.
+ */
+export function isAutoTopupCard(card: PaymentCardView, now = new Date()): boolean {
+  if (card.status !== 'pending' && card.status !== 'bound') return false
+  const month = card.expiryMonth
+  const year = card.expiryYear
+  if (Number.isInteger(month) && Number.isInteger(year) && month >= 1 && month <= 12) {
+    return new Date(year, month, 1).getTime() > now.getTime()
+  }
+  // no usable MM/YY numbers → fall back to the `MM/YY` string the view also carries
+  return cardExpiryError(card.expiry ?? '', now) === null
+}
+
+/** FEAT-075 — `Visa ****4242 (10/29)`: the label of one option of `ta-edit-auto-card` */
+export function autoTopupCardLabel(card: Pick<AccountAutoTopupCard, 'brand' | 'last4' | 'expiry'> | null | undefined): string {
+  if (!card) return `บัตร ${cardMask(null)}`
+  const head = `${cardBrandLabel(card.brand)} ${cardMask(card.last4)}`
+  return card.expiry ? `${head} (${card.expiry})` : head
 }
 
 /** the card the pay modal starts with: the default one, else the newest usable one */
