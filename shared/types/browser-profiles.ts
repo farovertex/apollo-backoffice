@@ -163,6 +163,23 @@ export interface DeleteProfileResponse {
 }
 
 /**
+ * FEAT-081 (api-contract §3) — the keys the `/tiktok-accounts` page reads from the **2.7** view
+ * (`GET /browser-profiles/:id`, apollo-api `toProfileView`) while it follows the cascade deletion of a deleted
+ * account's profile. That view carries more (fingerprint, lock, cdpEndpoint, forceClose, timestamps…); these five
+ * are the whole contract of the poll, and `deleting` is the key FEAT-081 added to it: `true` ⇔ a `provider/delete`
+ * job of this row is `waiting|active` (same derivation as `deleting` on 2.1 above). **404** = the row is gone,
+ * i.e. the profile really was deleted.
+ */
+export interface ProfileDeleteState {
+  id: string
+  name: string
+  runState: ProfileRunState
+  /** why the last provider op failed — the text of the "Profile delete failed" toast */
+  provisionError: string | null
+  deleting: boolean
+}
+
+/**
  * TASK-profile-proxy (contract §1) — body of `POST /browser-profiles/:id/proxy`: **exactly one** of the two keys,
  * same decision table as the create call (`ProfileProxyChoice`) plus the explicit `proxyId: null` = "remove the
  * proxy". `proxyMode: 'auto'` auto-selects the oldest free proxy that passes the check, `'none'` removes it.

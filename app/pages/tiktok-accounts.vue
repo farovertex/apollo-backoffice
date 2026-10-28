@@ -5,9 +5,10 @@
  * client-side (label / loginEmail / profile name / profile id — the name still matches although it is not
  * rendered, see below), rows sorted by createdAt desc, no pagination.
  * The passwords used to be columns with a per-row reveal toggle and a Copy button; they are gone since
- * 2026-10-11 (see below) and the table renders no secret at all any more. Delete confirms in a modal (BUG-029:
- * with an "Also delete the browser profile" checkbox, on by default, that sends `?deleteProfile=1` →
- * `provider/delete` job).
+ * 2026-10-11 (see below) and the table renders no secret at all any more. Delete confirms in a modal
+ * (FEAT-081: no checkbox any more — the delete always soft-deletes the account, cancels its pending jobs and
+ * deletes its browser profile in AdsPower; a 409 `jobsRunning` turns that modal into a warning listing the jobs,
+ * and the page then follows the profile deletion itself, see "FEAT-081" below).
  * FEAT-004: Login → `POST /backend/tiktok-accounts/:id/login` (202 / 409 → `TiktokAccountsLoginModal`, other →
  * toast). BUG-028: the button is **always enabled** — every click POSTs again and the API queues a new login job
  * whatever the account state; the job decides on its own whether it is already logged in (the page guards nothing,
@@ -189,6 +190,13 @@
  *     rows), toolbar button `ta-bulk-prefix` (`ผูก prefix (N)`, disabled at 0) → `TiktokAccountsBulkPrefixModal` →
  *     `POST /backend/tiktok-accounts/prefix-bulk` → selection cleared + one `refresh()`. A fresh dataset keeps only
  *     the selected ids that are still in it. Admin / Payment get neither the column nor the button.
+ * FEAT-081 (spec "UI behaviour (BO)", AC-15…AC-19, api-contract §1/§3/§6) — the delete cascades: the modal has no
+ * "Also delete the browser profile" checkbox any more (one `DELETE /backend/tiktok-accounts/<id>`, no query; 409
+ * `jobsRunning` → warning state with the jobs it would cancel → `?force=1`), and after the 204 **this page**
+ * follows the profile deletion: one 2 s loop per deleted `browserProfile.id` on
+ * `GET /backend/browser-profiles/<id>` (2.7 + `deleting`), cap 120 s, ids exposed as
+ * `ta-page[data-delete-polling]`, one toast per outcome (deleted · failed + `provisionError` · did not happen ·
+ * taking longer) with an "Open browser profiles" action for the three that are not a success.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -225,7 +233,7 @@ import type {
 } from '#shared/types/tiktok-accounts'
 import { FAILURE_SCREENSHOT_TYPE_LABEL } from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
-import type { ProxyModalProfile } from '#shared/types/browser-profiles'
+import type { ProfileDeleteState, ProxyModalProfile } from '#shared/types/browser-profiles'
 import type { CheckProxyResponse, ProxyLastCheck } from '#shared/types/proxies'
 import type { TopupViewer } from '~/utils/topup'
 import type { PrefixView, PrefixesResponse } from '#shared/types/prefixes'
@@ -687,7 +695,140 @@ async function refreshAndFollowDiscovers() {
 
 onUnmounted(() => {
   for (const id of [...polls.keys()]) stopPoll(id)
+  for (const id of [...profilePolls.keys()]) stopProfilePoll(id)
 })
+
+// ── FEAT-081 — cascade profile deletion after an account delete ──────────────────────────────────────────────────────
+/**
+ * The account delete answers 204 as soon as the `provider/delete` job is queued, so the page tells the human what
+ * really happened to the browser profile: one 2 s loop per deleted profile id on `GET /backend/browser-profiles/:id`
+ * (the 2.7 view, FEAT-081 added `deleting` to it), capped at 120 s. Why this URL and not the account one: the
+ * account is soft-deleted, so `GET /tiktok-accounts/:id` is 404 from the first tick on.
+ * Outcomes (each stops its own loop and toasts once): **404** = the row is gone → deleted · **`deleting: false`**
+ * = the job is over → `runState 'error'` is a real failure (`provisionError`), anything else means the node could
+ * not take the lock (`profileLocked`) and the row is untouched → "did not happen" · **cap** = nothing converged.
+ * The three non-success toasts carry "Open browser profiles" → `/browser-profiles?q=<name>`, where 2.12's Delete
+ * retries. A 5xx / network error of a tick is ignored (the next tick retries) — only the cap ends such a loop.
+ * The ids being polled are exposed as `ta-page[data-delete-polling]` (space separated) for QA.
+ */
+const PROFILE_DELETE_POLL_CAP_MS = 120_000
+interface ProfileDeletePoll {
+  /** name at delete time — the toast must be able to name a row that no longer exists */
+  name: string
+  timer: ReturnType<typeof setInterval>
+  startedAt: number
+  capMs: number
+}
+const profilePolls = new Map<string, ProfileDeletePoll>()
+const profilePollInFlight = new Set<string>()
+const profilePollIds = ref<string[]>([])
+/** `ta-page[data-delete-polling]` — profile ids whose deletion is being followed, `''` when none */
+const deletePolling = computed(() => profilePollIds.value.join(' '))
+
+/**
+ * Test-only escape hatch so QA can prove the 120 s cap without a 2 minute test: `window.__FEAT081_POLL_CAP_MS`
+ * (a positive number) is read **once**, when a poll starts. Nothing in the app ever sets it.
+ */
+function profileDeleteCapMs(): number {
+  if (import.meta.client) {
+    const override = (window as unknown as { __FEAT081_POLL_CAP_MS?: unknown }).__FEAT081_POLL_CAP_MS
+    if (typeof override === 'number' && override > 0) return override
+  }
+  return PROFILE_DELETE_POLL_CAP_MS
+}
+
+function stopProfilePoll(id: string) {
+  const p = profilePolls.get(id)
+  if (p) clearInterval(p.timer)
+  profilePolls.delete(id)
+  profilePollInFlight.delete(id)
+  if (profilePollIds.value.includes(id)) profilePollIds.value = profilePollIds.value.filter(x => x !== id)
+}
+
+/** the action every non-success outcome carries: the row (or its error) is handled on `/browser-profiles` */
+function openProfilesAction(name: string) {
+  return [{
+    label: 'Open browser profiles',
+    color: 'neutral' as const,
+    variant: 'outline' as const,
+    onClick: () => {
+      void navigateTo(`/browser-profiles?q=${encodeURIComponent(name)}`)
+    }
+  }]
+}
+
+async function pollProfileDeletion(id: string) {
+  const p = profilePolls.get(id)
+  if (!p || profilePollInFlight.has(id)) return
+  if (Date.now() - p.startedAt >= p.capMs) {
+    stopProfilePoll(id)
+    toast.add({
+      title: 'Profile deletion is taking longer than expected',
+      description: p.name,
+      color: 'warning',
+      actions: openProfilesAction(p.name)
+    })
+    return
+  }
+  profilePollInFlight.add(id)
+  try {
+    // retry: 0 — one request per tick, ofetch must not re-issue it on 5xx
+    const next = await api<ProfileDeleteState>(`/browser-profiles/${encodeURIComponent(id)}`, { retry: 0 })
+    if (profilePolls.get(id) !== p) return // stopped meanwhile (unmount / outcome)
+    const name = next.name || p.name
+    p.name = name
+    if (next.deleting) return // the job is still waiting/running
+    stopProfilePoll(id)
+    if (next.runState === 'error') {
+      toast.add({
+        title: 'Profile delete failed',
+        description: `${name} · ${next.provisionError ?? 'the node reported an error'}`,
+        color: 'error',
+        actions: openProfilesAction(name)
+      })
+    } else {
+      toast.add({
+        title: 'Profile delete did not happen',
+        description: `${name} · still in use, retry from Browser profiles`,
+        color: 'warning',
+        actions: openProfilesAction(name)
+      })
+    }
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const status = err.response?.status ?? err.statusCode
+    if (profilePolls.get(id) !== p) return
+    if (status === 404) {
+      stopProfilePoll(id)
+      toast.add({ title: 'Profile deleted', description: p.name, color: 'success' })
+      return
+    }
+    // transient (5xx / network): the next tick retries, only the cap gives up
+  } finally {
+    profilePollInFlight.delete(id)
+  }
+}
+
+function startProfileDeletePoll(id: string, name: string) {
+  if (profilePolls.has(id)) return
+  profilePolls.set(id, {
+    name,
+    startedAt: Date.now(),
+    capMs: profileDeleteCapMs(),
+    timer: setInterval(() => {
+      void pollProfileDeletion(id)
+    }, POLL_MS)
+  })
+  profilePollIds.value = [...profilePollIds.value, id]
+  void pollProfileDeletion(id)
+}
+
+/** the delete modal's 204: re-read the list (the row is gone) and follow the profile the cascade is deleting */
+function onAccountDeleted(account: TikTokAccount) {
+  void refresh()
+  const profile = account.browserProfile
+  if (profile) startProfileDeletePoll(profile.id, profile.name)
+}
 
 // ── balance + account-level top-up ───────────────────────────────────────────────────────────────────────────────────
 const auth = useAuth()
@@ -2370,6 +2511,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         data-testid="ta-page"
         :data-status="status"
         :data-launching-only="launchingOnly ? 'true' : 'false'"
+        :data-delete-polling="deletePolling"
         class="flex flex-1 flex-col gap-4"
       >
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -2576,7 +2718,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
       <TiktokAccountsDeleteModal
         v-model:open="deleteOpen"
         :account="deleteTarget"
-        @deleted="refresh()"
+        @deleted="onAccountDeleted"
       />
       <TiktokAccountsLoginModal
         v-model:open="loginOpen"

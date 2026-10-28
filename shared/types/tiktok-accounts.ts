@@ -76,6 +76,11 @@
  * `autoTopupConfig` block (`PatchAccountAutoTopupConfig`, always sent complete). The legacy view key
  * `autoTopupChannel` stays for one release (derived from the effective config) but nothing in the BO reads it
  * directly any more — go through `accountAutoTopupConfig()` / `accountAutoTopupChannel()` (`app/utils/topup.ts`).
+ * FEAT-081 (api-contract.md v1 §1/§3) — `DELETE /tiktok-accounts/:id` is a **soft delete that always cascades**:
+ * the old `?deleteProfile` query is gone (ignored by the API, never sent by the BO), the account's browser profile
+ * is always deleted from AdsPower, and an account with `waiting|active` jobs answers **409**
+ * `DeleteAccountConflict` (`reason: 'jobsRunning'` + `jobs: PendingAccountJob[]`) until the caller repeats the
+ * request with `?force=1`. The account **view** is unchanged — a deleted account is simply never returned again.
  */
 
 import type { AvailableProfileProxy, ProfileRunState, ProxyRef } from './browser-profiles'
@@ -912,4 +917,29 @@ export interface PatchAccountBody {
 export interface FavoriteToggleResponse {
   id: string
   favorite: boolean
+}
+
+/**
+ * FEAT-081 (api-contract §1.2) — one `waiting|active` job of the account as the 409 of
+ * `DELETE /tiktok-accounts/:id` lists it. **Every** job type, `kpiFetch` included (unlike `runningJob` of the
+ * account view, which hides kpi): the delete cancels all of them.
+ */
+export interface PendingAccountJob {
+  id: string
+  type: JobType
+  status: 'waiting' | 'active'
+  step: JobStep | null
+  createdAt: string
+}
+
+/**
+ * FEAT-081 (api-contract §1.2) — the **409** body of `DELETE /tiktok-accounts/:id`.
+ * `reason: 'jobsRunning'` = the account still has pending jobs and the delete would cancel them: the delete modal
+ * switches to its warning state, lists `jobs` and asks once more → `DELETE …?force=1`. A 409 **without** `reason`
+ * (or any other 4xx/5xx) is a plain failure and only produces an error toast with `error` verbatim.
+ */
+export interface DeleteAccountConflict {
+  error: string
+  reason?: 'jobsRunning'
+  jobs?: PendingAccountJob[]
 }
