@@ -111,7 +111,7 @@
  * `la-tpl-scope` (absent for `none`) and the three empty-state texts of `la-agt-empty` / `la-adt-empty` follow
  * `templateScopeKind`. `retryTemplates()` always re-runs with the current scope.
  */
-import { formatTimeAgo } from '@vueuse/core'
+import { formatTimeAgo, useLocalStorage } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type {
@@ -641,7 +641,35 @@ const adTemplate = computed(() => adtItems.value.find(t => t.id === adTemplateId
  * five rows tall, so the filter is the way to find a row, not a fallback for "more than 8".
  */
 const agtFiltered = computed(() => filterByName(agtItems.value, agtSearch.value))
-const adtFiltered = computed(() => filterByName(adtItems.value, adtSearch.value))
+/**
+ * FEAT-079 — "เฉพาะโพสต์ที่ใช้ได้": drops the rows whose post is deleted / refused / not checkable, before the
+ * fold split. Never-checked (`postInfo` null) and `verifying` rows stay. Remembered across visits.
+ */
+const adtOnlyAvailable = useLocalStorage('la-adt-filter-available', false)
+function isAdtPostUnavailable(template: AdTemplate): boolean {
+  const status = template.postInfo?.status
+  return isPostDeleted(template.postInfo) || status === 'invalid' || status === 'failed'
+}
+const adtSearched = computed(() => filterByName(adtItems.value, adtSearch.value))
+const adtFiltered = computed(() =>
+  adtOnlyAvailable.value ? adtSearched.value.filter(t => !isAdtPostUnavailable(t)) : adtSearched.value
+)
+const adtFilterHidden = computed(() => adtSearched.value.length - adtFiltered.value.length)
+
+/** FEAT-079 — a post that TikTok deleted cannot be launched: the row is disabled and the card is not selectable */
+function isAdtDeleted(template: AdTemplate): boolean {
+  return isPostDeleted(template.postInfo)
+}
+
+/** set when a refresh found the selected template's post deleted and the selection was cleared */
+const adtDeletedNotice = ref<string | null>(null)
+watch(adtItems, (items) => {
+  const selected = items.find(t => t.id === adTemplateId.value)
+  if (selected && isPostDeleted(selected.postInfo)) {
+    adtDeletedNotice.value = postInfoReason(selected.postInfo)
+    adTemplateId.value = null
+  }
+})
 
 function filterByName<T extends { name: string, description: string | null }>(items: T[], term: string): T[] {
   const q = term.trim().toLowerCase()
@@ -720,8 +748,9 @@ function selectAdGroupTemplate(template: AdGroupTemplate) {
 }
 
 function selectAdTemplate(template: AdTemplate) {
-  if (isAdtStale(template)) return
+  if (isAdtStale(template) || isAdtDeleted(template)) return
   adTemplateId.value = template.id
+  adtDeletedNotice.value = null
   templateFieldError.value = null
 }
 
@@ -1799,6 +1828,19 @@ onUnmounted(() => {
                       {{ adtCountText }}
                     </span>
                     <div class="grow" />
+                    <USwitch
+                      v-model="adtOnlyAvailable"
+                      size="sm"
+                      label="เฉพาะโพสต์ที่ใช้ได้"
+                      data-testid="la-adt-filter-available"
+                    />
+                    <span
+                      v-if="adtOnlyAvailable && adtFilterHidden > 0"
+                      class="text-xs text-muted tabular-nums"
+                      data-testid="la-adt-filter-hidden"
+                    >
+                      ซ่อน {{ adtFilterHidden }} รายการ
+                    </span>
                     <UInput
                       v-model="adtSearch"
                       icon="i-lucide-search"
@@ -1833,24 +1875,31 @@ onUnmounted(() => {
                       :key="template.id"
                       type="button"
                       role="radio"
-                      :aria-checked="template.id === adTemplateId"
+                      :aria-checked="!isAdtDeleted(template) && template.id === adTemplateId"
                       :data-id="template.id"
-                      :data-selected="template.id === adTemplateId ? 'true' : 'false'"
+                      :data-selected="!isAdtDeleted(template) && template.id === adTemplateId ? 'true' : 'false'"
                       data-stale="false"
+                      :data-deleted="isAdtDeleted(template) ? 'true' : undefined"
+                      :disabled="isAdtDeleted(template)"
                       data-testid="la-adt-card"
                       class="grid h-15 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden
-                        px-2 py-1.5 text-left hover:bg-elevated focus-visible:inset-ring-2
+                        px-2 py-1.5 text-left focus-visible:inset-ring-2
                         focus-visible:inset-ring-primary focus-visible:outline-none"
-                      :class="template.id === adTemplateId
-                        ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
-                        : 'bg-default'"
+                      :class="isAdtDeleted(template)
+                        ? 'bg-default opacity-60'
+                        : template.id === adTemplateId
+                          ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40 hover:bg-elevated'
+                          : 'bg-default hover:bg-elevated'"
                       @click="selectAdTemplate(template)"
                     >
                       <span
                         class="flex size-4 items-center justify-center rounded-full border"
-                        :class="template.id === adTemplateId ? 'border-primary' : 'border-accented'"
+                        :class="!isAdtDeleted(template) && template.id === adTemplateId ? 'border-primary' : 'border-accented'"
                       >
-                        <span v-if="template.id === adTemplateId" class="size-2 rounded-full bg-primary" />
+                        <span
+                          v-if="!isAdtDeleted(template) && template.id === adTemplateId"
+                          class="size-2 rounded-full bg-primary"
+                        />
                       </span>
                       <span class="flex min-w-0 flex-col">
                         <span class="flex min-w-0 items-center gap-1.5">
@@ -1867,7 +1916,15 @@ onUnmounted(() => {
                           </span>
                           <AdTemplatesPostStatus :post-info="template.postInfo" testid="la-adt-post-status" />
                         </span>
-                        <span class="truncate text-xs text-muted">
+                        <span
+                          v-if="isAdtDeleted(template)"
+                          class="truncate text-xs text-error"
+                          :title="postInfoReason(template.postInfo) ?? undefined"
+                          data-testid="la-card-deleted"
+                        >
+                          {{ postInfoReason(template.postInfo) }}
+                        </span>
+                        <span v-else class="truncate text-xs text-muted">
                           <span :title="postCell(template)">{{ postCell(template) }}</span>
                           <span class="text-dimmed"> · </span>
                           <span :title="pageCell(template)">{{ pageCell(template) }}</span>
@@ -1951,12 +2008,14 @@ onUnmounted(() => {
 
                   <!-- FEAT-042 — non-blocking: the order can still be created, it may fail at the ad stage -->
                   <UAlert
-                    v-if="adTemplatePostWarning"
+                    v-if="adTemplatePostWarning || adtDeletedNotice"
                     color="warning"
                     variant="subtle"
                     icon="i-lucide-triangle-alert"
-                    title="โพสต์ของ template นี้ยังไม่ได้ตรวจ/ตรวจไม่ผ่าน — build อาจล้มที่ขั้นโฆษณา"
-                    :description="postInfoReason(adTemplate?.postInfo) ?? undefined"
+                    :title="adtDeletedNotice
+                      ? 'โพสต์ของ template ที่เลือกถูกลบแล้ว — เลือก template อื่น'
+                      : 'โพสต์ของ template นี้ยังไม่ได้ตรวจ/ตรวจไม่ผ่าน — build อาจล้มที่ขั้นโฆษณา'"
+                    :description="adtDeletedNotice ?? postInfoReason(adTemplate?.postInfo) ?? undefined"
                     data-testid="la-adt-post-warning"
                   />
                 </section>

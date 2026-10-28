@@ -710,6 +710,12 @@ const postUntil = computed(() => postInfoUntilLabel(postInfo.value))
 const postReason = computed(() => postInfoReason(postInfo.value))
 const postIsVerifying = computed(() => isPostInfoVerifying(postInfo.value))
 const postIsVerified = computed(() => isPostInfoVerified(postInfo.value))
+/**
+ * FEAT-079 (AC-10) — a code TikTok already verified is not editable on an edit: the "keep" block loses its
+ * Change button. Duplicate and create are unaffected; if the user already pressed "Change code" (`codeMode`
+ * `new`) the input stays even when a refresh turns the status to `verified`.
+ */
+const codeLocked = computed(() => isEdit.value && !isDuplicate.value && postIsVerified.value)
 
 function stopPostPolling() {
   if (postTimer) {
@@ -2308,6 +2314,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                   data-testid="adt-post-code-hint"
                 >{{ codeHint }}</span>
                 <UButton
+                  v-if="!codeLocked"
                   label="Change code"
                   icon="i-lucide-key-round"
                   color="neutral"
@@ -2319,7 +2326,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 />
               </div>
               <template #help>
-                {{ codeKeepHelp }}
+                <span v-if="codeLocked" data-testid="adt-post-code-locked">
+                  รหัสตรวจผ่านแล้ว แก้ไม่ได้ — ถ้าต้องเปลี่ยนโพสต์ให้ Duplicate หรือสร้าง template ใหม่
+                </span>
+                <template v-else>
+                  {{ codeKeepHelp }}
+                </template>
               </template>
             </UFormField>
 
