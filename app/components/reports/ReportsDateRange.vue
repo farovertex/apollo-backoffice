@@ -12,8 +12,8 @@
  * The `prefix` makes the test ids per page (`rp` / `rs` / `rb` / `ru` / `am`): `<p>-range`,
  * `<p>-range-trigger`, `<p>-range-panel`, `<p>-range-<key>` (×6), `<p>-from`, `<p>-to`,
  * `<p>-range-invalid`. The two inputs are the deterministic surface for specs (spec A1); the `UCalendar` is
- * a convenience bound to the same values (pattern: `app/components/home/HomeDateRangePicker.vue`, demo code
- * that is not reused).
+ * a convenience bound to the same values (pattern: the template's demo `HomeDateRangePicker`, deleted with the
+ * demo home page in TASK-dashboard-home).
  *
  * Validation and labels come from `app/utils/report-range.ts` — never re-implemented here.
  */

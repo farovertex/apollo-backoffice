@@ -57,8 +57,10 @@ function mediaLibraryLink() {
 }
 
 const links = computed(() => [[{
-  label: 'Home',
-  icon: 'i-lucide-house',
+  // TASK-dashboard-home — the FEAT-069 dashboard is the home page: first item, every role (the API 403s a Payment admin
+  // inside the page, no nav rule here). Replaced the template's "Home".
+  label: 'Dashboard',
+  icon: 'i-lucide-layout-dashboard',
   to: '/',
   onSelect: () => {
     open.value = false
@@ -154,18 +156,11 @@ const links = computed(() => [[{
         open.value = false
       }
     }, {
-      // FEAT-069 — performance (port of to-the-mars' My/Team Performance), directly after UTM; same role gate
+      // FEAT-069 — performance (port of to-the-mars' My/Team Performance), directly after UTM; same role gate.
+      // The FEAT-069 dashboard that followed it is the first item now (TASK-dashboard-home, `/`).
       label: 'Performance',
       icon: 'i-lucide-gauge',
       to: '/reports/performance',
-      onSelect: () => {
-        open.value = false
-      }
-    }, {
-      // FEAT-069 — dashboard D1 (Dep/Budget funnel, charts, delivery now), directly after Performance
-      label: 'Dashboard',
-      icon: 'i-lucide-layout-dashboard',
-      to: '/reports/dashboard',
       onSelect: () => {
         open.value = false
       }
