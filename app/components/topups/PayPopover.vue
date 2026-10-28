@@ -92,6 +92,21 @@ const amount = ref<number | undefined>(props.defaultAmount)
 const submitting = ref(false)
 const serverError = ref<string | null>(null)
 const touched = ref(false)
+/**
+ * TASK T2b (2026-10-29) — the amount field is `autofocus`ed by the HTML attribute **and** by the popover's own
+ * focus trap (Reka UI `PopoverContent` auto-focuses the first focusable descendant on open, so removing the
+ * attribute alone changes nothing). The FIRST control an admin clicks after opening — the channel toggle, the
+ * Telegram switch below it, anything — therefore blurs this field before it was ever edited. `touched = true` on
+ * that blur showed `ta-adv-topup-amount-error` for an amount nobody tried yet, inserting a new flex child above
+ * the channel/switch/submit block and shifting all of them down by that line's height (+gap) **mid real pointer
+ * gesture** (mousedown/focus → shift → mouseup lands on whatever moved into the old slot) — on the accounts-table
+ * popover this made a plain mouse click on `ta-adv-topup-telegram` land on `ta-adv-topup-channel-qr` instead,
+ * leaving the switch unchanged (qa-exec round 1, AC-20 account-level popover). `edited` makes blur show the error
+ * only once the admin actually typed into the field; `submit()`/`next()` still force `touched = true` on their own
+ * (a submit attempt with nothing typed yet must still show the error), so no existing assertion changes — every
+ * spec that checks `ta-adv-topup-amount-error` fills the field before blurring.
+ */
+const edited = ref(false)
 
 const popoverContent = { 'data-testid': 'ta-adv-topup-popover' } as PopoverProps['content']
 
@@ -178,6 +193,7 @@ watch(open, (isOpen) => {
   amount.value = props.defaultAmount
   serverError.value = null
   touched.value = false
+  edited.value = false
   sendTelegram.value = true
   channel.value = startChannel()
   // FEAT-053 — exactly one `GET /topups/options` per open
@@ -288,7 +304,8 @@ function failToast(message: string, status: number | undefined) {
           :placeholder="String(amountMin)"
           autofocus
           data-testid="ta-adv-topup-amount"
-          @blur="touched = true"
+          @update:model-value="edited = true"
+          @blur="touched = touched || edited"
         />
         <p v-if="errorText" class="text-xs text-error" data-testid="ta-adv-topup-amount-error">
           {{ errorText }}
