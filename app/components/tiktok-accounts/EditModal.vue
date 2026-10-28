@@ -24,6 +24,12 @@
  * is null may leave that field empty (the key is simply not sent); a row that has one cannot clear it (the API
  * refuses `''`).
  * BUG-045: `validate-on` is `['input']` only — see AddModal.vue for why `blur`/`change` must not come back.
+ * FEAT-076 (spec "UI behaviour", AC-17, api-contract §7) — **Prefix** select (`ta-edit-prefix`): `ไม่มี prefix` +
+ * the active prefixes of one `GET /backend/prefixes?status=active` per open + the account's current prefix when it
+ * is not among them (archived → suffix ` (เก็บถาวร)`, active but not managed by the caller → ` (ไม่ได้ดูแล)`), so
+ * the preselection never renders blank. It is one more field of the diff: untouched → no `prefixId` key;
+ * another prefix → `prefixId: <id>`; `ไม่มี prefix` → `prefixId: null`. 403 / 404 of the prefix gate (nothing
+ * written, other keys included) → `ta-edit-error`.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -50,6 +56,11 @@ const modalContent = { 'data-testid': 'ta-edit-modal' } as ModalProps['content']
 const api = useApi()
 const toast = useToast()
 
+// FEAT-076 — `ไม่มี prefix` (USelectMenu needs a non-null value per item; this one maps to `prefixId: null`)
+const NO_PREFIX = '__none__'
+const prefixOptions = usePrefixOptions()
+const { pending: prefixesPending, error: prefixesError } = prefixOptions
+
 // ── form ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 interface FormState {
   label: string
@@ -59,6 +70,8 @@ interface FormState {
   password: string
   /** FEAT-053 — read through `accountAutoTopupChannel()`, never from the raw key (an old row has none) */
   autoTopupChannel: TopupChannel
+  /** FEAT-076 — the prefix id, `NO_PREFIX` for none */
+  prefixId: string
 }
 
 /** what the row holds, normalised the way the API stores it — the submit diffs the form against this */
@@ -69,7 +82,8 @@ function stateOf(account: TikTokAccount | null): FormState {
     emailPassword: account?.emailPassword ?? '',
     recoveryEmail: account?.recoveryEmail ?? '',
     password: account?.password ?? '',
-    autoTopupChannel: accountAutoTopupChannel(account)
+    autoTopupChannel: accountAutoTopupChannel(account),
+    prefixId: account?.prefix?.id ?? NO_PREFIX
   }
 }
 
@@ -104,7 +118,8 @@ const schema = z.object({
   password: z.string({ error: 'TikTok password is required' })
     .min(1, 'TikTok password is required')
     .max(128, 'TikTok password must be at most 128 characters'),
-  autoTopupChannel: z.enum(['qr', 'card'])
+  autoTopupChannel: z.enum(['qr', 'card']),
+  prefixId: z.string()
 }).superRefine((data, ctx) => {
   if (!data.emailPassword && original.value.emailPassword) {
     ctx.addIssue({ code: 'custom', path: ['emailPassword'], message: 'Email password is required' })
@@ -130,7 +145,27 @@ const dirty = computed(() =>
   || state.recoveryEmail !== original.value.recoveryEmail
   || state.password !== original.value.password
   || state.autoTopupChannel !== original.value.autoTopupChannel
+  || state.prefixId !== original.value.prefixId
 )
+
+interface PrefixItem {
+  id: string
+  label: string
+}
+
+/** `ไม่มี prefix` · the pickable prefixes · the account's current one when it is not pickable (suffixed) */
+const prefixItems = computed<PrefixItem[]>(() => {
+  const items: PrefixItem[] = [{ id: NO_PREFIX, label: 'ไม่มี prefix' }]
+  items.push(...prefixOptions.prefixes.value.map(p => ({ id: p.id, label: prefixLabel(p) })))
+  const current = props.account?.prefix ?? null
+  if (current && !items.some(i => i.id === current.id)) {
+    let suffix = ''
+    if (current.status === 'archived') suffix = ` (${PREFIX_STATUS_LABEL.archived})`
+    else if (prefixOptions.loaded.value) suffix = ' (ไม่ได้ดูแล)'
+    items.push({ id: current.id, label: `${prefixLabel(current)}${suffix}` })
+  }
+  return items
+})
 
 function resetForm() {
   original.value = stateOf(props.account)
@@ -142,7 +177,12 @@ function resetForm() {
 }
 
 watch(open, (isOpen) => {
-  if (isOpen) resetForm()
+  if (isOpen) {
+    resetForm()
+    void prefixOptions.load()
+  } else {
+    prefixOptions.reset()
+  }
 })
 
 // ── submit ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -167,6 +207,8 @@ function changedBody(data: Schema): PatchAccountBody {
   if (data.password !== original.value.password) body.password = data.password
   // GOD/Payment only, and only when it really changed — an Admin never has the field and never sends the key
   if (props.canPay && data.autoTopupChannel !== original.value.autoTopupChannel) body.autoTopupChannel = data.autoTopupChannel
+  // FEAT-076 — only when the select changed; `ไม่มี prefix` detaches
+  if (data.prefixId !== original.value.prefixId) body.prefixId = data.prefixId === NO_PREFIX ? null : data.prefixId
   return body
 }
 
@@ -222,6 +264,24 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             :disabled="submitting"
             data-testid="ta-edit-label"
           />
+        </UFormField>
+
+        <!-- FEAT-076 — routing only; saved by the same diff PATCH as the rest -->
+        <UFormField label="Prefix" name="prefixId">
+          <USelectMenu
+            v-model="state.prefixId"
+            :items="prefixItems"
+            value-key="id"
+            :search-input="{ placeholder: 'Search prefix' }"
+            :loading="prefixesPending"
+            :disabled="prefixesPending || submitting"
+            icon="i-lucide-tag"
+            class="w-full"
+            data-testid="ta-edit-prefix"
+          />
+          <template v-if="prefixesError" #error>
+            <span data-testid="ta-edit-prefix-error">{{ prefixesError }}</span>
+          </template>
         </UFormField>
 
         <UFormField label="Login email" name="loginEmail" required>

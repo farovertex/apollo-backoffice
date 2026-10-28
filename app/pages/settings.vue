@@ -8,13 +8,19 @@
  * kept as a **computed** over the session so they only render for a GOD admin. The routes themselves stay
  * registered — `god-only` on each `app/pages/settings/*.vue` is the guard, and the API (`@Roles('GOD')`) is
  * the authority.
+ * FEAT-076 — third tab `Prefixes` (`/settings/prefixes`, GOD + Admin; an Admin sees only that tab).
  */
 import type { NavigationMenuItem } from '@nuxt/ui'
 
 const { admin } = useAuth()
+const route = useRoute()
+// FEAT-076 — the Prefixes table has 7 columns; it gets a wider column than the form-style tabs
+const wide = computed(() => route.path.startsWith('/settings/prefixes'))
 
 const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
+const isAdmin = computed(() => admin.value?.roles?.includes('Admin') === true)
 
+// FEAT-076 — `Prefixes` (`prefixes-access`: GOD edits, Admin reads); an Admin sees only this tab
 const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
   ? [{
       label: 'Auto top-up',
@@ -24,6 +30,12 @@ const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
       label: 'UTM',
       icon: 'i-lucide-link',
       to: '/settings/utm'
+    }]
+  : []), ...(isGod.value || isAdmin.value
+  ? [{
+      label: 'Prefixes',
+      icon: 'i-lucide-tag',
+      to: '/settings/prefixes'
     }]
   : [])]])
 </script>
@@ -50,7 +62,10 @@ const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
     </template>
 
     <template #body>
-      <div class="flex flex-col gap-4 sm:gap-6 lg:gap-12 w-full lg:max-w-2xl mx-auto">
+      <div
+        class="flex flex-col gap-4 sm:gap-6 lg:gap-12 w-full min-w-0 mx-auto"
+        :class="wide ? 'lg:max-w-5xl' : 'lg:max-w-2xl'"
+      >
         <NuxtPage />
       </div>
     </template>

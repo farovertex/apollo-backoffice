@@ -1,11 +1,16 @@
 <script setup lang="ts">
 /**
- * `/settings` has no content of its own — the only implemented settings screen is the GOD-only Auto top-up
- * page (FEAT-030, BUG-037). `god-only` runs first and sends a non-GOD admin home with the same "Not allowed"
- * toast as typing `/settings/auto-topup` directly; a GOD admin falls through to the inline redirect below.
+ * `/settings` has no content of its own (BUG-037). FEAT-076 (spec "UI behaviour", A6): the landing tab depends on
+ * the role — GOD → `/settings/auto-topup` (unchanged, the smoke spec relies on it), Admin → `/settings/prefixes`
+ * (the only tab an Admin has), anybody else (Payment) → `prefixes-access` sends them home with the "Not allowed"
+ * toast before the inline redirect runs.
  */
 definePageMeta({
-  middleware: ['god-only', () => navigateTo('/settings/auto-topup', { replace: true })]
+  middleware: ['prefixes-access', () => {
+    const { admin } = useAuth()
+    const isGod = admin.value?.roles.includes('GOD') === true
+    return navigateTo(isGod ? '/settings/auto-topup' : '/settings/prefixes', { replace: true })
+  }]
 })
 </script>
 

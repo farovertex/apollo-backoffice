@@ -176,6 +176,16 @@
  * (`Proxy updated · …` / `Proxy change failed · <provisionError>`); rows we did not ask for get none (the
  * `/browser-profiles` rule). A modal 409 asks for one background `refresh()`. The other columns, ids and polls
  * are untouched.
+ * FEAT-076 (spec "UI behaviour", AC-18 / AC-19, api-contract §5 / §7) — prefixes:
+ *   · column **Prefix** (`ta-prefix[data-prefix-id][data-prefix-code]`, right after Workspace): the code + the muted
+ *     name, `—` (and empty attrs) for an account without one, badge `ta-prefix-archived` (`เก็บถาวร`) when archived.
+ *   · filter `ta-filter-prefix` next to the launching switch: `ทุก prefix` (no key) · `ไม่มี prefix`
+ *     (`?prefixId=none`) · one item per row of **one** `GET /backend/prefixes?status=all` per page load
+ *     (`code — name`) → `?prefixId=<id>`, in the same request as `launchingAds=1`; the client-side search stays.
+ *   · **GOD only**: a leading checkbox column (`ta-select[data-id]`, `ta-select-all` in the header over the visible
+ *     rows), toolbar button `ta-bulk-prefix` (`ผูก prefix (N)`, disabled at 0) → `TiktokAccountsBulkPrefixModal` →
+ *     `POST /backend/tiktok-accounts/prefix-bulk` → selection cleared + one `refresh()`. A fresh dataset keeps only
+ *     the selected ids that are still in it. Admin / Payment get neither the column nor the button.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -215,6 +225,7 @@ import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
 import type { ProxyModalProfile } from '#shared/types/browser-profiles'
 import type { CheckProxyResponse, ProxyLastCheck } from '#shared/types/proxies'
 import type { TopupViewer } from '~/utils/topup'
+import type { PrefixView, PrefixesResponse } from '#shared/types/prefixes'
 
 useSeoMeta({ title: 'TikTok accounts' })
 
@@ -227,6 +238,7 @@ const TopupsStatusBadge = resolveComponent('TopupsStatusBadge')
 const TopupsRowActions = resolveComponent('TopupsRowActions')
 const TiktokAccountsFavoriteStar = resolveComponent('TiktokAccountsFavoriteStar')
 const TiktokAccountsProxyCell = resolveComponent('TiktokAccountsProxyCell')
+const UCheckbox = resolveComponent('UCheckbox')
 
 const POLL_MS = 2000
 
@@ -237,17 +249,48 @@ const toast = useToast()
 // exactly once; it is never persisted (every load starts with every account).
 const launchingOnly = ref(false)
 
+// FEAT-076 — prefix filter (server param): `all` = no key, `none` = `?prefixId=none`, otherwise the prefix id
+const PREFIX_FILTER_ALL = 'all'
+const PREFIX_FILTER_NONE = 'none'
+const prefixFilter = ref<string>(PREFIX_FILTER_ALL)
+
+function listQuery(): Record<string, string | number> | undefined {
+  const query: Record<string, string | number> = {}
+  // no key at all while the switch is off — the request must stay the FEAT-003 one
+  if (launchingOnly.value) query.launchingAds = 1
+  if (prefixFilter.value !== PREFIX_FILTER_ALL) query.prefixId = prefixFilter.value
+  return Object.keys(query).length ? query : undefined
+}
+
 // `server: false`: one visible XHR per load (stubbable by QA with page.route), never blocks SSR.
 const { data, status, error, refresh } = useLazyAsyncData(
   'tiktok-accounts',
   // retry: 0 — one request per load, ofetch must not re-issue it on 5xx
   () => api<AccountsResponse>('/tiktok-accounts', {
     retry: 0,
-    // no key at all while the switch is off — the request must stay the FEAT-003 one
-    query: launchingOnly.value ? { launchingAds: 1 } : undefined
+    query: listQuery()
   }),
-  { server: false, watch: [launchingOnly] }
+  { server: false, watch: [launchingOnly, prefixFilter] }
 )
+
+// FEAT-076 — the filter's items: one `GET /prefixes?status=all` per page load (a failure leaves the two fixed items)
+const filterPrefixes = ref<PrefixView[]>([])
+async function loadFilterPrefixes() {
+  try {
+    const res = await api<PrefixesResponse>('/prefixes', { query: { status: 'all' }, retry: 0 })
+    filterPrefixes.value = res.prefixes ?? []
+  } catch {
+    filterPrefixes.value = []
+  }
+}
+onMounted(() => {
+  void loadFilterPrefixes()
+})
+const prefixFilterItems = computed(() => [
+  { id: PREFIX_FILTER_ALL, label: 'ทุก prefix' },
+  { id: PREFIX_FILTER_NONE, label: 'ไม่มี prefix' },
+  ...filterPrefixes.value.map(p => ({ id: p.id, label: prefixLabel(p) }))
+])
 
 // `idle` = SSR HTML / before the client fetch starts (server: false) — show it as loading, never as "no data"
 const pending = computed(() => status.value === 'idle' || status.value === 'pending')
@@ -281,6 +324,11 @@ watch(data, () => {
   polledById.value = new Map()
   topupById.value = new Map()
   favoriteById.value = new Map()
+  // FEAT-076 — keep only the selected ids that are still in the fresh dataset
+  if (selectedIds.value.size) {
+    const present = new Set((data.value?.accounts ?? []).map(a => a.id))
+    selectedIds.value = new Set([...selectedIds.value].filter(id => present.has(id)))
+  }
 })
 
 // ── relative time ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -522,6 +570,23 @@ const rows = computed<TikTokAccount[]>(() => {
   return [...merged].sort((x, y) => Number(effectiveFavorite(y)) - Number(effectiveFavorite(x)))
 })
 
+// FEAT-076 — header checkbox over the rows currently visible (search + filters applied)
+const selectAllState = computed<boolean | 'indeterminate'>(() => {
+  const visible = rows.value
+  if (!visible.length) return false
+  const n = visible.filter(a => selectedIds.value.has(a.id)).length
+  if (n === 0) return false
+  return n === visible.length ? true : 'indeterminate'
+})
+function toggleSelectAll(on: boolean) {
+  const next = new Set(selectedIds.value)
+  for (const a of rows.value) {
+    if (on) next.add(a.id)
+    else next.delete(a.id)
+  }
+  selectedIds.value = next
+}
+
 // account id whose POST …/discover is in flight (button spinner + no double click)
 const syncStarting = ref<string | null>(null)
 // one poll loop per (kind, account id) — a balance reload must not cancel a sync that is being followed;
@@ -628,6 +693,24 @@ const viewer = computed<TopupViewer>(() => ({
   roles: auth.admin.value?.roles ?? []
 }))
 const canPay = computed(() => canPayTopups(viewer.value))
+
+// ── FEAT-076 — GOD multi-select + bulk prefix ───────────────────────────────────────────────────────────────────────
+const isGod = computed(() => viewer.value.roles.includes('GOD'))
+const selectedIds = ref(new Set<string>())
+const bulkPrefixOpen = ref(false)
+const selectedList = computed(() => [...selectedIds.value])
+
+function toggleSelected(id: string, on: boolean) {
+  const next = new Set(selectedIds.value)
+  if (on) next.add(id)
+  else next.delete(id)
+  selectedIds.value = next
+}
+
+function onBulkPrefixDone() {
+  selectedIds.value = new Set()
+  void refresh()
+}
 
 // account ids whose balance job is queued or running (spinner on the reload button)
 const balanceLoading = ref(new Set<string>())
@@ -1646,7 +1729,32 @@ onUnmounted(stopProxyPoll)
  * the 2026-10-16 declutter, the Login email + Browser profile merge and the 2026-10-20 Label merge; ten since
  * FEAT-070 (Workspace + Proxy right after Account).
  */
+const selectColumn: TableColumn<TikTokAccount> = {
+  id: 'select',
+  header: () => h(UCheckbox, {
+    'modelValue': selectAllState.value,
+    'aria-label': 'Select all accounts',
+    'data-testid': 'ta-select-all',
+    'data-state': String(selectAllState.value),
+    'onUpdate:modelValue': (v: boolean | 'indeterminate') => toggleSelectAll(v === true)
+  }),
+  cell: ({ row }) => {
+    const id = row.original.id
+    const checked = selectedIds.value.has(id)
+    return h(UCheckbox, {
+      'modelValue': checked,
+      'aria-label': `Select ${row.original.label ?? row.original.loginEmail}`,
+      'data-testid': 'ta-select',
+      'data-id': id,
+      'data-checked': checked ? 'true' : 'false',
+      'onUpdate:modelValue': (v: boolean | 'indeterminate') => toggleSelected(id, v === true)
+    })
+  }
+}
+
 const columns = computed<TableColumn<TikTokAccount>[]>(() => [
+  // FEAT-076 — GOD only: the leading checkbox column of the bulk prefix action
+  ...(isGod.value ? [selectColumn] : []),
   // 2026-10-11 (human request): the "Email password", "Recovery email" and "TikTok password" columns are no
   // longer rendered in the table — the values stay in the row data and in the edit/add modals.
   // 2026-10-16 (human request): "Login email" + "Browser profile" merged into one two-line "Account" cell.
@@ -1721,6 +1829,44 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
         'data-testid': 'ta-workspace',
         'data-workspace-id': a.workspaceId
       }, name ?? '—')
+    }
+  },
+  // FEAT-076 — the account's prefix (routing only): code + muted name, archived badge
+  {
+    id: 'prefix',
+    header: 'Prefix',
+    cell: ({ row }) => {
+      const p = row.original.prefix ?? null
+      if (!p) {
+        return h('span', {
+          'class': 'text-muted',
+          'data-testid': 'ta-prefix',
+          'data-prefix-id': '',
+          'data-prefix-code': ''
+        }, '—')
+      }
+      return h('div', {
+        'class': 'flex min-w-0 max-w-40 flex-col',
+        'data-testid': 'ta-prefix',
+        'data-prefix-id': p.id,
+        'data-prefix-code': p.code,
+        'data-prefix-status': p.status
+      }, [
+        h('div', { class: 'flex min-w-0 items-center gap-1' }, [
+          h('span', { class: 'truncate font-mono text-xs text-highlighted', title: p.code }, p.code),
+          p.status === 'archived'
+            ? h(UBadge, {
+                'label': PREFIX_STATUS_LABEL.archived,
+                'color': 'neutral',
+                'variant': 'subtle',
+                'size': 'sm',
+                'class': 'shrink-0 whitespace-nowrap',
+                'data-testid': 'ta-prefix-archived'
+              })
+            : null
+        ]),
+        p.name ? h('span', { class: 'truncate text-xs text-muted', title: p.name }, p.name) : null
+      ])
     }
   },
   // FEAT-070 — the proxy of the account's browser profile + Check / Change (see the file header)
@@ -2163,6 +2309,8 @@ const errorDescription = computed<string | undefined>(() => {
 const isEmpty = computed(() => status.value === 'success' && !error.value && accounts.value.length === 0)
 // FEAT-029 — empty **because of** the filter: its own state so "No TikTok accounts yet" keeps its meaning
 const isLaunchingEmpty = computed(() => isEmpty.value && launchingOnly.value)
+// FEAT-076 — empty because of the prefix filter (the launching state wins when both filters are on)
+const isPrefixEmpty = computed(() => isEmpty.value && !launchingOnly.value && prefixFilter.value !== PREFIX_FILTER_ALL)
 const showTable = computed(() => !error.value && !isEmpty.value)
 </script>
 
@@ -2232,6 +2380,30 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             label="Launching only"
             data-testid="ta-filter-launching"
           />
+          <!-- FEAT-076 — server-side filter by prefix, combined with the switch in one GET -->
+          <USelectMenu
+            v-model="prefixFilter"
+            :items="prefixFilterItems"
+            value-key="id"
+            :search-input="{ placeholder: 'Search prefix' }"
+            icon="i-lucide-tag"
+            class="w-full sm:w-56"
+            aria-label="Filter by prefix"
+            :data-value="prefixFilter"
+            data-testid="ta-filter-prefix"
+          />
+          <!-- FEAT-076 — GOD only: bind the selected rows to a prefix -->
+          <UButton
+            v-if="isGod"
+            :label="`ผูก prefix (${selectedIds.size})`"
+            icon="i-lucide-tag"
+            color="neutral"
+            variant="outline"
+            :disabled="selectedIds.size === 0"
+            :data-count="selectedIds.size"
+            data-testid="ta-bulk-prefix"
+            @click="bulkPrefixOpen = true"
+          />
         </div>
 
         <UAlert
@@ -2272,6 +2444,25 @@ const showTable = computed(() => !error.value && !isEmpty.value)
               color="primary"
               data-testid="ta-filter-launching-off"
               @click="launchingOnly = false"
+            />
+          </template>
+        </UEmpty>
+
+        <!-- FEAT-076 — the prefix filter matches no account; the button resets it -->
+        <UEmpty
+          v-else-if="isPrefixEmpty"
+          icon="i-lucide-tag"
+          title="No account matches this prefix"
+          description="Pick another prefix or show every account."
+          data-testid="ta-empty-prefix"
+        >
+          <template #actions>
+            <UButton
+              label="ทุก prefix"
+              icon="i-lucide-list"
+              color="primary"
+              data-testid="ta-filter-prefix-off"
+              @click="prefixFilter = PREFIX_FILTER_ALL"
             />
           </template>
         </UEmpty>
@@ -2364,6 +2555,12 @@ const showTable = computed(() => !error.value && !isEmpty.value)
 
       <TiktokAccountsAddModal v-model:open="addOpen" @created="refresh()" />
       <TiktokAccountsBatchModal v-model:open="batchOpen" @imported="refresh()" />
+      <TiktokAccountsBulkPrefixModal
+        v-if="isGod"
+        v-model:open="bulkPrefixOpen"
+        :account-ids="selectedList"
+        @done="onBulkPrefixDone"
+      />
       <TiktokAccountsEditModal
         v-model:open="editOpen"
         :account="editTarget"

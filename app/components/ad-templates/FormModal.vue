@@ -2066,10 +2066,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               data-testid="adt-utm-no-prefixes"
             >
               <span>ยังไม่ตั้งรายการ Prefix</span>
-              <!-- only a GOD can maintain the list (the page itself is GOD-only, spec AS-9) -->
+              <!-- only a GOD can maintain the list · FEAT-076: managed on /settings/prefixes (utm is read-only) -->
               <NuxtLink
                 v-if="isGod"
-                to="/settings/utm"
+                to="/settings/prefixes"
                 class="text-primary hover:underline"
                 data-testid="adt-utm-settings-link"
               >

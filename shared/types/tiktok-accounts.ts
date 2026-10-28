@@ -74,6 +74,7 @@
 import type { AvailableProfileProxy, ProfileRunState, ProxyRef } from './browser-profiles'
 import type { HumanTaskKind } from './human-tasks'
 import type { ProxyLastCheck } from './proxies'
+import type { PrefixRef } from './prefixes'
 import type { TopupChannel, TopupView } from './topups'
 
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
@@ -197,6 +198,11 @@ export interface TikTokAccount {
   workspaceId: string
   /** FEAT-070 — `workspaces.name` of `workspaceId`; null when that workspace row no longer exists */
   workspaceName: string | null
+  /**
+   * FEAT-076 (api-contract §5.5) — key 43 of 44, right after `workspaceName`: the account's prefix (routing only,
+   * never an access rule); `null` = no prefix. `status: 'archived'` = the prefix is no longer offered for new accounts.
+   */
+  prefix: PrefixRef | null
   browserProfileId: string
   browserProfile: AccountBrowserProfile | null
   label: string | null
@@ -728,6 +734,11 @@ export interface CreateAccountBody {
   pendingFirstLogin?: boolean
   /** FEAT-036 — present only when the Add modal field is filled (trimmed, lowercased); omitted = null on the account */
   recoveryEmail?: string
+  /**
+   * FEAT-076 (§5.2) — optional at the API (A1), **always sent by the Add modal** (the pick is required there).
+   * Admin not managing it → 403 `คุณไม่ได้ดูแล prefix นี้`; archived / unknown → 404 `ไม่พบ prefix`.
+   */
+  prefixId?: string
 }
 
 /** FEAT-023 — one CSV line of `POST /tiktok-accounts/batch`; `label` is always null for imported rows. */
@@ -752,6 +763,8 @@ export interface BatchAccountRow {
 /** FEAT-023 — `POST /tiktok-accounts/batch` body (§5): 1..1000 rows, one flag for the whole file. */
 export interface BatchAccountsBody {
   pendingFirstLogin: boolean
+  /** FEAT-076 (§5.2) — top-level, one prefix for the whole file; the gate runs once before any row */
+  prefixId?: string
   rows: BatchAccountRow[]
 }
 
@@ -817,6 +830,10 @@ export interface PatchAccountBody {
    * shows that text as-is. Setting `'qr'` always works.
    */
   autoTopupChannel?: TopupChannel
+  /**
+   * FEAT-076 (§5.2) — the 7th key: sent only when the Edit modal's Prefix select changed; `null` detaches.
+   */
+  prefixId?: string | null
 }
 
 /** FEAT-063 — `PUT`/`DELETE /tiktok-accounts/:id/favorite` 200 body (`id` echoed back as a string). */

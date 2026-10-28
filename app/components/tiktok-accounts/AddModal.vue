@@ -33,6 +33,12 @@
  * further than half their height and no `click` was produced. Submit still validates everything —
  * `formRef.submit()` validates regardless of `validate-on` — and Nuxt UI keeps tracking blurred fields, so
  * `input` validation still re-checks a field the user has already left. Do not add `blur`/`change` back here.
+ * FEAT-076 (spec "UI behaviour", AC-15, api-contract §7) — required field **Prefix** (`ta-add-prefix`, `USelectMenu`,
+ * label `code — name`) filled by one `GET /backend/prefixes?status=active` per open (`usePrefixOptions`, concurrent
+ * with the GETs above; the API already limits it to the prefixes the caller manages, GOD = all). Nothing picked →
+ * zod `กรุณาเลือก prefix`, no request. Empty answer → `ta-add-prefix-empty` + `ta-add-submit` disabled. The create
+ * body carries `prefixId` (the API key is optional, A1 — the BO is what makes the pick mandatory); a 403
+ * `คุณไม่ได้ดูแล prefix นี้` / 404 `ไม่พบ prefix` is shown in `ta-add-error` like every other API error.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -56,6 +62,10 @@ const toast = useToast()
 // `GET /proxies?free=1&limit=100&sort=label` (picker), no `/browser-profiles/options` on this surface
 const settings = useProfileSettings({ loadOptions: false })
 const { form: profileForm, proxyItems, proxyPickMissing, loading: settingsLoading, loadError: settingsLoadError } = settings
+// FEAT-076 — the prefixes this admin may pick (`GET /prefixes?status=active`, once per open)
+const prefixOptions = usePrefixOptions()
+const { pending: prefixesPending, error: prefixesError, empty: noPrefix } = prefixOptions
+const prefixItems = computed(() => prefixOptions.prefixes.value.map(p => ({ id: p.id, label: prefixLabel(p) })))
 
 // ── form ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const schema = z.object({
@@ -83,7 +93,9 @@ const schema = z.object({
     .optional(),
   pendingFirstLogin: z.boolean(),
   createProfile: z.boolean(),
-  browserProfileId: z.string().optional()
+  browserProfileId: z.string().optional(),
+  // FEAT-076 — required in the BO (A1)
+  prefixId: z.string({ error: PREFIX_REQUIRED }).min(1, PREFIX_REQUIRED)
 }).superRefine((data, ctx) => {
   if (!data.createProfile && !data.browserProfileId) {
     ctx.addIssue({
@@ -113,6 +125,7 @@ interface FormState {
   pendingFirstLogin: boolean
   createProfile: boolean
   browserProfileId: string | undefined
+  prefixId: string | undefined
 }
 
 function emptyState(): FormState {
@@ -124,7 +137,8 @@ function emptyState(): FormState {
     label: '',
     pendingFirstLogin: true,
     createProfile: true,
-    browserProfileId: undefined
+    browserProfileId: undefined,
+    prefixId: undefined
   }
 }
 
@@ -221,8 +235,10 @@ watch(open, (isOpen) => {
     // concurrently, once each: /browser-profiles/available · /browser-profile-defaults/me · /proxies?free=1
     void loadProfiles()
     void settings.load()
+    void prefixOptions.load()
   } else {
     resetProfiles()
+    prefixOptions.reset()
   }
 })
 
@@ -296,7 +312,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     password: event.data.password,
     emailPassword: event.data.emailPassword,
     browserProfileId,
-    pendingFirstLogin: event.data.pendingFirstLogin
+    pendingFirstLogin: event.data.pendingFirstLogin,
+    prefixId: event.data.prefixId
   }
   if (event.data.label) body.label = event.data.label
   // FEAT-036 — key present only when the field is non-empty (already trimmed + lowercased by the schema)
@@ -436,6 +453,53 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           />
         </UFormField>
 
+        <!-- FEAT-076 — required; the list is what the API lets this admin pick (GOD: every active prefix) -->
+        <UFormField label="Prefix" name="prefixId" required>
+          <USelectMenu
+            v-model="state.prefixId"
+            :items="prefixItems"
+            value-key="id"
+            :search-input="{ placeholder: 'Search prefix' }"
+            :loading="prefixesPending"
+            :disabled="prefixesPending || !!prefixesError || noPrefix || submitting"
+            :placeholder="prefixesPending ? 'Loading prefixes…' : 'Select a prefix'"
+            icon="i-lucide-tag"
+            class="w-full"
+            data-testid="ta-add-prefix"
+          />
+        </UFormField>
+
+        <UAlert
+          v-if="noPrefix"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-tag"
+          :title="PREFIX_EMPTY_PICK"
+          data-testid="ta-add-prefix-empty"
+        />
+        <UAlert
+          v-else-if="prefixesError"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          title="Could not load prefixes"
+          :description="prefixesError"
+          data-testid="ta-add-prefix-error"
+        >
+          <template #actions>
+            <UButton
+              label="Retry"
+              icon="i-lucide-refresh-cw"
+              color="error"
+              variant="solid"
+              size="xs"
+              :loading="prefixesPending"
+              data-testid="ta-add-prefix-retry"
+              @click="prefixOptions.load()"
+            />
+          </template>
+        </UAlert>
+
         <UCheckbox
           v-model="state.pendingFirstLogin"
           label="Auto first login"
@@ -563,6 +627,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             color="primary"
             variant="solid"
             type="submit"
+            :disabled="noPrefix"
             :loading="submitting"
             data-testid="ta-add-submit"
           />

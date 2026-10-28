@@ -23,6 +23,12 @@
  *
  * The result table shows the email + status + reason of every row and **no password**. `pendingFirstLogin` applies
  * to the whole file and never enqueues a login here (AC-5); the scheduler picks the marked accounts up.
+ *
+ * FEAT-076 (spec "UI behaviour", AC-16, api-contract §7) — required **Prefix** (`ta-batch-prefix`, one value for the
+ * whole file) from one `GET /backend/prefixes?status=active` per open; it travels top-level next to
+ * `pendingFirstLogin` (`{ pendingFirstLogin, prefixId, rows }`), the CSV format is unchanged. Nothing picked →
+ * `ta-batch-prefix-required` (`กรุณาเลือก prefix`) and no request; empty answer → `ta-batch-prefix-empty` +
+ * `ta-batch-submit` disabled; a 403 / 404 of the prefix gate (nothing created) renders in `ta-batch-error`.
  */
 import type { FetchError } from 'ofetch'
 import type { ModalProps } from '@nuxt/ui'
@@ -45,6 +51,16 @@ const api = useApi()
 const toast = useToast()
 
 const pendingFirstLogin = ref(true)
+// FEAT-076 — the prefix of every row of the file
+const prefixOptions = usePrefixOptions()
+const { pending: prefixesPending, error: prefixesError, empty: noPrefix } = prefixOptions
+const prefixItems = computed(() => prefixOptions.prefixes.value.map(p => ({ id: p.id, label: prefixLabel(p) })))
+const prefixId = ref<string | undefined>(undefined)
+/** set by an Upload click without a pick; cleared as soon as one is made */
+const prefixMissing = ref(false)
+watch(prefixId, (id) => {
+  if (id) prefixMissing.value = false
+})
 const fileName = ref<string | null>(null)
 const rows = ref<BatchAccountRow[]>([])
 // FEAT-036 §7 — true only when the parsed file used the 5-column header (drives the ` · <n> with a recovery
@@ -56,7 +72,7 @@ const submitError = ref<{ title: string, description?: string } | null>(null)
 const result = ref<BatchAccountsResponse | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const canSubmit = computed(() => rows.value.length > 0 && !parseError.value && !submitting.value)
+const canSubmit = computed(() => rows.value.length > 0 && !parseError.value && !submitting.value && !noPrefix.value)
 const recoveryCount = computed(() => rows.value.filter(r => r.recoveryEmail).length)
 
 function resetFile() {
@@ -73,9 +89,15 @@ function reset() {
   resetFile()
   pendingFirstLogin.value = true
   submitting.value = false
+  prefixId.value = undefined
+  prefixMissing.value = false
 }
 
-watch(open, () => reset())
+watch(open, (isOpen) => {
+  reset()
+  if (isOpen) void prefixOptions.load()
+  else prefixOptions.reset()
+})
 
 async function onFile(event: Event) {
   const input = event.target as HTMLInputElement
@@ -118,10 +140,14 @@ function batchErrorState(e: unknown): { title: string, description?: string } {
 
 async function onSubmit() {
   if (!canSubmit.value) return
+  if (!prefixId.value) {
+    prefixMissing.value = true
+    return
+  }
   submitting.value = true
   submitError.value = null
   result.value = null
-  const body: BatchAccountsBody = { pendingFirstLogin: pendingFirstLogin.value, rows: rows.value }
+  const body: BatchAccountsBody = { pendingFirstLogin: pendingFirstLogin.value, prefixId: prefixId.value, rows: rows.value }
   try {
     // retry: 0 — exactly one POST (a retry would create a second AdsPower profile per row)
     const res = await api<BatchAccountsResponse>('/tiktok-accounts/batch', { method: 'POST', body, retry: 0 })
@@ -240,6 +266,61 @@ function reasonText(row: BatchRowResult): string {
           role="alert"
           data-testid="ta-batch-file-error"
         />
+
+        <!-- FEAT-076 — one prefix for the whole file, required -->
+        <UFormField
+          label="Prefix"
+          name="prefixId"
+          required
+          :error="prefixMissing ? PREFIX_REQUIRED : undefined"
+        >
+          <USelectMenu
+            v-model="prefixId"
+            :items="prefixItems"
+            value-key="id"
+            :search-input="{ placeholder: 'Search prefix' }"
+            :loading="prefixesPending"
+            :disabled="prefixesPending || !!prefixesError || noPrefix || submitting"
+            :placeholder="prefixesPending ? 'Loading prefixes…' : 'Select a prefix'"
+            icon="i-lucide-tag"
+            class="w-full"
+            data-testid="ta-batch-prefix"
+          />
+          <template v-if="prefixMissing" #error>
+            <span data-testid="ta-batch-prefix-required">{{ PREFIX_REQUIRED }}</span>
+          </template>
+        </UFormField>
+
+        <UAlert
+          v-if="noPrefix"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-tag"
+          :title="PREFIX_EMPTY_PICK"
+          data-testid="ta-batch-prefix-empty"
+        />
+        <UAlert
+          v-else-if="prefixesError"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          title="Could not load prefixes"
+          :description="prefixesError"
+          data-testid="ta-batch-prefix-error"
+        >
+          <template #actions>
+            <UButton
+              label="Retry"
+              icon="i-lucide-refresh-cw"
+              color="error"
+              variant="solid"
+              size="xs"
+              :loading="prefixesPending"
+              data-testid="ta-batch-prefix-retry"
+              @click="prefixOptions.load()"
+            />
+          </template>
+        </UAlert>
 
         <UCheckbox
           v-model="pendingFirstLogin"

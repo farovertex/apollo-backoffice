@@ -31,6 +31,15 @@ const canSeeCashier = computed(() => {
 const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
 
 /**
+ * FEAT-076 (spec "UI behaviour", A6) — `Settings` is shown to GOD **and Admin**: an Admin lands on the read-only
+ * `/settings/prefixes`. Payment stays without it. Display only — `prefixes-access` / `god-only` guard the pages.
+ */
+const canSeeSettings = computed(() => {
+  const roles = auth.admin.value?.roles ?? []
+  return roles.includes('GOD') || roles.includes('Admin')
+})
+
+/**
  * FEAT-049 — Media library (`/media-library`, functions 5.1/5.2/5.4) is a **public** library: the API guards it
  * with `AuthGuard` only, so every role sees the item (spec F9). Built once and spliced into whichever spot
  * applies: directly after "Ad templates" for a template manager (GOD/Admin), directly after "TikTok accounts"
@@ -193,8 +202,10 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
-    }, {
-      // BUG-037 — Settings (only content is the GOD-only Auto top-up tab, FEAT-030), last item
+    }]
+  : []), ...(canSeeSettings.value
+  ? [{
+      // BUG-037 — Settings, last item. FEAT-076: GOD (Auto top-up · UTM · Prefixes) and Admin (Prefixes only)
       label: 'Settings',
       icon: 'i-lucide-settings',
       to: '/settings',
