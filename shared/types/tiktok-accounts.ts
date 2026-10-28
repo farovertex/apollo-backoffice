@@ -69,6 +69,13 @@
  * **11** keys (`runState`, `provisionError`, `proxyId`, `proxyRef`, `proxy`, `proxyLastCheck`, `proxyUpdating` —
  * the same meaning as on `/browser-profiles/available` and `/proxies`), so the accounts page can show, check and
  * change the account's proxy from one list read.
+ * FEAT-075 (api-contract.md v1 §1/§2/§3) — the auto top-up **rule** moves from the system settings to the account:
+ * the view gains `autoTopupConfig` (key 44, right after `autoTopupChannel` and before `autoTopup`) with
+ * `{ enabled, channel, cardId, minBalance, amount, card, updatedBy, updatedAt }`, and `PatchAccountBody` trades
+ * `autoTopupChannel` (no longer accepted — sending it is a 400 unknown key) for the whole
+ * `autoTopupConfig` block (`PatchAccountAutoTopupConfig`, always sent complete). The legacy view key
+ * `autoTopupChannel` stays for one release (derived from the effective config) but nothing in the BO reads it
+ * directly any more — go through `accountAutoTopupConfig()` / `accountAutoTopupChannel()` (`app/utils/topup.ts`).
  */
 
 import type { AvailableProfileProxy, ProfileRunState, ProxyRef } from './browser-profiles'
@@ -126,6 +133,46 @@ export interface AccountAutoTopup {
   lastTriggeredAt: string | null
   /** id of the round created last; null until then */
   lastRoundId: string | null
+}
+
+/**
+ * FEAT-075 (api-contract §3) — the card an auto round of this account would use **right now**: `snapshot()` minus
+ * `holderName` (no PAN, no CVV — those never leave the API). `null` when the channel is `qr`, when no card is
+ * configured and none is usable, or when the configured card was removed.
+ */
+export interface AccountAutoTopupCard {
+  cardId: string
+  /** `visa` | `mastercard` | `amex` | `unknown` */
+  brand: string
+  last4: string
+  /** `MM/YY` */
+  expiry: string
+}
+
+/**
+ * FEAT-075 (api-contract §1.1/§3) — the auto top-up **rule of one account**, always present on the view: a row
+ * written before the feature reads as the whole block off (`channel` = the legacy `autoTopupChannel ?? 'qr'`).
+ * Set from the Edit modal's section "เติมเงินอัตโนมัติ" by `PATCH /tiktok-accounts/:id` (GOD or an Admin of the
+ * account's workspace — a Payment-only admin gets 403). `minBalance`/`amount` are integers in the account's own
+ * `balanceCurrency`.
+ */
+export interface AccountAutoTopupConfig {
+  /** `false` = the kpi job never opens an auto round for this account, whatever the system switch says */
+  enabled: boolean
+  /** `qr` or `card`; stored even while `enabled` is false so the values survive a switch-off */
+  channel: TopupChannel
+  /** `null` = the account's usable default card at round time (and always `null` on the `qr` channel) */
+  cardId: string | null
+  /** integer ≥ 0 — a balance strictly below this opens a round; `null` = not configured yet */
+  minBalance: number | null
+  /** integer ≥ the channel minimum of the account's currency; `null` = not configured yet */
+  amount: number | null
+  /** resolved by the API: the card an auto round would use now (`cardId`, else the usable default) */
+  card: AccountAutoTopupCard | null
+  /** admin id who last wrote the block; `null` on a row that was never configured */
+  updatedBy: string | null
+  /** ISO | null */
+  updatedAt: string | null
 }
 
 /** Populated browser profile (subset of BROWSER_PROFILES); `null` on the account view if the profile row is gone. */
@@ -250,12 +297,20 @@ export interface TikTokAccount {
   autoTopupDisabled?: boolean
   /**
    * FEAT-053 (api-contract §3, key 39) — which channel the system uses when it opens an auto top-up round for
-   * this account: `qr` (the default, and what every row written before the feature reads as) or `card`
-   * (a `pendingApproval` round a human still has to pay). Only `PATCH /tiktok-accounts/:id` writes it, and only
-   * GOD/Payment may send that key. Optional here for an API that predates the feature — read it through
-   * `accountAutoTopupChannel()` (`app/utils/topup.ts`), never directly.
+   * this account.
+   *
+   * FEAT-075: **legacy**. The API still sends it (derived from `autoTopupConfig.channel`) for one more release,
+   * but no BO surface reads it any more and `PATCH` no longer accepts it. Read the channel through
+   * `accountAutoTopupChannel()` (`app/utils/topup.ts`), which prefers `autoTopupConfig`.
    */
   autoTopupChannel?: TopupChannel
+  /**
+   * FEAT-075 (api-contract §3, key 44) — the account's own auto top-up rule (switch, channel, card, thresholds).
+   * Always present on the new view. Readers still go through `accountAutoTopupConfig()` (`app/utils/topup.ts`) so
+   * an API/stub that predates the feature (or a hand-written Mongo row) degrades to "everything off" instead of
+   * throwing.
+   */
+  autoTopupConfig: AccountAutoTopupConfig
   /** FEAT-034 — system bookkeeping of the last auto top-up round opened for this account; always present */
   autoTopup: AccountAutoTopup
   /** advertisers of this account with `missingSince === null`; recomputed by every successful discover */
@@ -795,12 +850,29 @@ export interface LoginConflictBody {
 }
 
 /**
+ * FEAT-075 (api-contract §2) — the `autoTopupConfig` key of `PATCH /tiktok-accounts/:id`: the block is always
+ * sent **whole** (a partial block is a 400), and only when it differs from the row's effective config. `cardId` is
+ * `null` on the `qr` channel and may be `null` on the `card` channel when the account has exactly one usable card
+ * (the worker then resolves the usable default at round time). `minBalance`/`amount` are `null` while the admin
+ * left the inputs empty — allowed with `enabled: false`, a 400 with `enabled: true`.
+ */
+export interface PatchAccountAutoTopupConfig {
+  enabled: boolean
+  channel: TopupChannel
+  cardId: string | null
+  minBalance: number | null
+  amount: number | null
+}
+
+/**
  * `PATCH /tiktok-accounts/:id` body (`.strict()`, every key optional, at least one required). Sent by the Edit
- * modal (`TiktokAccountsEditModal`, 2026-10-12 human request) with **only the keys the user changed**, and
- * (FEAT-053) by the "ช่องทาง auto" column with `autoTopupChannel` alone. Exactly these six fields are
- * editable; anything else (profile, flags) is 400 on the API.
+ * modal (`TiktokAccountsEditModal`, 2026-10-12 human request) with **only the keys the user changed**. Exactly
+ * these six fields are editable; anything else (profile, flags) is 400 on the API.
  * FEAT-036 history: the body used to carry `recoveryEmail` alone (a string sets it, `null` clears it — unchanged).
  * TASK-account-label (2026-10-14): `label` joined the editable keys — trimmed ≤ 100, `''`/`null` clears it.
+ * FEAT-053 history: the sixth key used to be `autoTopupChannel` (GOD/Payment only).
+ * FEAT-075: that key is **gone** (the API answers 400 `ไม่รู้จัก field "autoTopupChannel"`); the sixth key is now
+ * `autoTopupConfig`, writable by GOD or an Admin of the account's workspace (Payment-only → 403).
  */
 export interface PatchAccountBody {
   /** trimmed ≤ 100; `''` or `null` clears it (response `label: null`) */
@@ -812,11 +884,11 @@ export interface PatchAccountBody {
   /** TikTok Ads password */
   password?: string
   /**
-   * FEAT-053 (api-contract §2) — the account's auto top-up channel. Sent **alone** by the "ช่องทาง auto" column
-   * of `/tiktok-accounts`; the API answers 403 (role), 503 (no card key) or 400 (no usable card) and the BO
-   * shows that text as-is. Setting `'qr'` always works.
+   * FEAT-075 (api-contract §2) — the whole auto top-up block of the account. The API answers 403 (role),
+   * 409 (currency unknown), 503 (no card key) or 400 (validation / card gates) and the BO shows that text as-is;
+   * on a failure **nothing** of the request is written, so the modal just stays open.
    */
-  autoTopupChannel?: TopupChannel
+  autoTopupConfig?: PatchAccountAutoTopupConfig
 }
 
 /** FEAT-063 — `PUT`/`DELETE /tiktok-accounts/:id/favorite` 200 body (`id` echoed back as a string). */
