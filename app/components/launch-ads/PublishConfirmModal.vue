@@ -11,6 +11,10 @@
  *
  * FEAT-066 (spec "UI behaviour") — when `pauseAfterPublish` is true, one extra line (`la-confirm-pause`)
  * repeats the checkbox's intent under the budget cap; absent when false. `la-confirm-ack` is unchanged.
+ *
+ * TASK-theme-cbo-cap — under CBO the page passes the **campaign** budget as `budget` and `cbo: true`: the cap is
+ * then `budget.amount × accounts` (one campaign per account; its copies share that budget, so they do not
+ * multiply it) and one extra row (`la-confirm-cbo`) says so. The copies row itself is unchanged.
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { AdGroupBudget } from '#shared/types/ad-group-templates'
@@ -23,6 +27,8 @@ const props = defineProps<{
   budget: AdGroupBudget | null
   /** label of `budget.type` from `GET /ad-group-templates/options` — never invented here */
   budgetTypeLabel: string
+  /** TASK-theme-cbo-cap — `budget` is the campaign (CBO) budget: counted once per account, not per copy */
+  cbo?: boolean
   submitting: boolean
   /** FEAT-066 — mirrors the `la-pause-after-publish` checkbox of the page */
   pauseAfterPublish: boolean
@@ -42,7 +48,7 @@ watch(open, (isOpen) => {
 })
 
 /** `#,##0.00 THB` (+ ` / day` for a daily budget) — fixed grouping, never locale-dependent */
-const capText = computed(() => formatBudgetCap(props.budget, props.copies, props.accounts))
+const capText = computed(() => formatBudgetCap(props.budget, props.cbo ? 1 : props.copies, props.accounts))
 </script>
 
 <template>
@@ -78,6 +84,14 @@ const capText = computed(() => formatBudgetCap(props.budget, props.copies, props
           <dd class="text-right font-medium text-highlighted" data-testid="la-confirm-budget-type">
             {{ budgetTypeLabel }}
           </dd>
+          <template v-if="cbo">
+            <dt class="text-muted">
+              Budget strategy
+            </dt>
+            <dd class="text-right font-medium text-highlighted" data-testid="la-confirm-cbo">
+              CBO · campaign budget × accounts
+            </dd>
+          </template>
         </dl>
 
         <div class="flex items-center justify-between gap-3 rounded-lg bg-elevated/50 px-3 py-2">

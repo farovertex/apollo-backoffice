@@ -51,7 +51,8 @@
  *   (no campaign templates yet): campaign name on TikTok = order name.
  * Step 3 · Review — order name (default `<ad group template name> · <YYYY-MM-DD>` in local time, max 100),
  *   what will be built, the target list, then **Save as draft** (no dialog) or **Create & publish** (confirm
- *   dialog with the budget cap `amount × copies × accounts`). 201 → `/orders/<id>`; 409 → back to step 1 with
+ *   dialog with the budget cap `amount × copies × accounts`, or `campaign budget × accounts` under CBO —
+ *   TASK-theme-cbo-cap). 201 → `/orders/<id>`; 409 → back to step 1 with
  *   one toast per rejected account and a fresh targets request; 400 → the message on its field or as a form
  *   error. Both buttons are disabled while a create is in flight, so no double submit.
  *
@@ -853,7 +854,13 @@ const nameError = computed(() => {
 })
 
 const totalAdGroups = computed(() => selectedCount.value * copies.value)
-const budget = computed(() => adGroupTemplate.value?.config?.budget ?? null)
+/**
+ * TASK-theme-cbo-cap — the budget the confirm dialog's cap is built on: the **campaign** budget under CBO (shared
+ * by the copies, so counted once per account), else the ad-group budget (× copies × accounts) — `capBasis`.
+ */
+const capBudget = computed(() => capBasis(adGroupTemplate.value?.config ?? null, copies.value))
+const budget = computed(() => capBudget.value.budget)
+const budgetIsCbo = computed(() => capBudget.value.cbo)
 const budgetTypeLabel = computed(() => labelOf(agtOptions.value?.budgetType, budget.value?.type))
 
 // ── stepper ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -2218,6 +2225,7 @@ onUnmounted(() => {
         :copies="copies"
         :budget="budget"
         :budget-type-label="budgetTypeLabel"
+        :cbo="budgetIsCbo"
         :submitting="submitting"
         :pause-after-publish="pauseAfterPublish"
         @confirm="confirmPublish"

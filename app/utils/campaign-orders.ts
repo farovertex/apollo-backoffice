@@ -5,7 +5,7 @@
  * `#,##0.00 <currency>` with a fixed grouping, plus ` / day` for a daily budget, so the number a test
  * reads never depends on the browser locale.
  */
-import type { AdGroupBudget } from '#shared/types/ad-group-templates'
+import type { AdGroupBudget, BudgetStrategy } from '#shared/types/ad-group-templates'
 import type { BuildCounts, BuildPauseState, BuildStatus, OrderStatus } from '#shared/types/campaign-orders'
 
 export type StatusColor = 'neutral' | 'primary' | 'info' | 'success' | 'warning' | 'error'
@@ -127,4 +127,33 @@ export function budgetCap(budget: AdGroupBudget | null | undefined, copies: numb
 /** `#,##0.00 THB / day` for the whole order — the text of `la-confirm-cap` and of the detail summary */
 export function formatBudgetCap(budget: AdGroupBudget | null | undefined, copies: number, accounts: number): string {
   return formatBudgetAmount(budgetCap(budget, copies, accounts), budget)
+}
+
+/**
+ * The part of an ad-group config (template `config` or order `adGroupConfig` snapshot) that decides the cap.
+ * `campaign` is optional/loose because a v2 snapshot (before FEAT-061) has no campaign section at all.
+ */
+export interface CapSource {
+  budget?: AdGroupBudget | null
+  campaign?: { budgetStrategy?: BudgetStrategy | null, budget?: AdGroupBudget | null } | null
+}
+
+/**
+ * TASK-theme-cbo-cap — which budget the cap is built from and how many times it is counted per account.
+ * Under **CBO** the campaign budget is shared by every ad group of the campaign, so the cap is
+ * `campaign.budget.amount × accounts` (one campaign per account; the copies do not multiply it). Under the
+ * ad-group strategy (and for a v2 snapshot without `campaign`) it stays `budget.amount × copies × accounts`.
+ */
+export function capBasis(source: CapSource | null | undefined, copies: number): { budget: AdGroupBudget | null, copies: number, cbo: boolean } {
+  const campaign = source?.campaign
+  if (campaign?.budgetStrategy === 'cbo' && campaign.budget) {
+    return { budget: campaign.budget, copies: 1, cbo: true }
+  }
+  return { budget: source?.budget ?? null, copies, cbo: false }
+}
+
+/** `formatBudgetCap` driven by `capBasis` — the one text of `la-confirm-cap` and `od-cap` */
+export function formatOrderCap(source: CapSource | null | undefined, copies: number, accounts: number): string {
+  const basis = capBasis(source, copies)
+  return formatBudgetCap(basis.budget, basis.copies, accounts)
 }

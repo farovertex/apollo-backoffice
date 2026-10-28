@@ -590,11 +590,16 @@ const campaignSnapshot = computed(() => {
   }
   return { text: parts.join(' · '), name: campaign.name ?? null }
 })
-/** cap = budget × copies × builds (the build rows are the advertisers the order really runs on) */
+/**
+ * cap = budget × copies × builds (the build rows are the advertisers the order really runs on).
+ * TASK-theme-cbo-cap — under CBO (`adGroupConfig.campaign.budgetStrategy`) the campaign budget is shared by the
+ * copies, so it is `campaign.budget × builds` (`capBasis`); a v2 snapshot without `campaign` keeps the old product.
+ */
 const capText = computed(() => {
   const current = order.value
   if (!current) return '—'
-  return formatBudgetCap(current.budget, current.adGroupCopies, builds.value.length || current.targetCount)
+  const source = { budget: current.budget, campaign: current.adGroupConfig?.campaign ?? null }
+  return formatOrderCap(source, current.adGroupCopies, builds.value.length || current.targetCount)
 })
 const modalContent = { 'data-testid': 'od-confirm' } as Record<string, string>
 const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
