@@ -505,7 +505,8 @@ async function remove(card: PaymentCardView) {
             <!-- the job chip: running / failed (completed → toast, chip gone) -->
             <div
               v-if="showChip && job"
-              class="flex min-w-0 flex-col gap-1.5 rounded-lg border border-default bg-elevated/50 px-3 py-2"
+              class="flex min-w-0 flex-col gap-1.5"
+              :class="jobOpen ? 'rounded-lg border border-default bg-elevated/50 px-3 py-2' : ''"
               data-testid="ta-cards-job"
               :data-status="job.status"
               :data-action="job.action"
