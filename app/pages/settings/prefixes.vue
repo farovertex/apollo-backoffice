@@ -166,7 +166,7 @@ const emptyText = computed(() => (isGod.value ? 'ยังไม่มี prefix
       </p>
     </UPageCard>
 
-    <UPageCard v-else variant="subtle" :ui="{ container: 'p-0 sm:p-0', wrapper: 'min-w-0' }">
+    <UPageCard v-else variant="subtle" :ui="{ container: 'min-w-0 p-0 sm:p-0', wrapper: 'min-w-0' }">
       <div class="max-w-full overflow-x-auto">
         <table class="w-full min-w-[40rem] text-left text-sm" data-testid="st-prefixes-table">
           <thead class="bg-elevated/50 text-xs text-muted">
@@ -204,7 +204,7 @@ const emptyText = computed(() => (isGod.value ? 'ยังไม่มี prefix
               :data-code="prefix.code"
               :data-status="prefix.status"
             >
-              <td class="px-3 py-2 font-mono break-all text-highlighted" data-testid="st-prefix-code">
+              <td class="px-3 py-2 font-mono whitespace-nowrap text-highlighted" data-testid="st-prefix-code">
                 {{ prefix.code }}
               </td>
               <td class="px-3 py-2" :class="prefix.name ? '' : 'text-muted'" data-testid="st-prefix-name">
