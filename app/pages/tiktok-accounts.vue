@@ -59,6 +59,11 @@
  * 2026-10-16 it is an item of the row's "⋯" menu (see below) and the `ta-cards` cell no longer exists. The Top
  * up cell passes the account's `balanceCurrency` and name down to `TopupsRowActions`, which is what decides
  * whether the card channel of the pay popover is offered or disabled with a reason (AC-32).
+ * FEAT-078 (spec "UI behaviour", AC-15) — the item is now **จัดการบัตร** (same testid `ta-cards-open`, same icon)
+ * and is offered to **GOD and Admin** (`canManageCards`): every `payment-cards` route is GOD/Admin of the account's
+ * workspace now, a Payment-only admin gets 403 and therefore no item. The modal shows the TikTok-side cards (sync /
+ * set primary / remove through a `cardManage` job) next to our own. `canPay` keeps its other uses (Balance reload,
+ * top-up). The "GOD/Payment only" notes about `ta-cards-open` below are history.
  * FEAT-053 (AC-19/AC-20, api-contract §2/§3) — the account's auto top-up channel: which channel the system uses
  * when it opens an auto top-up round for this account. It was a column **ช่องทาง auto** (`ta-auto-channel`) with
  * the two-value switch `ta-auto-channel-qr` / `ta-auto-channel-card`; since 2026-10-16 the column is gone, the
@@ -510,14 +515,15 @@ function askDelete(account: TikTokAccount) {
 type RowAction = DropdownMenuItem & { label: string, testid: string }
 
 /**
- * 2026-10-16 — the row's overflow menu: **บัตรที่จำไว้** (FEAT-051, GOD/Payment only — every payment-card route
- * answers 403 for an Admin, so the item is not even offered) and **Delete**. Both used to be a button per row.
+ * 2026-10-16 — the row's overflow menu: the cards item and **Delete**. Both used to be a button per row.
+ * FEAT-078 — the cards item is **จัดการบัตร**, GOD + Admin only (`canManageCards`; a Payment-only admin would get
+ * 403 from every payment-card route, so the item is not even offered).
  */
 function moreActions(account: TikTokAccount): RowAction[] {
   const items: RowAction[] = []
-  if (canPay.value) {
+  if (canManageCards.value) {
     items.push({
-      label: 'บัตรที่จำไว้',
+      label: 'จัดการบัตร',
       icon: 'i-lucide-credit-card',
       testid: 'ta-cards-open',
       onSelect: () => openCards(account)
@@ -696,6 +702,8 @@ const viewer = computed<TopupViewer>(() => ({
   roles: auth.admin.value?.roles ?? []
 }))
 const canPay = computed(() => canPayTopups(viewer.value))
+/** FEAT-078 — every `payment-cards` route is GOD or Admin (of the account's workspace); Payment-only → 403 */
+const canManageCards = computed(() => viewer.value.roles.includes('GOD') || viewer.value.roles.includes('Admin'))
 
 // ── FEAT-076 — GOD multi-select + bulk prefix ───────────────────────────────────────────────────────────────────────
 const isGod = computed(() => viewer.value.roles.includes('GOD'))
@@ -1526,7 +1534,7 @@ function ttAccountsFor(accountId: string): Record<string, BcTikTokAccountsState>
 }
 
 // ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
-// FEAT-051 — saved cards of one account (GOD/Payment only; the column is not rendered for anybody else)
+// FEAT-051 / FEAT-078 — "จัดการบัตร" of one account (GOD/Admin only — `canManageCards`)
 const cardsOpen = ref(false)
 const cardsTarget = ref<TikTokAccount | null>(null)
 
@@ -1727,8 +1735,8 @@ onUnmounted(stopProxyPoll)
 
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
- * The list is a computed because some cells read `canPay`: the Balance cell's reload button and the "⋯" menu's
- * cards item must not exist at all for an Admin (FEAT-051 AC-35). Eight columns since
+ * The list is a computed because some cells read `canPay` / `canManageCards`: the Balance cell's reload button
+ * must not exist for an Admin (FEAT-051 AC-35) and the "⋯" menu's cards item not for a Payment-only viewer (FEAT-078). Eight columns since
  * the 2026-10-16 declutter, the Login email + Browser profile merge and the 2026-10-20 Label merge; ten since
  * FEAT-070 (Workspace + Proxy right after Account).
  */
