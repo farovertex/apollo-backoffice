@@ -289,6 +289,12 @@ export interface MonitorRow {
    * either). `AdsMonitorUtmCell` still renders `—` for a literal `undefined` rather than crashing.
    */
   utm: MonitorUtm | null
+  /**
+   * FEAT-082 §1 — **ad rows only**: the review/appeal summary of that creative, `null` when no review was ever
+   * captured. Campaign / ad-group rows do not carry the key, and an old stub without it reads exactly like
+   * `null` (spec "UI behaviour": a missing key never crashes the page).
+   */
+  review?: MonitorReviewSummary | null
 }
 
 /** Shared 200 envelope of the three list endpoints. */
@@ -417,4 +423,179 @@ export type BudgetConflictReason = 'pending' | 'banned' | 'notLoggedIn' | 'build
 export interface BudgetConflict {
   error: string
   reason: BudgetConflictReason
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// FEAT-082 — ad review detail (TikTok's "รายละเอียดการตรวจสอบโฆษณา") + appeal (api-contract.md v1 §0–§3)
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * §0 — the appeal state the API derives from TikTok's raw `appeal_status`:
+ * 1 → `none` · 2 → `appealing` · 3 → `approved` · 4 → `rejected` · anything else / null → `unknown`.
+ * The BO never re-derives it from `appealStatus`; it only renders what the API decided.
+ */
+export type AppealState = 'none' | 'appealing' | 'approved' | 'rejected' | 'unknown'
+
+/** The five TikTok appeal reasons — the value travels to the API, the text is what the form shows. */
+export type AppealReason = 1 | 2 | 3 | 4 | 5
+
+/**
+ * §0 — the five reason texts **verbatim** from TikTok's dialog (survey `ad-appeal.exploration.md` §2), in
+ * TikTok's own order. The form renders them as `am-appeal-reason-1 … -5`.
+ */
+export const APPEAL_REASONS: Record<AppealReason, string> = {
+  1: 'ฉันไม่คิดว่ามีการละเมิด',
+  2: 'เหตุผลในการปฏิเสธคลุมเครือเกินไป',
+  3: 'ฉันต้องการคำแนะนำสำหรับครั้งถัดไป',
+  4: 'โฆษณาที่คล้ายกันผ่านการตรวจสอบ',
+  5: 'ไม่ตรงกับข้อใดที่ระบุไว้ข้างต้น'
+}
+
+/** `APPEAL_REASONS` as an ordered list — what the radio group iterates (order is binding). */
+export const APPEAL_REASON_ITEMS: { value: AppealReason, label: string }[]
+  = ([1, 2, 3, 4, 5] as AppealReason[]).map(value => ({ value, label: APPEAL_REASONS[value] }))
+
+/** §0 — an appeal job is queued/running for this ad (mirror of `optPending`). */
+export interface AppealPendingView {
+  jobId: string
+  requestedAt: string
+  /** admin id, `null` when the CLI queued it */
+  requestedBy: string | null
+  reason: AppealReason
+}
+
+/** §0 — the last failed appeal; `reason` is a Thai sentence that is safe to show. */
+export interface AppealErrorView {
+  jobId: string | null
+  at: string
+  reason: string
+}
+
+/** §0 — the row-level summary of the last successful appeal. */
+export interface LastAppealSummary {
+  jobId: string
+  at: string
+  /** admin id */
+  by: string | null
+  reason: AppealReason
+}
+
+/** §0 — the detail-level view of the last appeal (`by` resolved, plus what the job captured). */
+export interface LastAppealView extends LastAppealSummary {
+  byAdmin: { id: string, username: string, displayName: string } | null
+  /** as typed by the admin, ≤ 2000 chars */
+  description: string
+  /** path only, never a query string; `null` until a real run captured it */
+  apiPath: string | null
+  tiktokCode: number | null
+  appealStatusAfter: number | null
+  dryRun: boolean
+}
+
+/**
+ * §1 — `AdRowView.review`: the ad-tab row summary, `null` for a row whose review was never captured.
+ * Campaign / ad-group rows do **not** carry the key at all, so it is optional here and a missing key is
+ * treated exactly like `null` (old fixtures must not crash the page, spec "UI behaviour").
+ */
+export interface MonitorReviewSummary {
+  appeal: AppealState
+  /** raw TikTok value */
+  appealStatus: number | null
+  /** first issue's `policy_title` */
+  policyTitle: string | null
+  issueCount: number
+  fetchedAt: string
+  /** last read error (Thai) — `issues` may still be present */
+  error: string | null
+  appealPending: AppealPendingView | null
+  appealError: AppealErrorView | null
+  lastAppeal: LastAppealSummary | null
+}
+
+/** §2 — one stored violation frame; `url` is a 15 min presigned GET, `null` when storage is off. */
+export interface ReviewFrameView {
+  key: string
+  url: string | null
+  expiresAt: string | null
+  capturedAt: string | null
+}
+
+/** §2 — one entry of TikTok's "เนื้อหาที่ถูกปฏิเสธ | รายละเอียดการปฏิเสธ" table. */
+export interface ReviewIssueView {
+  materialId: string
+  /** left column, e.g. "โพสต์รูปภาพ TikTok" */
+  contentTitle: string
+  /** right column heading, e.g. "การพนันและเกม" */
+  policyTitle: string
+  reasonType: number | null
+  reasonCode: number | null
+  /** the reviewer's sentence */
+  specification: string
+  suggestion: string
+  reasons: string[]
+  forbiddenCountries: string[]
+  /** pairs, e.g. `[[18, 24], [25, 34]]` */
+  forbiddenAges: number[][]
+  frames: ReviewFrameView[]
+}
+
+/** §2 — the `review` block of the detail view. */
+export interface ReviewBlockView {
+  fetchedAt: string
+  jobId: string | null
+  appeal: AppealState
+  appealStatus: number | null
+  auditStatus: number | null
+  auditResultType: number | null
+  /** last read error (Thai) — the previous `issues` are kept */
+  error: string | null
+  /** ≥ 1 frame could not be stored (Thai) */
+  framesError: string | null
+  issues: ReviewIssueView[]
+}
+
+/**
+ * §2 — why the "อุทธรณ์" button may not be pressed, in the API's own order. The BO never re-derives the rule,
+ * it only maps the code to a Thai tooltip (`appealableReasonText`).
+ */
+export type AppealableReason
+  = | 'noReview'
+    | 'appealPending'
+    | 'notAppealable'
+    | 'advertiserBanned'
+    | 'accountUnavailable'
+    | 'adGone'
+
+/** §2 — `GET /ads-monitor/ads/:adId/review` 200 body. `review: null` is a 200 too (never a 404). */
+export interface ReviewDetailView {
+  adId: string
+  name: string | null
+  tiktokCreativeId: string | null
+  advertiser: { id: string, name: string | null, tiktokAdvertiserId: string }
+  /** the same `MonitorStatusView` the list uses for this row */
+  status: MonitorStatus
+  review: ReviewBlockView | null
+  appealPending: AppealPendingView | null
+  appealError: AppealErrorView | null
+  lastAppeal: LastAppealView | null
+  appealable: { ok: boolean, reason: AppealableReason | null }
+}
+
+/** §3 — `POST /ads-monitor/appeal` body (strict on the API side; `dryRun` is CLI-only). */
+export interface AppealBody {
+  adId: string
+  reason: AppealReason
+  description: string
+}
+
+/** §3 — `POST /ads-monitor/appeal` 202 body. */
+export interface AppealAccepted {
+  jobId: string
+  appealPending: AppealPendingView
+}
+
+/** §3 — 409 body; `error` is the Thai sentence shown in the toast, `reason` the documented code. */
+export interface AppealConflict {
+  error: string
+  reason: AppealableReason
 }

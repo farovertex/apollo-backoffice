@@ -48,6 +48,10 @@
  * the 70vh box + pagination exceed the viewport), so the pinned header and totals row stay put instead of the
  * whole box sliding with the page. Scrolling with the pointer outside the table still moves the page as before.
  *
+ * FEAT-082 — no new column: the **ad tab**'s status cell gains the clickable `am-review-open` label and the
+ * `am-appeal-badge` (both inside `AdsMonitorStatusCell`, which only turns them on for `level === 'ad'`), and
+ * the table forwards the row to the page as `open-review`. Campaign / ad-group tabs are untouched (spec AS-5).
+ *
  * FEAT-067 — a collapsible "UTM" column (`AdsMonitorUtmCell`, spec "UI behaviour" → Cell / contract §4) is
  * inserted right after `name` on the ad-group / ad tabs and right after `cover` on the campaign tab; nothing
  * else moves. Its own `utmCollapsed` / `am-utm-collapse` mirror `nameCollapsed` / `am-name-collapse` exactly
@@ -85,6 +89,8 @@ const emit = defineEmits<{
   'update:utm-collapsed': [value: boolean]
   /** FEAT-064 — a row's `am-row-filter` was pressed; the page decides whether that narrows or clears (contract §5) */
   'filter-campaign': [campaignId: string]
+  /** FEAT-082 — ad tab only: the row's `am-review-open` was pressed, the page opens the review drawer */
+  'open-review': [row: MonitorRow]
 }>()
 
 /** TASK-campaign-delete-ui — a deleted row stays in the list, dimmed (`deletedAt` is set on all three tabs). */
@@ -389,6 +395,9 @@ function scheduleText(row: MonitorRow): string {
               v-else-if="column.key === 'status'"
               :status="row.status"
               :deleted-at="row.deletedAt"
+              :review="row.review ?? null"
+              :reviewable="level === 'ad'"
+              @open-review="emit('open-review', row)"
             />
 
             <AdsMonitorDeleteCell

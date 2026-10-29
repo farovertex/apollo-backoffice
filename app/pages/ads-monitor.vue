@@ -50,6 +50,12 @@
  * `clearFilters` — it only drives `AdsMonitorTable`'s rendering. The table also receives the page's
  * `rangeState` so its UTM cells can build `/reports/utm` links carrying the monitor's current range (spec
  * A5); no new request, no URL change.
+ *
+ * FEAT-082 (api-contract.md §2/§3/§6) — the **ad tab**'s status label becomes `am-review-open` for a row that
+ * has a `review`; it opens `AdsMonitorReviewDrawer`, which owns `GET /ads-monitor/ads/:adId/review`, the
+ * appeal form (`POST /ads-monitor/appeal`) and the 5 s poll while a job runs. No new page state beyond the
+ * opened row and no new URL key: the drawer's `update:review` lands in the existing `overrides` map, so the
+ * row's badge follows a 202 / poll outcome / close without a reload (spec "Polling while pending").
  */
 import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
@@ -59,6 +65,7 @@ import type {
   DeleteAccepted,
   MonitorLevel,
   MonitorLinkedFilter,
+  MonitorReviewSummary,
   MonitorRow,
   MonitorStatusFilter,
   SetBudgetAccepted,
@@ -183,7 +190,7 @@ let session = 0
  * on every load, because the response is then the truth again — so the optimistic "กำลังลบ…" survives a
  * re-render but never outlives a reload, where the API's own `deletePending` takes over (TASK-campaign-delete-ui).
  */
-type RowOverride = Partial<Pick<MonitorRow, 'optPending' | 'optError' | 'deletePending' | 'deleteError'>>
+type RowOverride = Partial<Pick<MonitorRow, 'optPending' | 'optError' | 'deletePending' | 'deleteError' | 'review'>>
 const overrides = ref<Record<string, RowOverride>>({})
 
 /**
@@ -373,6 +380,27 @@ const coversRow = ref<MonitorRow | null>(null)
 function showCovers(row: MonitorRow) {
   coversRow.value = row
   coversOpen.value = true
+}
+
+// ── FEAT-082 · review drawer + appeal (api-contract.md §2/§3/§6) ───────────────────────────────────────────────────
+/**
+ * Ad tab only (spec AS-5): the row's `am-review-open` opens `AdsMonitorReviewDrawer`, which owns the detail
+ * request, the appeal form and the 5 s poll. The page only keeps the row it was opened for and writes the
+ * drawer's `update:review` into the **same** `overrides` map the toggle/delete 202s use — so a 202, a poll
+ * outcome or simply closing the drawer updates that row's badge/button without a reload, and the next
+ * `load()` drops the override because the response is the truth again.
+ */
+const reviewOpen = ref(false)
+const reviewRow = ref<MonitorRow | null>(null)
+
+function showReview(row: MonitorRow) {
+  reviewRow.value = row
+  reviewOpen.value = true
+}
+
+function onReviewPatch(row: MonitorRow, review: MonitorReviewSummary | null) {
+  const key = rowKey(row)
+  overrides.value = { ...overrides.value, [key]: { ...overrides.value[key], review } }
 }
 
 // ── toggle ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -937,6 +965,7 @@ const intervalText = computed(() => {
               @update:name-collapsed="setNameCollapsed"
               @update:utm-collapsed="setUtmCollapsed"
               @filter-campaign="onFilterCampaign"
+              @open-review="showReview"
             />
 
             <div class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted">
@@ -971,5 +1000,11 @@ const intervalText = computed(() => {
     :row="budgetRow"
     :saving="budgetSaving"
     @confirm="confirmBudget"
+  />
+
+  <AdsMonitorReviewDrawer
+    v-model:open="reviewOpen"
+    :row="reviewRow"
+    @update:review="onReviewPatch"
   />
 </template>
