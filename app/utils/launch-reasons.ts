@@ -9,9 +9,8 @@ import type { RejectedReason, UnavailableReason } from '#shared/types/campaign-o
 export const UNAVAILABLE_REASON_TEXT: Record<UnavailableReason, string> = {
   inactive: 'Account is disabled',
   notLoggedIn: 'Not logged in — press Login on TikTok accounts',
-  needsHuman: 'Waiting for an OTP',
-  jobRunning: 'Login or sync is running',
-  buildInProgress: 'A build of another order is queued or running',
+  // legacy `sessionStatus: 'needsHuman'` rows only (FEAT-085: never written again, read as not logged in)
+  needsHuman: 'Not logged in — press Login on TikTok accounts',
   noActiveAdvertiser: 'No active advertiser'
 }
 

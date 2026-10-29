@@ -110,6 +110,18 @@
  * serves is cleared (A6, answer-driven, not computed from the template's own workspace). The scope line
  * `la-tpl-scope` (absent for `none`) and the three empty-state texts of `la-agt-empty` / `la-adt-empty` follow
  * `templateScopeKind`. `retryTemplates()` always re-runs with the current scope.
+ *
+ * FEAT-086 (spec "UI behaviour" §3, AC-22, api-contract §5/§6.1) — line `la-adgroup-guard` directly under
+ * `la-pause-after-publish`: the ad group guard this order will snapshot. `laGuardMode` (`inherit` default) +
+ * `laGuardRule` are page state like `pauseAfterPublish`. `la-adgroup-guard-text` (`data-mode`, `data-source`):
+ * custom → the order's rule (formatted with the selection's single currency, else "สกุลของบัญชี" +
+ * `la-adgroup-guard-currency-warn`), off → "ไม่ใช้กฎ…", inherit → from the selected advertisers' `adGroupGuard`
+ * blocks of `GET /launch/targets` (all the same → that rule + its layer · none → "ไม่มีกฎปิด ad group" · else
+ * `mixed` with the counts). `la-adgroup-guard-edit` opens `la-adgroup-guard-popover` (mode radio + RuleFields,
+ * apply disabled while invalid). `body()` adds `adGroupGuard` only when publishing with a mode other than inherit;
+ * the confirm modal gets the same text as `adGroupGuardText` (null when nothing would be guarded).
+ * The page has no draft/publish state of its own (the mode is the button pressed), so the line is always shown and
+ * says it applies to Create & publish only; Save as draft never sends the key.
  */
 import { formatTimeAgo, useLocalStorage } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -125,6 +137,7 @@ import type { AdTemplate, AdTemplateOptions, AdTemplatesResponse } from '#shared
 import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
 import type {
   CreateOrderBody,
+  CreateOrderCurrencyUnknownBody,
   CreateOrderRejectedBody,
   CreateOrderResponse,
   LaunchAccount,
@@ -133,6 +146,8 @@ import type {
   LaunchTargetsResponse,
   PublishMode
 } from '#shared/types/campaign-orders'
+import type { AdGroupGuardMode, AdGroupGuardRule, AdGroupGuardSource } from '#shared/types/ad-group-guard'
+import type { AdGroupGuardRuleDraft } from '~/utils/ad-group-guard'
 
 useSeoMeta({ title: 'Launch ads' })
 
@@ -186,7 +201,7 @@ function reconcileSelection() {
     const picked = selection.value[account.id]
     if (!picked) continue
     const advertiser = account.advertisers.find(a => a.id === picked)
-    const keep = advertiser?.selectable ? picked : computedDefaultId(account)
+    const keep = advertiser && isPickable(advertiser) ? picked : computedDefaultId(account)
     if (!keep) continue
     next[account.id] = keep
     // BUG-027/BUG-044 — a pick we had to re-point is not the user's choice any more: the row goes back to
@@ -280,12 +295,47 @@ function isFunded(account: LaunchAccount): boolean {
   return account.available && account.hasBalance && account.advertisers.some(a => a.selectable)
 }
 
-/** AS-8 — the API default when it is still selectable, else the first selectable advertiser of the account */
+/**
+ * FEAT-083 (spec AC-13) — an advertiser can be picked only when it is `selectable` **and** its effective currency
+ * is known (`currency !== null`, api-contract v1 §3). A null-currency advertiser is never auto-picked: every path
+ * below (computed default, select-all, row checkbox, funded re-resolve, reconcile) goes through this.
+ */
+const CURRENCY_UNKNOWN_HINT = 'กด Sync/อ่านยอดก่อน'
+function isPickable(advertiser: LaunchAdvertiser): boolean {
+  return advertiser.selectable && advertiser.currency !== null && advertiser.currency !== undefined
+}
+
+/** FEAT-083 — the account has at least one pickable advertiser; otherwise its checkbox is disabled */
+function accountPickable(account: LaunchAccount): boolean {
+  return account.advertisers.some(isPickable)
+}
+
+/** AS-8 — the API default when it is still pickable, else the first pickable advertiser of the account */
 function computedDefaultId(account: LaunchAccount): string | null {
   const def = account.defaultAdvertiserId
-  if (def && account.advertisers.find(a => a.id === def)?.selectable) return def
-  return account.advertisers.find(a => a.selectable)?.id ?? null
+  const defAdvertiser = def ? account.advertisers.find(a => a.id === def) : undefined
+  if (defAdvertiser && isPickable(defAdvertiser)) return def
+  return account.advertisers.find(isPickable)?.id ?? null
 }
+
+/** FEAT-083 — currency of the advertiser the row shows (`?` when unknown / none) */
+function accountCurrency(account: LaunchAccount): string {
+  return advertiserOf(account)?.currency ?? '?'
+}
+
+/**
+ * FEAT-083 (spec AC-15) — step-1 currency filter `la-filter-currency`: hides the accounts whose shown advertiser
+ * currency differs (unknown ones included); it never changes the selection by itself.
+ */
+const CURRENCY_ALL = 'all'
+const FALLBACK_CURRENCIES = ['THB', 'USD']
+const currencyFilter = ref<string>(CURRENCY_ALL)
+const currencyFilterItems = computed(() => {
+  const codes = agtOptions.value?.currency?.length
+    ? agtOptions.value.currency.map(item => ({ label: item.label, value: item.value }))
+    : FALLBACK_CURRENCIES.map(code => ({ label: code, value: code }))
+  return [{ label: 'ทุกสกุลเงิน', value: CURRENCY_ALL }, ...codes]
+})
 
 const workspaceItems = computed(() => {
   const seen = new Map<string, string>()
@@ -360,6 +410,7 @@ const searchFilteredAccounts = computed(() => {
   const q = accountSearch.value.trim().toLowerCase()
   return availableAccounts.value.filter((account) => {
     if (workspaceFilter.value !== 'all' && account.workspace?.id !== workspaceFilter.value) return false
+    if (currencyFilter.value !== CURRENCY_ALL && advertiserOf(account)?.currency !== currencyFilter.value) return false
     if (!q) return true
     const haystack = [
       account.label ?? '',
@@ -453,9 +504,8 @@ function setSelected(account: LaunchAccount, on: boolean) {
     manualPicks.value = without(manualPicks.value, [account.id])
     return
   }
-  const id = selection.value[account.id]
-    ?? computedDefaultId(account)
-    ?? account.advertisers.find(a => a.selectable)?.id
+  // FEAT-083 — `computedDefaultId` already falls back to the first pickable advertiser (never a null currency)
+  const id = selection.value[account.id] ?? computedDefaultId(account)
   if (!id) return
   selection.value = { ...selection.value, [account.id]: id }
 }
@@ -468,15 +518,17 @@ function without<T>(source: Record<string, T>, ids: string[]): Record<string, T>
 
 /** picking an advertiser selects its account too (human decision 1) — and marks it as a manual pick (BUG-027) */
 function pickAdvertiser(account: LaunchAccount, advertiser: LaunchAdvertiser) {
-  if (!advertiser.selectable) return
+  if (!isPickable(advertiser)) return
   selection.value = { ...selection.value, [account.id]: advertiser.id }
   manualPicks.value = { ...manualPicks.value, [account.id]: true }
 }
 
 /** header checkbox state over the **visible** rows only (api-contract §3) */
 const visibleSelectedCount = computed(() => filteredAccounts.value.filter(isSelected).length)
+/** FEAT-083 — the visible rows select-all can act on (an account with no pickable advertiser never counts) */
+const pickableVisibleAccounts = computed(() => filteredAccounts.value.filter(accountPickable))
 const selectAllState = computed<boolean | 'indeterminate'>(() => {
-  const total = filteredAccounts.value.length
+  const total = pickableVisibleAccounts.value.length
   const selected = visibleSelectedCount.value
   if (total === 0 || selected === 0) return false
   return selected === total ? true : 'indeterminate'
@@ -484,16 +536,16 @@ const selectAllState = computed<boolean | 'indeterminate'>(() => {
 
 /** click when not all visible selected → select every visible row; click when all selected → deselect them */
 function toggleSelectAllVisible() {
-  const rows = filteredAccounts.value
+  const rows = pickableVisibleAccounts.value
   if (rows.length === 0) return
-  if (visibleSelectedCount.value === rows.length) {
+  if (rows.every(isSelected)) {
     selection.value = without(selection.value, rows.map(a => a.id))
     manualPicks.value = without(manualPicks.value, rows.map(a => a.id))
     return
   }
   const picked: Record<string, string> = { ...selection.value }
   for (const account of rows) {
-    const id = picked[account.id] ?? computedDefaultId(account) ?? account.advertisers.find(a => a.selectable)?.id
+    const id = picked[account.id] ?? computedDefaultId(account)
     if (id) picked[account.id] = id
   }
   selection.value = picked
@@ -513,6 +565,7 @@ function toggleExpanded(id: string) {
 /** also turns the funded filter off (spec AC-9) — the search no-match state means it is time to see everything */
 function clearAccountSearch() {
   accountSearch.value = ''
+  currencyFilter.value = CURRENCY_ALL
   fundedOnly.value = false
   idleOnly.value = false
 }
@@ -630,6 +683,75 @@ const adTemplateId = ref<string | null>(null)
 const copies = ref(1)
 /** FEAT-066 — page state like `copies` (survives step changes); only sent on publish, never on draft */
 const pauseAfterPublish = ref(false)
+
+// ── FEAT-086 · ad group guard of the order (spec §3) ─────────────────────────────────────────────────────────────────
+const laGuardMode = ref<AdGroupGuardMode>('inherit')
+const laGuardRule = ref<AdGroupGuardRule | null>(null)
+const GUARD_MODES: AdGroupGuardMode[] = ['inherit', 'custom', 'off']
+const GUARD_POPOVER_MODE_LABEL: Record<AdGroupGuardMode, string> = {
+  inherit: 'ตามบัญชี / workspace',
+  custom: 'กำหนดเอง',
+  off: 'ไม่ใช้กฎ'
+}
+
+/** the `adGroupGuard` blocks of the selected advertisers (an absent key = no rule) */
+const guardBlocks = computed(() => selectedAccounts.value.map(account => effectiveOrNone(advertiserOf(account)?.adGroupGuard)))
+const guardCurrencies = computed(() => [...new Set(guardBlocks.value.map(b => b.currency).filter((c): c is string => !!c))])
+/** the selection mixes currencies — one custom rule is read in each account's own currency (A3) */
+const guardMixedCurrency = computed(() => guardCurrencies.value.length > 1)
+
+const guardSummary = computed<{ text: string, source: AdGroupGuardSource | 'mixed', applies: boolean }>(() => {
+  if (laGuardMode.value === 'off') return { text: 'ไม่ใช้กฎปิด ad group ใน order นี้', source: 'order', applies: false }
+  if (laGuardMode.value === 'custom' && laGuardRule.value) {
+    const currency = guardCurrencies.value.length === 1 ? guardCurrencies.value[0]! : null
+    return {
+      text: `ปิด ad group เมื่อ ${formatAdGroupGuardRule(laGuardRule.value, currency)} — กำหนดเองใน order นี้`,
+      source: 'order',
+      applies: true
+    }
+  }
+  const blocks = guardBlocks.value
+  const withRule = blocks.filter(b => b.rule)
+  if (withRule.length === 0) return { text: 'ไม่มีกฎปิด ad group', source: 'none', applies: false }
+  const first = blocks[0]!
+  const same = blocks.every(b => b.source === first.source && b.currency === first.currency && sameAdGroupGuardRule(b.rule, first.rule))
+  if (same && first.rule) {
+    const layer = first.source === 'account' ? 'กฎของบัญชี' : 'กฎของ workspace'
+    return { text: `ปิด ad group เมื่อ ${formatAdGroupGuardRule(first.rule, first.currency)} — ${layer}`, source: first.source, applies: true }
+  }
+  return {
+    text: `ตามกฎของแต่ละบัญชี (${withRule.length} มีกฎ · ${blocks.length - withRule.length} ไม่มี)`,
+    source: 'mixed',
+    applies: true
+  }
+})
+
+/** the confirm modal line — null when no target would be guarded */
+const guardConfirmText = computed(() => (guardSummary.value.applies ? guardSummary.value.text : null))
+
+// popover draft (applied to the page state only by "ใช้")
+const guardPopoverOpen = ref(false)
+const guardDraftMode = ref<AdGroupGuardMode>('inherit')
+const guardDraft = ref<AdGroupGuardRuleDraft>(emptyAdGroupGuardDraft())
+const guardDraftValid = ref(false)
+const guardCanApply = computed(() => guardDraftMode.value !== 'custom' || guardDraftValid.value)
+
+watch(guardPopoverOpen, (open) => {
+  if (!open) return
+  guardDraftMode.value = laGuardMode.value
+  guardDraft.value = adGroupGuardDraftOf(laGuardRule.value)
+})
+
+function applyGuard() {
+  if (!guardCanApply.value) return
+  if (guardDraftMode.value === 'custom') {
+    const parsed = parseAdGroupGuardDraft(guardDraft.value)
+    if (!parsed.rule) return
+    laGuardRule.value = parsed.rule
+  }
+  laGuardMode.value = guardDraftMode.value
+  guardPopoverOpen.value = false
+}
 const agtSearch = ref('')
 const adtSearch = ref('')
 
@@ -649,7 +771,20 @@ const adTemplate = computed(() => adtItems.value.find(t => t.id === adTemplateId
  * FEAT-062 — the client-side filter of a section; the input is **always** rendered now (AS-4): the frame is
  * five rows tall, so the filter is the way to find a row, not a fallback for "more than 8".
  */
-const agtFiltered = computed(() => filterByName(agtItems.value, agtSearch.value))
+/** FEAT-083 — the template currency (view `currency`, fallback `config.budget.currency` for an older API) */
+function agtCurrencyOf(template: AdGroupTemplate): string | null {
+  return template.currency ?? template.config?.budget?.currency ?? null
+}
+/**
+ * FEAT-083 (spec AC-16) — only the templates of the selection's currency are offered (client-side, the list is
+ * still fetched once per page lifetime); without a single selection currency nothing is hidden.
+ */
+const agtCurrencyItems = computed(() => {
+  const currency = selectionCurrency.value
+  return currency === null ? agtItems.value : agtItems.value.filter(t => agtCurrencyOf(t) === currency)
+})
+const agtCurrencyHidden = computed(() => agtItems.value.length - agtCurrencyItems.value.length)
+const agtFiltered = computed(() => filterByName(agtCurrencyItems.value, agtSearch.value))
 /**
  * FEAT-079 — "เฉพาะโพสต์ที่ใช้ได้": drops the rows whose post is deleted / refused / not checkable, before the
  * fold split. Never-checked (`postInfo` null) and `verifying` rows stay. Remembered across visits.
@@ -905,7 +1040,36 @@ const budgetTypeLabel = computed(() => labelOf(agtOptions.value?.budgetType, bud
 
 // ── stepper ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 const step = ref(1)
-const canLeaveStep1 = computed(() => selectedCount.value > 0)
+/**
+ * FEAT-083 (spec AC-14) — one currency per launch: the currencies of the selected advertisers (a selection only
+ * ever holds pickable = known-currency advertisers). More than one → Next disabled + `la-currency-mixed`.
+ */
+const selectionCurrencyCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const account of selectedAccounts.value) {
+    const advertiser = account.advertisers.find(a => a.id === selection.value[account.id])
+    const currency = advertiser?.currency ?? '?'
+    counts.set(currency, (counts.get(currency) ?? 0) + 1)
+  }
+  return counts
+})
+const selectionCurrencies = computed(() => [...selectionCurrencyCounts.value.keys()])
+const currencyMixed = computed(() => selectionCurrencies.value.length > 1)
+/** the single currency of the selection, `null` when nothing (or a mix) is selected */
+const selectionCurrency = computed(() =>
+  selectionCurrencies.value.length === 1 ? (selectionCurrencies.value[0] as string) : null
+)
+/** `THB 2 · USD 1` */
+const currencyMixedCounts = computed(() =>
+  [...selectionCurrencyCounts.value].map(([currency, n]) => `${currency} ${n}`).join(' · ')
+)
+const canLeaveStep1 = computed(() => selectedCount.value > 0 && !currencyMixed.value)
+
+/** FEAT-083 (AC-16) — a picked template of another currency (the selection changed after the pick) is dropped */
+watch([selectionCurrency, agtItems], ([currency]) => {
+  const picked = adGroupTemplate.value
+  if (picked && currency !== null && agtCurrencyOf(picked) !== currency) adGroupTemplateId.value = null
+})
 const canLeaveStep2 = computed(() => !!adGroupTemplateId.value && !!adTemplateId.value)
 const canSubmit = computed(() => canLeaveStep1.value && canLeaveStep2.value && nameError.value === null)
 
@@ -951,6 +1115,12 @@ function body(publishMode: PublishMode): CreateOrderBody {
     // FEAT-066 (A5) — omit the key unless publishing with the box checked; draft never sends it, and every
     // existing exact-body assertion that predates this flag keeps passing
     ...(publishMode === 'publish' && pauseAfterPublish.value ? { pauseAfterPublish: true } : {}),
+    // FEAT-086 — omitted for inherit and for every draft (the API answers 400 for draft + key)
+    ...(publishMode === 'publish' && laGuardMode.value !== 'inherit'
+      ? { adGroupGuard: laGuardMode.value === 'custom' && laGuardRule.value
+          ? { mode: 'custom' as const, rule: laGuardRule.value }
+          : { mode: 'off' as const } }
+      : {}),
     targets: selectedAccounts.value.map(account => ({
       tiktokAccountId: account.id,
       advertiserId: selection.value[account.id] as string
@@ -974,6 +1144,21 @@ function onRejected(rejected: CreateOrderRejectedBody['rejected']) {
   manualPicks.value = without(manualPicks.value, rejectedIds)
   step.value = 1
   // the readiness is stale — read it again
+  void loadTargets()
+}
+
+/** FEAT-083 — 409 `currencyUnknown`: drop those accounts, toast, back to step 1 and re-read the targets */
+function onCurrencyUnknown(advertisers: CreateOrderCurrencyUnknownBody['advertisers'], message: string) {
+  toast.add({
+    title: 'ยังไม่รู้สกุลเงินของ advertiser',
+    description: [message, ...advertisers.map(a => a.name)].filter(Boolean).join(' · '),
+    color: 'warning',
+    icon: 'i-lucide-triangle-alert'
+  })
+  const ids = advertisers.map(a => a.tiktokAccountId)
+  selection.value = without(selection.value, ids)
+  manualPicks.value = without(manualPicks.value, ids)
+  step.value = 1
   void loadTargets()
 }
 
@@ -1018,7 +1203,7 @@ async function create(publishMode: PublishMode) {
     })
     await navigateTo(`/orders/${res.order.id}`)
   } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody & CreateOrderRejectedBody>>
+    const err = e as FetchError<Partial<ApiErrorBody & CreateOrderRejectedBody & CreateOrderCurrencyUnknownBody>>
     const status = err.response?.status ?? err.statusCode
     const message = err.data?.error ?? err.message ?? 'Unexpected error'
     publishOpen.value = false
@@ -1026,6 +1211,10 @@ async function create(publishMode: PublishMode) {
     if (status === 409 && Array.isArray(rejected)) {
       formError.value = message
       onRejected(rejected)
+    } else if (status === 409 && err.data?.reason === 'currencyUnknown') {
+      // FEAT-083 (api-contract v1 §4) — same path as the readiness 409: back to step 1, re-read the targets
+      formError.value = message
+      onCurrencyUnknown(err.data.advertisers ?? [], message)
     } else if (status === 400 && err.data?.issues?.length) {
       onValidationIssues(err.data.issues)
     } else {
@@ -1090,7 +1279,9 @@ function advertiserCountLabel(account: LaunchAccount): string {
   return `${n} advertiser${n === 1 ? '' : 's'}`
 }
 
-const hasAccountSearch = computed(() => accountSearch.value.trim() !== '' || workspaceFilter.value !== 'all')
+const hasAccountSearch = computed(() =>
+  accountSearch.value.trim() !== '' || workspaceFilter.value !== 'all' || currencyFilter.value !== CURRENCY_ALL
+)
 const showAccountsEmpty = computed(() =>
   targetsLoaded.value && !targetsError.value && !forbidden.value && availableAccounts.value.length === 0
 )
@@ -1261,6 +1452,14 @@ onUnmounted(() => {
                     label="Only not launching"
                     data-testid="la-acc-idle"
                   />
+                  <USelect
+                    v-model="currencyFilter"
+                    :items="currencyFilterItems"
+                    :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
+                    class="min-w-32"
+                    aria-label="Currency"
+                    data-testid="la-filter-currency"
+                  />
                   <UButton
                     v-if="selectedCount > 0"
                     label="Clear"
@@ -1279,6 +1478,17 @@ onUnmounted(() => {
                     {{ selectedCount }} selected
                   </UBadge>
                 </div>
+
+                <!-- FEAT-083 (AC-14) — one currency per launch: a mixed selection blocks Next -->
+                <UAlert
+                  v-if="currencyMixed"
+                  color="warning"
+                  variant="subtle"
+                  icon="i-lucide-coins"
+                  title="เลือกได้ครั้งละหนึ่งสกุลเงิน"
+                  :description="currencyMixedCounts"
+                  data-testid="la-currency-mixed"
+                />
 
                 <UEmpty
                   v-if="showAccountsEmpty"
@@ -1398,6 +1608,7 @@ onUnmounted(() => {
                           :data-funded="isFunded(account) ? 'true' : 'false'"
                           :data-launching="account.launchingAds ? 'true' : 'false'"
                           :data-favorite="effectiveFavorite(account) ? 'true' : 'false'"
+                          :data-currency="accountPickable(account) ? accountCurrency(account) : 'unknown'"
                           data-slot="tr"
                           data-testid="la-acc-row"
                         >
@@ -1405,6 +1616,7 @@ onUnmounted(() => {
                             <UCheckbox
                               :model-value="isSelected(account)"
                               :aria-label="`Select ${accountName(account)}`"
+                              :disabled="!accountPickable(account) && !isSelected(account)"
                               data-testid="la-acc-check"
                               @update:model-value="(v: boolean | 'indeterminate') => setSelected(account, v === true)"
                             />
@@ -1465,8 +1677,16 @@ onUnmounted(() => {
                           <td class="border-b border-default px-3 py-2">
                             <div class="flex min-w-0 flex-col" data-testid="la-acc-adv">
                               <span class="truncate text-highlighted">{{ advertiserOf(account)?.name ?? '—' }}</span>
-                              <span class="flex items-center gap-1 text-xs text-muted">
+                              <span class="flex flex-wrap items-center gap-1 text-xs text-muted">
                                 <span>{{ advertiserOf(account)?.tiktokAdvertiserId ?? '—' }}</span>
+                                <UBadge
+                                  :color="accountCurrency(account) === '?' ? 'warning' : 'info'"
+                                  variant="subtle"
+                                  size="sm"
+                                  data-testid="la-acc-currency"
+                                >
+                                  {{ accountCurrency(account) }}
+                                </UBadge>
                                 <UBadge
                                   v-if="isAutoAdvertiser(account)"
                                   color="neutral"
@@ -1483,6 +1703,13 @@ onUnmounted(() => {
                                 :title="balanceAtTitle(account)"
                               >
                                 {{ balanceCell(account) }}
+                              </span>
+                              <span
+                                v-if="!accountPickable(account)"
+                                class="text-xs text-warning"
+                                data-testid="la-acc-currency-unknown"
+                              >
+                                {{ CURRENCY_UNKNOWN_HINT }}
                               </span>
                             </div>
                           </td>
@@ -1507,6 +1734,7 @@ onUnmounted(() => {
                                 :key="advertiser.id"
                                 :data-id="advertiser.id"
                                 :data-selectable="advertiser.selectable ? 'true' : 'false'"
+                                :data-currency="advertiser.currency ?? 'unknown'"
                                 data-testid="la-adv-option"
                                 class="flex flex-wrap items-center gap-2 rounded-md px-2 py-1"
                               >
@@ -1515,7 +1743,7 @@ onUnmounted(() => {
                                   class="size-4"
                                   :name="`advertiser-${account.id}`"
                                   :checked="selection[account.id] === advertiser.id"
-                                  :disabled="!advertiser.selectable"
+                                  :disabled="!isPickable(advertiser)"
                                   :aria-label="advertiser.name"
                                   data-testid="la-adv-radio"
                                   @change="pickAdvertiser(account, advertiser)"
@@ -1531,6 +1759,22 @@ onUnmounted(() => {
                                 >
                                   {{ advertiserBadge(advertiser).label }}
                                 </UBadge>
+                                <UBadge
+                                  v-if="advertiser.currency"
+                                  color="info"
+                                  variant="subtle"
+                                  size="sm"
+                                  data-testid="la-adv-currency"
+                                >
+                                  {{ advertiser.currency }}
+                                </UBadge>
+                                <span
+                                  v-else
+                                  class="text-xs text-warning"
+                                  data-testid="la-adv-currency-unknown"
+                                >
+                                  {{ CURRENCY_UNKNOWN_HINT }}
+                                </span>
                               </li>
                             </ul>
                           </td>
@@ -1690,8 +1934,16 @@ onUnmounted(() => {
                       data-testid="la-agt-search"
                     />
                   </div>
-                  <p v-if="!templatesPending && agtItems.length === 0" class="text-sm text-muted" data-testid="la-agt-empty">
-                    {{ agtEmptyText }}
+                  <!-- FEAT-083 (AC-16) — templates of another currency are not offered -->
+                  <p
+                    v-if="!templatesPending && agtCurrencyHidden > 0 && selectionCurrency"
+                    class="text-xs text-muted"
+                    data-testid="la-agt-currency-hidden"
+                  >
+                    ซ่อน {{ agtCurrencyHidden }} template สกุลอื่น ({{ selectionCurrency }})
+                  </p>
+                  <p v-if="!templatesPending && agtCurrencyItems.length === 0" class="text-sm text-muted" data-testid="la-agt-empty">
+                    {{ agtItems.length > 0 && selectionCurrency ? `ไม่มี template สกุล ${selectionCurrency}` : agtEmptyText }}
                   </p>
                   <!-- exactly 5 rows (5 × 52 px + the frame's own 2 px borders), the rest scrolls (AC-13) -->
                   <div
@@ -1711,6 +1963,7 @@ onUnmounted(() => {
                       :data-selected="template.id === adGroupTemplateId ? 'true' : 'false'"
                       data-stale="false"
                       :data-kind="agtKindOf(template) ?? undefined"
+                      :data-currency="agtCurrencyOf(template) ?? 'unknown'"
                       data-testid="la-agt-card"
                       class="grid h-13 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden
                         px-2 py-1.5 text-left hover:bg-elevated focus-visible:inset-ring-2
@@ -1769,6 +2022,7 @@ onUnmounted(() => {
                         data-selected="false"
                         data-stale="true"
                         :data-kind="agtKindOf(template) ?? undefined"
+                        :data-currency="agtCurrencyOf(template) ?? 'unknown'"
                         disabled
                         data-testid="la-agt-card"
                         class="grid h-13 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2
@@ -2174,10 +2428,17 @@ onUnmounted(() => {
                 <dd class="text-right text-highlighted">
                   {{ selectedWorkspaceCount }}
                 </dd>
+                <!-- FEAT-083 — the selection currency (`—` for none or a mix) -->
+                <dt class="text-muted">
+                  Currency
+                </dt>
+                <dd class="text-right text-highlighted" data-testid="la-sum-currency">
+                  {{ selectionCurrency ?? '—' }}
+                </dd>
                 <dt class="text-muted">
                   Ad group template
                 </dt>
-                <dd class="truncate text-right text-highlighted">
+                <dd class="truncate text-right text-highlighted" :data-id="adGroupTemplateId ?? ''" data-testid="la-agt-selected">
                   {{ adGroupTemplate?.name ?? '—' }}
                 </dd>
                 <dt class="text-muted">
@@ -2231,6 +2492,93 @@ onUnmounted(() => {
                 description="ระบบจะปิดให้หลังรอบ KPI ถัดไป"
                 data-testid="la-pause-after-publish"
               />
+
+              <!-- FEAT-086 — the ad group guard this order will snapshot (Create & publish only) -->
+              <div class="flex flex-col gap-1 rounded-md border border-default p-2 text-xs" data-testid="la-adgroup-guard">
+                <div class="flex items-start gap-2">
+                  <UIcon name="i-lucide-shield-alert" class="mt-0.5 size-4 shrink-0 text-muted" />
+                  <span
+                    class="min-w-0 grow break-words text-highlighted"
+                    data-testid="la-adgroup-guard-text"
+                    :data-mode="laGuardMode"
+                    :data-source="guardSummary.source"
+                  >{{ guardSummary.text }}</span>
+                  <UPopover v-model:open="guardPopoverOpen" :content="{ align: 'end', side: 'top' }">
+                    <UButton
+                      label="แก้"
+                      icon="i-lucide-pencil"
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      class="shrink-0"
+                      data-testid="la-adgroup-guard-edit"
+                    />
+                    <template #content>
+                      <div class="flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-3 p-3" data-testid="la-adgroup-guard-popover">
+                        <p class="text-sm font-semibold text-highlighted">
+                          กฎปิด ad group ของ order นี้
+                        </p>
+                        <div
+                          class="flex flex-wrap items-center gap-1"
+                          role="radiogroup"
+                          aria-label="กฎปิด ad group ของ order นี้"
+                          data-testid="la-adgroup-guard-mode"
+                          :data-mode="guardDraftMode"
+                        >
+                          <UButton
+                            v-for="mode in GUARD_MODES"
+                            :key="mode"
+                            :label="GUARD_POPOVER_MODE_LABEL[mode]"
+                            :color="guardDraftMode === mode ? 'primary' : 'neutral'"
+                            :variant="guardDraftMode === mode ? 'solid' : 'outline'"
+                            size="xs"
+                            role="radio"
+                            :aria-checked="guardDraftMode === mode"
+                            :data-testid="`la-adgroup-guard-mode-${mode}`"
+                            @click="guardDraftMode = mode"
+                          />
+                        </div>
+                        <AdGroupGuardRuleFields
+                          v-if="guardDraftMode === 'custom'"
+                          v-model="guardDraft"
+                          testid="la-adgroup-guard"
+                          :currency="guardCurrencies.length === 1 ? guardCurrencies[0]! : null"
+                          @valid="guardDraftValid = $event"
+                        />
+                        <p v-else-if="guardDraftMode === 'inherit'" class="text-xs text-muted">
+                          ใช้กฎที่ตั้งไว้ที่บัญชีหรือ workspace ของแต่ละบัญชี
+                        </p>
+                        <p v-else class="text-xs text-muted">
+                          ไม่ปิด ad group อัตโนมัติใน order นี้
+                        </p>
+                        <div class="flex justify-end gap-2">
+                          <UButton
+                            label="ยกเลิก"
+                            color="neutral"
+                            variant="subtle"
+                            size="sm"
+                            data-testid="la-adgroup-guard-cancel"
+                            @click="guardPopoverOpen = false"
+                          />
+                          <UButton
+                            label="ใช้"
+                            size="sm"
+                            :disabled="!guardCanApply"
+                            data-testid="la-adgroup-guard-apply"
+                            @click="applyGuard"
+                          />
+                        </div>
+                      </div>
+                    </template>
+                  </UPopover>
+                </div>
+                <span
+                  v-if="guardMixedCurrency && laGuardMode === 'custom'"
+                  class="text-warning"
+                  data-testid="la-adgroup-guard-currency-warn"
+                >บัญชีที่เลือกมีหลายสกุลเงิน — ตัวเลขจะถูกใช้ตามสกุลของแต่ละบัญชี</span>
+                <span class="text-dimmed">ใช้กับ Create &amp; publish เท่านั้น</span>
+              </div>
 
               <!--
                 FEAT-062 — one DOM instance of the step actions (AS-2): the last block of the sticky aside at
@@ -2298,6 +2646,7 @@ onUnmounted(() => {
         :cbo="budgetIsCbo"
         :submitting="submitting"
         :pause-after-publish="pauseAfterPublish"
+        :ad-group-guard-text="guardConfirmText"
         @confirm="confirmPublish"
       />
     </template>

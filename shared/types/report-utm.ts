@@ -9,9 +9,11 @@
  * Days are `YYYY-MM-DD` strings on Thai time (`timezone` of the envelope is the constant `Asia/Bangkok`);
  * `fetchedAt` / `sourceUpdatedAt` / `refreshedAt` are ISO instants.
  */
+import type { FxReportBlock, SpendFx, SpendFxRow } from './fx'
 
 /** One row of `GET /reports/utm` — exactly these 19 keys (contract §2.2; `detail` is never served). */
-export interface UtmReportRow {
+/** FEAT-084 — `spend` / `costPerDeposit` are THB; + 3 keys (22) */
+export interface UtmReportRow extends SpendFxRow {
   /** `YYYY-MM-DD`, Thai day */
   day: string
   prefix: string
@@ -42,7 +44,8 @@ export interface UtmReportRow {
 }
 
 /** `totals` of the envelope — exactly these 8 keys, over every matching row **before** `limit` (contract §2.2). */
-export interface UtmReportTotals {
+/** FEAT-084 — + `spendByCurrency` / `spendUnconverted` (10) */
+export interface UtmReportTotals extends SpendFx {
   /** = `total` of the envelope */
   rows: number
   registers: number
@@ -72,6 +75,8 @@ export interface UtmReportResponse {
   refreshedAt: string | null
   /** `UTM_POLL_INTERVAL_MS` of the API */
   intervalMs: number
+  /** FEAT-084 §2.3 */
+  fx?: FxReportBlock
 }
 
 /** `POST /utm/fetch` **202** body (contract §3). Today the API answers 501 `{ error }` until Feature B lands. */

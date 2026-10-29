@@ -60,6 +60,9 @@
  * (success) · `failed` ปิด campaign ไม่สำเร็จ (error, `title` = `pause.reason`); the expanded row
  * (`od-build-expanded`) repeats the reason as `od-build-pause-reason` when `failed`. No new request — the
  * page's existing 5 s poll (while a build is `queued`/`running`) keeps every badge current.
+ * FEAT-086 (spec §4, AC-23) — under the builds table, section `od-adgroup-guard-list` with one
+ * `AdGroupGuardBuildCard` (`od-adgroup-guard`) per build whose `adGroupGuard` snapshot is non-null. Same body, no
+ * new request or polling (A11).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -96,6 +99,8 @@ const sparkPostCode = computed(() => {
 // ── data ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const order = ref<OrderDetail | null>(null)
 const builds = ref<BuildView[]>([])
+/** FEAT-086 — builds with an ad group guard snapshot (`null` / absent = created before the feature → no card) */
+const guardBuilds = computed(() => builds.value.flatMap(build => (build.adGroupGuard ? [{ build, guard: build.adGroupGuard }] : [])))
 const pending = ref(true)
 const loaded = ref(false)
 const error = ref<string | null>(null)
@@ -585,8 +590,9 @@ const campaignSnapshot = computed(() => {
   parts.push(CAMPAIGN_BID_TEXT[campaign.bidStrategy ?? ''] ?? String(campaign.bidStrategy ?? '—'))
   if (Number.isFinite(targetCpa)) {
     // `lifetime` only so the helper does not append " / day" — a target CPA is not a daily budget
-    const currency = budget?.currency ?? order.value?.budget?.currency ?? 'THB'
-    parts.push(`target CPA ${formatBudgetAmount(targetCpa as number, { type: 'lifetime', amount: 0, currency })}`)
+    // FEAT-083 — no guessed `THB`: a budget without a currency prints `?`
+    const currency = budget?.currency ?? order.value?.budget?.currency ?? null
+    parts.push(`target CPA ${formatBudgetAmount(targetCpa as number, { type: 'lifetime', currency })}`)
   }
   return { text: parts.join(' · '), name: campaign.name ?? null }
 })
@@ -1156,6 +1162,21 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                 </tbody>
               </table>
             </div>
+
+            <!-- FEAT-086 — ad group guard snapshot per build (only builds that carry one; no request of its own) -->
+            <section v-if="guardBuilds.length" class="flex flex-col gap-2" data-testid="od-adgroup-guard-list">
+              <h2 class="text-sm font-semibold text-highlighted">
+                กฎปิด ad group
+              </h2>
+              <div class="grid items-start gap-2 lg:grid-cols-2">
+                <AdGroupGuardBuildCard
+                  v-for="entry in guardBuilds"
+                  :key="entry.build.id"
+                  :build="entry.build"
+                  :guard="entry.guard"
+                />
+              </div>
+            </section>
           </template>
 
           <ReportsOrderReportPanel

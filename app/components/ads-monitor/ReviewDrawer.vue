@@ -18,6 +18,10 @@
  * so the row's badge/button are right without a reload — the same optimistic-override mechanism the budget
  * and delete flows use (`ads-monitor.vue` → `overrides`).
  *
+ * FEAT-085 (merged 2026-10-29) — the appeal 409 goes through `appealConflictToast()`, the drawer's copy of
+ * `ads-monitor.vue`'s `conflictToast()`: a shared `duplicate` body reads "มีงานนี้รออยู่แล้ว (ลำดับที่ n)", every
+ * FEAT-082 reason keeps the "ทำไม่ได้" + API sentence of contract §3.
+ *
  * QA escape hatch (like FEAT-081's `__FEAT081_POLL_CAP_MS`): `window.__FEAT082_POLL_MS` /
  * `window.__FEAT082_POLL_CAP_MS` (positive numbers) are read **once per poll start**. Nothing in the app
  * ever sets them.
@@ -34,6 +38,7 @@ import type {
 } from '#shared/types/ads-monitor'
 import { APPEAL_REASONS, APPEAL_REASON_ITEMS } from '#shared/types/ads-monitor'
 import type { ApiErrorBody } from '#shared/types/auth'
+import type { MaybeDuplicateBody } from '~/utils/job-queue'
 
 const props = defineProps<{
   /** the ad row whose status button was pressed; `null` before the first open */
@@ -282,6 +287,20 @@ function closeForm() {
   description.value = ''
 }
 
+/**
+ * The 409 toast. FEAT-082's own reasons (`noReview` / `appealPending` / `notAppealable` / `advertiserBanned` /
+ * `accountUnavailable` / `adGone`, contract §3) are a plain "ทำไม่ได้" with the API's Thai sentence — but since
+ * FEAT-085 every job-creating endpoint may answer the shared `duplicate` body instead, so this reads exactly
+ * like `ads-monitor.vue`'s `conflictToast()` ("มีงานนี้รออยู่แล้ว (ลำดับที่ n)") when it does.
+ */
+function appealConflictToast(body: MaybeDuplicateBody | undefined, message: string) {
+  if (isDuplicate(body)) {
+    toast.add({ title: duplicateText(body?.queuePosition), description: message, icon: 'i-lucide-clock', color: 'warning' })
+    return
+  }
+  toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+}
+
 async function submitAppeal() {
   const id = adId.value
   if (!id || reason.value === null || submitting.value) return
@@ -297,10 +316,10 @@ async function submitAppeal() {
     toast.add({ title: 'ส่งคำร้องเข้าคิวแล้ว', icon: 'i-lucide-circle-check', color: 'success' })
     startPoll()
   } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
+    const err = e as FetchError<Partial<ApiErrorBody & MaybeDuplicateBody>>
     const message = err.data?.error ?? err.message ?? 'ยื่นอุทธรณ์ไม่ได้'
     if ((err.response?.status ?? err.statusCode) === 409) {
-      toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+      appealConflictToast(err.data, message)
       closeForm()
       await load(true)
       emitPatch()

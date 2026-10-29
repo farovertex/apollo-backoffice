@@ -109,13 +109,19 @@ export function buildSegments(
     }))
 }
 
-/** `#,##0.00 THB` (+ ` / day` when the budget is a daily one) */
-export function formatBudgetAmount(amount: number, budget: AdGroupBudget | null | undefined): string {
+/**
+ * `#,##0.00 THB` (+ ` / day` when the budget is a daily one). FEAT-083 — the currency is printed as stored; a budget
+ * without one shows `?` (never a guessed `THB`).
+ */
+export function formatBudgetAmount(
+  amount: number,
+  budget: { type?: AdGroupBudget['type'] | string | null, currency?: string | null } | null | undefined
+): string {
   const text = new Intl.NumberFormat('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(Number.isFinite(amount) ? amount : 0)
-  const currency = budget?.currency ?? 'THB'
+  const currency = budget?.currency || '?'
   return `${text} ${currency}${budget?.type === 'daily' ? ' / day' : ''}`
 }
 

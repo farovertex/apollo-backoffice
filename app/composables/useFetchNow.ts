@@ -57,10 +57,12 @@ export function useFetchNow() {
   }
 
   /**
-   * `POST /advertisers/:id/report/fetch-now`. Returns the 202 body, or `null` when the API refused
-   * (409 and every other failure are shown as a toast with the API text — never a silent no-op).
+   * `POST /advertisers/:id/report/fetch-now`. Returns the 202 body, `'duplicate'` when a kpi job of the account is
+   * already pending/waiting/active (FEAT-085 409 `duplicate` → warning "มีงานนี้รออยู่แล้ว (ลำดับที่ n)"; the caller
+   * re-reads and follows that job), or `null` when the API refused (`notLoggedIn` / `inactive` and every other
+   * failure are shown as a toast with the API text — never a silent no-op).
    */
-  async function request(advertiserId: string): Promise<FetchNowResponse | null> {
+  async function request(advertiserId: string): Promise<FetchNowResponse | 'duplicate' | null> {
     if (!advertiserId || requesting.value) return null
     requesting.value = true
     try {
@@ -74,6 +76,10 @@ export function useFetchNow() {
     } catch (e) {
       const err = e as FetchError<Partial<ApiErrorBody & FetchNowConflictBody>>
       const status = err.response?.status ?? err.statusCode
+      if (status === 409 && err.data?.reason === 'duplicate') {
+        toast.add({ title: duplicateText(err.data.queuePosition), description: err.data.error, color: 'warning' })
+        return 'duplicate'
+      }
       const message = err.data?.error ?? err.message ?? 'ดึงข้อมูลไม่สำเร็จ'
       toast.add({
         title: 'ดึงตอนนี้ไม่สำเร็จ',

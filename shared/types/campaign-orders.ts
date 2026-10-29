@@ -33,10 +33,15 @@ import type { AdvertiserStatus } from './advertisers'
 import type { SessionStatus } from './tiktok-accounts'
 import type { AdGroupBudget, AdGroupConfig } from './ad-group-templates'
 import type { AdConfig } from './ad-templates'
+import type { AdGroupGuardEffective, AdGroupGuardLayerBody, BuildAdGroupGuard, OrderAdGroupGuard } from './ad-group-guard'
 
-/** Why a TikTok account cannot be launched right now (api-contract §4, evaluated in this order). */
+/**
+ * Why a TikTok account cannot be launched right now (api-contract §4, evaluated in this order). FEAT-085: a
+ * running/pending job never makes an account unavailable any more (`jobRunning` / `buildInProgress` are gone);
+ * `needsHuman` survives only for legacy `sessionStatus` rows.
+ */
 export type UnavailableReason
-  = 'inactive' | 'notLoggedIn' | 'needsHuman' | 'jobRunning' | 'buildInProgress' | 'noActiveAdvertiser'
+  = 'inactive' | 'notLoggedIn' | 'needsHuman' | 'noActiveAdvertiser'
 
 /** `POST /campaign-orders` 409 reasons = the readiness reasons plus the per-advertiser check. */
 export type RejectedReason = UnavailableReason | 'advertiserNotSelectable'
@@ -51,8 +56,18 @@ export interface LaunchAdvertiser {
   missingSince: string | null
   /** 0-based position in the Business Center list; null until a discover round wrote it */
   bcOrder: number | null
+  /**
+   * FEAT-083 (api-contract v1 §3) — effective currency (`currencyOfAdvertiser`: own `currency` → account
+   * `balanceCurrency` → null). `null` = unknown → the BO never lets it be picked ("กด Sync/อ่านยอดก่อน").
+   */
+  currency: string | null
   /** `status === 'active' && missingSince === null` — only these can be picked */
   selectable: boolean
+  /**
+   * FEAT-086 (api-contract §5, appended) — the account + workspace layer of the ad group guard resolved with this
+   * advertiser's currency. Optional for the reader (an older API reads as "no rule").
+   */
+  adGroupGuard?: AdGroupGuardEffective
 }
 
 /** One TikTok account of `GET /launch/targets` (available accounts first, then label/loginEmail). */
@@ -133,6 +148,8 @@ export interface CreateOrderBody {
   publishMode: PublishMode
   /** FEAT-066 — omit the key unless true (API default is `false`; `draft` + `true` is a 400) */
   pauseAfterPublish?: boolean
+  /** FEAT-086 (§6.1) — omitted for `inherit` and for every draft (`draft` + key = 400) */
+  adGroupGuard?: AdGroupGuardLayerBody
   targets: CreateOrderTarget[]
 }
 
@@ -167,6 +184,8 @@ export interface OrderView {
   updatedAt: string
   /** FEAT-066 — immutable, copied from the create body */
   pauseAfterPublish: boolean
+  /** FEAT-086 (§6.2, key 17) — the order's own layer; older rows `{ inherit, null }`; optional for the reader */
+  adGroupGuard?: OrderAdGroupGuard
 }
 
 /**
@@ -268,6 +287,11 @@ export interface BuildView {
   pauseAfterPublish: boolean
   /** FEAT-066 — `null` unless `pauseAfterPublish`; reset to `null` on every retry */
   pause: BuildPauseView | null
+  /**
+   * FEAT-086 (§6.3, key 23) — snapshot of the ad group guard taken at create, kept by retries; `null` for builds
+   * created before the feature (and `undefined` from an older API — same meaning).
+   */
+  adGroupGuard?: BuildAdGroupGuard | null
 }
 
 /** `POST /campaign-orders` 201 body. */
@@ -308,12 +332,22 @@ export interface CreateOrderRejectedBody {
 }
 
 /**
+ * FEAT-083 (api-contract v1 §4) — 409 of `POST /campaign-orders` when a target's effective currency is unknown;
+ * every unknown target in body order. Nothing was written.
+ */
+export interface CreateOrderCurrencyUnknownBody {
+  error: string
+  reason: 'currencyUnknown'
+  advertisers: Array<{ tiktokAccountId: string, advertiserId: string, name: string }>
+}
+
+/**
  * 409 body of `POST /builds/:id/cancel`, `/stop-before-publish` and `/retry` (carries the current build
- * status). FEAT-055 — `/retry` adds `reason: 'buildInProgress'` when the account already has another
- * `queued`/`running` build; absent for every other 409 shape.
+ * status). FEAT-085 — the FEAT-055 `reason: 'buildInProgress'` of `/retry` is gone (a retried build simply
+ * queues behind the account's other build); `/retry` answers `retryFailedOrCancelledOnly` / `retryAccountGone`.
  */
 export interface BuildConflictBody {
   error: string
   status: BuildStatus
-  reason?: 'buildInProgress'
+  reason?: 'retryFailedOrCancelledOnly' | 'retryAccountGone' | 'invalidState'
 }

@@ -16,7 +16,9 @@
  * one. Rendered by `AdsMonitorUtmCell` as a collapsible column right after `name` (campaign tab: after
  * `cover`), linking to `/reports/utm` pre-filtered to that set + the monitor's current range.
  */
+import type { FxReportBlock, SpendFx, SpendThbRow, ThbBlock } from './fx'
 import type { BannedAd } from './report-banned'
+import type { OpenJobStatus } from './tiktok-accounts'
 import type { KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
 
 /** API level enum (contract §1 — `ad` is TikTok's `creative`). */
@@ -130,6 +132,8 @@ export interface MonitorAccountBalance {
   at: string | null
   /** last read error — a sentence safe to show */
   error: string | null
+  /** FEAT-080 — `amount` at the latest rate; `null` when it cannot be converted */
+  thb: ThbBlock | null
 }
 
 export interface MonitorAccountRef {
@@ -156,6 +160,9 @@ export interface MonitorNamedRef {
 export interface MonitorBudget {
   amount: number | null
   mode: string | null
+  /** FEAT-080 — `advertisers` currency (own → BC wallet) */
+  currency: string | null
+  thb: ThbBlock | null
 }
 
 /** FEAT-060 — `advertisers.budget.edits`: the modal's daily edit-quota counter. */
@@ -192,6 +199,8 @@ export interface MonitorAdvertiserBudget {
   error: string | null
   /** why the button may not be pressed, computed by the API — the BO never re-derives this rule */
   settable: { ok: boolean, reason: string | null }
+  /** FEAT-080 — `amount` at the latest rate; `null` for unlimited / THB / unknown */
+  thb: ThbBlock | null
 }
 
 export interface MonitorBid {
@@ -235,8 +244,8 @@ export interface MonitorUtm extends MonitorUtmSet {
   others: MonitorUtmSet[]
 }
 
-/** One row of any tab (contract §3.1 / §3.2 / §3.3). */
-export interface MonitorRow {
+/** One row of any tab (contract §3.1 / §3.2 / §3.3). FEAT-084 §3 — + `currency` / `spendThb` / `spendUnconverted`. */
+export interface MonitorRow extends SpendThbRow {
   level: MonitorLevel
   /** the TikTok id of this level — the `tiktokId` of a toggle */
   id: string
@@ -297,8 +306,8 @@ export interface MonitorRow {
   review?: MonitorReviewSummary | null
 }
 
-/** Shared 200 envelope of the three list endpoints. */
-export interface AdsMonitorResponse {
+/** Shared 200 envelope of the three list endpoints. FEAT-084 §3 — `totals` THB + `spendByCurrency` / `spendUnconverted` / `fx`. */
+export interface AdsMonitorResponse extends SpendFx {
   rows: MonitorRow[]
   page: number
   limit: number
@@ -316,6 +325,7 @@ export interface AdsMonitorResponse {
    * otherwise `{ id: <query value>, name }` with `name` from the newest matching group, `null` when none.
    */
   campaign: { id: string, name: string | null } | null
+  fx?: FxReportBlock
 }
 
 /** `POST /ads-monitor/toggle` body (strict on the API side). */
@@ -351,22 +361,34 @@ export interface DeleteAccepted {
   deletePending: DeletePendingView
 }
 
-/** Why a delete was refused, in the API's own order. */
-export type DeleteConflictReason = 'deletePending' | 'optPending' | 'banned' | 'notLoggedIn' | 'buildInProgress'
+/**
+ * Why a delete was refused. FEAT-085 (api-contract §2.2/§3): `deletePending` / `optPending` / `buildInProgress`
+ * are gone — a delete or switch job of the same campaign answers `duplicate` (with that job's id / position).
+ */
+export type DeleteConflictReason = 'duplicate' | 'banned' | 'notLoggedIn'
 
-/** `POST /ads-monitor/delete-campaign` 409 body — `error` is the Thai sentence shown in the toast. */
+/**
+ * `POST /ads-monitor/delete-campaign` 409 body — `error` is the Thai sentence shown in the toast. `jobId` /
+ * `status` / `queuePosition` only on `duplicate` (queuePosition null unless that job is `pending`).
+ */
 export interface DeleteConflict {
   error: string
   reason: DeleteConflictReason
+  jobId?: string
+  status?: OpenJobStatus
+  queuePosition?: number | null
 }
 
-/** Why a toggle was refused (contract §4 step 3). */
-export type ToggleConflictReason = 'pending' | 'banned' | 'notLoggedIn' | 'buildInProgress'
+/** Why a toggle was refused. FEAT-085: `pending` / `buildInProgress` are gone, `duplicate` is new. */
+export type ToggleConflictReason = 'duplicate' | 'banned' | 'notLoggedIn'
 
-/** `POST /ads-monitor/toggle` 409 body — `error` is the Thai sentence shown in the toast. */
+/** `POST /ads-monitor/toggle` 409 body — `error` is the Thai sentence shown in the toast (extra keys on `duplicate`). */
 export interface ToggleConflict {
   error: string
   reason: ToggleConflictReason
+  jobId?: string
+  status?: OpenJobStatus
+  queuePosition?: number | null
 }
 
 /**
@@ -396,6 +418,8 @@ export interface AdvertiserBudgetView {
   setAt: string | null
   lastError: string | null
   edits: AdvertiserBudgetEdits | null
+  /** FEAT-080 (`toBudgetView` 8th key) — `amount` at the latest rate */
+  thb: ThbBlock | null
 }
 
 /** `POST /advertisers/:advertiserId/budget` 202 body. */
@@ -416,13 +440,16 @@ export interface SetBudgetUnchanged {
   budget: AdvertiserBudgetView
 }
 
-/** Why a budget set was refused, in the API's own order (contract §2 step 4). */
-export type BudgetConflictReason = 'pending' | 'banned' | 'notLoggedIn' | 'buildInProgress' | 'notDiscovered'
+/** Why a budget set was refused. FEAT-085: `pending` / `buildInProgress` are gone, `duplicate` is new. */
+export type BudgetConflictReason = 'duplicate' | 'banned' | 'notLoggedIn' | 'notDiscovered'
 
 /** `POST /advertisers/:advertiserId/budget` 409 body — `error` is the Thai sentence shown in the toast. */
 export interface BudgetConflict {
   error: string
   reason: BudgetConflictReason
+  jobId?: string
+  status?: OpenJobStatus
+  queuePosition?: number | null
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────

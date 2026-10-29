@@ -20,7 +20,8 @@ useSeoMeta({ title: 'Dashboard' })
 const CHARTS: readonly DashboardChart[] = ['daily', 'hourly']
 const LOAD_FALLBACK = 'โหลดรายงานไม่สำเร็จ'
 const EMPTY_TEXT = 'ไม่มี spend และไม่มียอด UTM ในช่วงนี้ — ลองเลือกช่วงวันอื่น'
-const NOTE_TEXT = 'spend หน่วยตามสกุลของ ad account ไม่แปลงค่า · วันของ spend ตัดตามเวลาของรอบ kpi ยอด UTM ตัดเวลาไทย · ยอด UTM ของ key ที่หลาย workspace ใช้ร่วมนับเต็มให้ทุก workspace'
+// FEAT-084 — the currency sentence comes from the response's `fx` (`fxReportCaption`); the timing sentences stay
+const NOTE_TIMING = 'วันของ spend ตัดตามเวลาของรอบ kpi ยอด UTM ตัดเวลาไทย · ยอด UTM ของ key ที่หลาย workspace ใช้ร่วมนับเต็มให้ทุก workspace'
 
 const api = useApi()
 const scope = useReportScopeState({ key: 'chart', values: CHARTS, fallback: 'daily' })
@@ -85,6 +86,8 @@ onMounted(() => {
 onUnmounted(() => {
   session++
 })
+
+const noteText = computed(() => `${fxReportCaption(report.value?.fx)} · ${NOTE_TIMING}`)
 
 const ready = computed(() => report.value !== null && nowState.value !== null)
 const showSkeleton = computed(() => pending.value && !ready.value && !error.value && !forbidden.value)
@@ -211,7 +214,13 @@ const pageState = computed(() => {
               {{ EMPTY_TEXT }}
             </p>
 
-            <ReportDashboardFunnelSection :funnel="report.funnel" :previous="report.previousFunnel" />
+            <MoneyNote mode="thb" :fx="report.fx" class="self-start" />
+
+            <ReportDashboardFunnelSection :funnel="report.funnel" :previous="report.previousFunnel" :fx="report.fx">
+              <template #hero-extra>
+                <ReportDashboardBalanceTile :now="report.now" :by-workspace="report.byWorkspace" />
+              </template>
+            </ReportDashboardFunnelSection>
 
             <ReportDashboardChartCard
               :chart="scope.extraValue.value"
@@ -242,7 +251,7 @@ const pageState = computed(() => {
             </section>
 
             <p class="text-xs text-muted" data-testid="rd-note">
-              {{ NOTE_TEXT }}
+              {{ noteText }}
             </p>
           </div>
         </template>

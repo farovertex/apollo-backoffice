@@ -27,6 +27,7 @@
 
 import type { AdvertiserReport } from './reports'
 import type { TopupView } from './topups'
+import type { AdvertiserBudgetView } from './ads-monitor'
 
 export type AdvertiserStatus = 'active' | 'suspended' | 'unknown'
 
@@ -152,6 +153,11 @@ export interface Advertiser {
    * needs no extra request. Optional for readers of an API that predates the feature.
    */
   report?: AdvertiserReport
+  /**
+   * TASK-budget-job / FEAT-060 / FEAT-080 — the advertiser's spending cap as the API serves it (`toBudgetView`,
+   * 8 keys incl. `thb`). Typed by FEAT-084 for the slideover's money cell; optional for an older API / a stub.
+   */
+  budget?: AdvertiserBudgetView | null
 }
 
 /** `GET /tiktok-accounts/:id/advertisers` 200 body (first paginated envelope of apollo-api). */

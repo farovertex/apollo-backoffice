@@ -14,6 +14,7 @@
  * account balance added. `rp-row-balance` is gone from `AdsTable.vue`.
  */
 import type { OrderStatus, PublishMode } from './campaign-orders'
+import type { SpendFx, SpendThbRow } from './fx'
 
 /** The one metric block of the whole feature (contract §2.3). Rates are null when their denominator is 0. */
 export interface KpiMetrics {
@@ -108,7 +109,8 @@ export interface AdRowAdvertiser {
 }
 
 /** One row of `GET /reports/ads` — also the row of the order Report tab and the header of the slideover. */
-export interface AdReportRow {
+/** FEAT-084 §4 — + `currency` / `spendThb` / `spendUnconverted` (26 keys); `metrics.spend` stays raw */
+export interface AdReportRow extends SpendThbRow {
   id: string
   workspace: { id: string, name: string | null }
   /** TASK-account-label (2026-10-14) — `loginEmail` joined `label` so the BO can fall back when there is no label */
@@ -269,7 +271,8 @@ export type AdSeriesResponse = AdSeriesDailyResponse | AdSeriesHourlyResponse
 export type ChartMetric = 'spend' | 'impressions' | 'clicks' | 'conversions'
 
 /** One build card of `GET /campaign-orders/:id/report`. */
-export interface OrderReportBuild {
+/** FEAT-084 §4 — `totals` THB-based + `spendByCurrency` / `spendUnconverted` */
+export interface OrderReportBuild extends SpendFx {
   build: {
     id: string
     status: string
@@ -286,7 +289,7 @@ export interface OrderReportBuild {
 }
 
 /** `GET /campaign-orders/:id/report` 200 body. */
-export interface OrderReportResponse {
+export interface OrderReportResponse extends SpendFx {
   order: { id: string, name: string, status: OrderStatus, publishMode: PublishMode }
   range: ReportRangeInfo
   intervalMs: number
@@ -307,12 +310,17 @@ export interface FetchNowResponse {
   report: AdvertiserReport
 }
 
-/** Why a fetch-now was refused. */
-export type FetchNowConflictReason
-  = 'fetching' | 'jobRunning' | 'buildInProgress' | 'needsHuman' | 'notLoggedIn' | 'inactive'
+/**
+ * Why a fetch-now was refused. FEAT-085 (api-contract §2.2): `fetching` / `jobRunning` / `buildInProgress` /
+ * `needsHuman` are gone — an open kpi job of the account answers `duplicate` (with its id and queue position).
+ */
+export type FetchNowConflictReason = 'duplicate' | 'notLoggedIn' | 'inactive'
 
 /** `POST /advertisers/:id/report/fetch-now` 409 body (`error` is the Thai sentence shown in the toast). */
 export interface FetchNowConflictBody {
   error: string
   reason: FetchNowConflictReason
+  jobId?: string
+  status?: 'pending' | 'waiting' | 'active'
+  queuePosition?: number | null
 }

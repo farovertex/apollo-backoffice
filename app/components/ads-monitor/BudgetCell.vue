@@ -24,14 +24,26 @@
  * "ยอดคงเหลือ 1,234.50 THB" (currency omitted when null; "ยอดคงเหลือ —" when `amount` is null, red when an
  * `error` is also set). `title` = "อ่านล่าสุด <at>" joined with " · <error>". Read-only: it never changes the
  * state machine above, the value, the wallet button, the pending/error rows or the modal.
+ *
+ * FEAT-084 — both amounts are `MoneyCell`s fed with their FEAT-080 S blocks (`account.balance.thb`,
+ * `advertiserBudget.thb`): `thb` mode `฿ 23,647` / `700.00 USD`, `account` mode the other way round, THB
+ * accounts unchanged (`1,234.50 THB`, no sub). The texts "ยอดคงเหลือ" and "/วัน" stay around them.
  */
 import type { MonitorRow } from '#shared/types/ads-monitor'
+import type { MoneyMode } from '~/utils/money'
 
-const props = defineProps<{ row: MonitorRow }>()
+const props = withDefaults(defineProps<{ row: MonitorRow, mode?: MoneyMode }>(), { mode: 'thb' })
 const emit = defineEmits<{ ask: [] }>()
 
 /** v1.2 — tolerate a row from an older API / a test stub without `account.balance`: render as all-null */
-const balance = computed(() => props.row.account?.balance ?? { amount: null, currency: null, at: null, error: null })
+const balance = computed(() => props.row.account?.balance ?? { amount: null, currency: null, at: null, error: null, thb: null })
+
+/** FEAT-084 — a known amount with a currency renders as a `MoneyCell`; anything else keeps the old text */
+const balanceMoney = computed(() => balance.value.amount !== null && Number.isFinite(balance.value.amount) && !!balance.value.currency)
+const valueMoney = computed(() => {
+  const b = budget.value
+  return !!b && b.mode === 'custom' && b.amount !== null && Number.isFinite(b.amount) && !!b.currency
+})
 
 /** `ยอดคงเหลือ 1,234.50 THB` · `ยอดคงเหลือ 1,234.50` when `currency` is null · `ยอดคงเหลือ —` when `amount` is null */
 const balanceText = computed(() => {
@@ -114,7 +126,22 @@ const ariaLabel = computed(() => `ตั้งงบ advertiser ${props.row.adve
       data-testid="am-budget-balance"
       :data-currency="balance.currency ?? ''"
       :title="balanceTitle"
-    >{{ balanceText }}</span>
+    >
+      <template v-if="balanceMoney">
+        ยอดคงเหลือ
+        <MoneyCell
+          align="start"
+          class="ms-0.5 align-top"
+          :native="{ amount: balance.amount, currency: balance.currency }"
+          :thb="balance.thb?.amount ?? null"
+          :estimated="balance.thb?.estimated"
+          :rate="balance.thb?.rate"
+          :day="balance.thb?.day"
+          :mode="mode"
+        />
+      </template>
+      <template v-else>{{ balanceText }}</template>
+    </span>
 
     <template v-if="blocked">
       <span data-testid="am-budget-value">{{ REPORT_DASH }}</span>
@@ -139,7 +166,20 @@ const ariaLabel = computed(() => `ตั้งงบ advertiser ${props.row.adve
     </span>
 
     <template v-else>
-      <span data-testid="am-budget-value" :title="valueTitle || undefined">{{ valueText }}</span>
+      <span data-testid="am-budget-value" :title="valueTitle || undefined">
+        <MoneyCell
+          v-if="valueMoney"
+          align="start"
+          suffix="/วัน"
+          :native="{ amount: budget!.amount, currency: budget!.currency }"
+          :thb="budget!.thb?.amount ?? null"
+          :estimated="budget!.thb?.estimated"
+          :rate="budget!.thb?.rate"
+          :day="budget!.thb?.day"
+          :mode="mode"
+        />
+        <template v-else>{{ valueText }}</template>
+      </span>
 
       <template v-if="failure">
         <span

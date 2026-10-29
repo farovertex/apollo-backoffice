@@ -16,8 +16,8 @@ export const BC_ADV_CREATE_REASON_TEXT: Record<BcAdvConflictReason, string> = {
   noOrgName: 'ยังไม่รู้ชื่อ org นี้ — กด Sync ก่อน',
   noProfile: 'บัญชีนี้ยังไม่มีโปรไฟล์ที่พร้อมใช้',
   inactive: 'account ถูกปิดใช้งาน',
-  running: 'มี job กำลังทำงานอยู่',
-  needsHuman: 'มี human task รออยู่',
+  // FEAT-085 — a bcAdvCreate job of this org is already pending/waiting/active (`running`/`needsHuman` are gone)
+  duplicate: 'มีงานนี้รออยู่แล้ว',
   exhausted: 'เลขลำดับ 001–999 ของชื่อนี้ถูกใช้ครบแล้ว',
   nameTaken: 'มีชื่อบัญชีโฆษณานี้อยู่แล้ว'
 }

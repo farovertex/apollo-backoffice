@@ -38,6 +38,10 @@ let session = 0
 const intervalMs = computed(() => report.value?.intervalMs || 300_000)
 const builds = computed<OrderReportBuild[]>(() => report.value?.builds ?? [])
 
+// FEAT-084 — "แสดงเป็น: THB | สกุลของบัญชี" of this tab; the badge shows when an ad of the order has a converted spend
+const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('order-report')
+const moneyConverted = computed(() => builds.value.some(b => b.ads.some(ad => !!ad.currency && ad.currency !== 'THB' && ad.spendThb != null)))
+
 /** `silent` = a re-read after a toggle / while an advertiser is fetching: the panel keeps its content */
 async function load(silent = false) {
   if (!props.orderId) return
@@ -154,6 +158,7 @@ async function onFetchNow(build: OrderReportBuild) {
     fetchingAdvertiserId.value = null
     return
   }
+  // FEAT-085 — `duplicate`: the account's kpi job already exists → re-read and follow it like our own
   await load(true)
   startWatching()
 }
@@ -227,7 +232,10 @@ const confirmContent = { 'data-testid': 'or-confirm' } as Record<string, string>
           @click="range = key"
         />
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <!-- FEAT-084 — money mode of the order Report tab (own key `money-mode:order-report`) -->
+        <MoneyNote :mode="moneyMode" :converted="moneyConverted" />
+        <MoneyModeSwitch :mode="moneyMode" @update:mode="setMoneyMode" />
         <span v-if="report" class="text-xs text-muted" data-testid="or-interval">
           อัปเดตทุก {{ intervalPhraseTh(intervalMs) }} · ล่าสุด
           {{ report.refreshedAt ? formatClock(report.refreshedAt) : REPORT_DASH }}
@@ -278,10 +286,11 @@ const confirmContent = { 'data-testid': 'or-confirm' } as Record<string, string>
         <ReportsMetricTile
           testid="or-total-spend"
           label="Spend"
-          format="dec"
-          caption="สกุลเงินของบัญชี"
+          format="thb"
           :value="report.totals?.spend ?? null"
-        />
+        >
+          <MoneySubLine :by-currency="report.spendByCurrency" :unconverted="report.spendUnconverted ?? null" />
+        </ReportsMetricTile>
         <ReportsMetricTile
           testid="or-total-impressions"
           label="Impressions"
@@ -326,6 +335,18 @@ const confirmContent = { 'data-testid': 'or-confirm' } as Record<string, string>
             </span>
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            <!-- FEAT-084 — the build's THB total (both modes), raw breakdown under it -->
+            <span v-if="item.totals" class="flex items-baseline gap-1 text-xs text-muted">
+              Spend
+              <MoneyCell
+                total
+                class="text-sm font-medium text-highlighted"
+                data-testid="or-build-spend"
+                :thb="item.totals.spend"
+                :by-currency="item.spendByCurrency ?? {}"
+                :unconverted="item.spendUnconverted ?? null"
+              />
+            </span>
             <USwitch
               :model-value="item.tracking?.enabled === true"
               label="ติดตาม"
@@ -371,6 +392,7 @@ const confirmContent = { 'data-testid': 'or-confirm' } as Record<string, string>
           :now-ms="nowMs"
           prefix="or"
           compact
+          :money-mode="moneyMode"
           :active-id="slideoverOpen ? selectedAdId : null"
           @select="openAd"
         />

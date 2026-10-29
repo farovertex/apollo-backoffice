@@ -4,7 +4,12 @@
  * "ผลงานในช่วงที่เลือก" (`rf-results`: spend card with the bar chart, used, registers, depositors, deposit) and
  * "ความคุ้มค่า" (`rf-ratios`: the five ratios, computed here from `results` / `previousResults`, contract §6).
  * `previousResults: null` (range `all`) → no delta line on any tile.
+ *
+ * FEAT-084 — `results.spend` / `spendByDay` are THB (the API sums `spendThb`): the spend tile prints `฿ …` with the
+ * raw `THB x + USD y` breakdown and the `+n ?` of `spendUnconverted`; the cost ratios are THB (`฿ 12.30`); the
+ * caption is the THB wording of `fx` (replaces "สกุลเงินของบัญชี ไม่แปลงค่า").
  */
+import type { FxReportBlock } from '#shared/types/fx'
 import type { PerfResults, PerfSpendDay } from '#shared/types/report-performance'
 
 const props = defineProps<{
@@ -13,7 +18,10 @@ const props = defineProps<{
   trend: PerfSpendDay[]
   /** the range is a single day → the chart shows `trend` */
   singleDay: boolean
+  fx?: FxReportBlock | null
 }>()
+
+const spendCaption = computed(() => fxReportCaption(props.fx))
 
 const chartMode = computed<'trend' | 'range'>(() => (props.singleDay ? 'trend' : 'range'))
 const chartDays = computed(() => (props.singleDay ? props.trend : (props.results.spendByDay ?? [])))
@@ -48,12 +56,13 @@ const sharedNote = computed(() => {
           label="Spend"
           :value="results.spend"
           :previous="previous?.spend ?? null"
-          format="dec"
-          caption="สกุลเงินของบัญชี ไม่แปลงค่า"
+          format="thb"
+          :caption="spendCaption"
           child-ids
           :help="REPORT_HELP['rf-tile-spend']"
           class="h-full"
         >
+          <MoneySubLine :by-currency="results.spendByCurrency" :unconverted="results.spendUnconverted ?? null" />
           <ReportPerformanceSpendChart :days="chartDays" :mode="chartMode" />
         </ReportsMetricTile>
       </div>
@@ -114,7 +123,7 @@ const sharedNote = computed(() => {
         label="Cost / Register"
         :value="ratios.costPerRegister"
         :previous="prevRatios?.costPerRegister ?? null"
-        format="dec"
+        format="thb2"
         lower-is-better
         child-ids
         :help="REPORT_HELP['rf-tile-costReg']"
@@ -124,7 +133,7 @@ const sharedNote = computed(() => {
         label="Cost / Deposit"
         :value="ratios.costPerDeposit"
         :previous="prevRatios?.costPerDeposit ?? null"
-        format="dec"
+        format="thb2"
         lower-is-better
         child-ids
         :help="REPORT_HELP['rf-tile-costDep']"

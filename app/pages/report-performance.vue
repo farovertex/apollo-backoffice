@@ -26,9 +26,9 @@ const TAB_LABEL: Record<PerfTab, string> = {
 }
 const TAB_NOTE: Record<PerfTab, string> = {
   day: 'Spend และ advertiser ที่ใช้นับจากยอดรวมต่อวันของ advertiser · ถูกระงับ = วันที่รอบ kpi เห็น ไม่ใช่วันที่ TikTok ระงับจริง · Runs = build ที่สั่งในวันนั้น แสดงผลตอนนี้',
-  workspace: 'ยอดสมัคร/ฝากของ UTM ที่หลาย workspace ใช้ร่วมกัน นับเต็มให้ทุก workspace · แถวรวมนับ UTM ครั้งเดียว · spend ไม่แปลงสกุลเงิน · ยอดเป็นของ workspace ปัจจุบันของ advertiser',
-  utm: 'ยอดสมัคร/ฝากนับเต็มของ UTM นั้น · Spend คือค่าโฆษณาของทุก ads ที่ใช้ UTM นี้ (ทุก workspace) ไม่แปลงสกุลเงิน · "—" คือ UTM ที่ยังไม่มี ads จากระบบ',
-  account: 'Spend ของ advertiser ในช่วงที่เลือก ไม่แปลงสกุลเงิน · สถานะเป็นสถานะตอนนี้'
+  workspace: 'ยอดสมัคร/ฝากของ UTM ที่หลาย workspace ใช้ร่วมกัน นับเต็มให้ทุก workspace · แถวรวมนับ UTM ครั้งเดียว · spend เป็น THB · ยอดเป็นของ workspace ปัจจุบันของ advertiser',
+  utm: 'ยอดสมัคร/ฝากนับเต็มของ UTM นั้น · Spend คือค่าโฆษณาของทุก ads ที่ใช้ UTM นี้ (ทุก workspace) เป็น THB · "—" คือ UTM ที่ยังไม่มี ads จากระบบ',
+  account: 'Spend ของ advertiser ในช่วงที่เลือก เป็น THB · สถานะเป็นสถานะตอนนี้'
 }
 const LOAD_FALLBACK = 'โหลดรายงานไม่สำเร็จ'
 const EMPTY_TEXT = 'ไม่มี spend และไม่มียอด UTM ในช่วงนี้ — ลองเลือกช่วงวันอื่น'
@@ -221,7 +221,10 @@ const today = bangkokToday()
               {{ EMPTY_TEXT }}
             </p>
 
+            <MoneyNote mode="thb" :fx="report.fx" class="self-start" />
+
             <ReportPerformanceResultsSection
+              :fx="report.fx"
               :results="report.results"
               :previous="report.previousResults"
               :trend="report.trend"

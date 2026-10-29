@@ -60,6 +60,11 @@
  * 2026-10-16 it is an item of the row's "⋯" menu (see below) and the `ta-cards` cell no longer exists. The Top
  * up cell passes the account's `balanceCurrency` and name down to `TopupsRowActions`, which is what decides
  * whether the card channel of the pay popover is offered or disabled with a reason (AC-32).
+ * FEAT-078 (spec "UI behaviour", AC-15) — the item is now **จัดการบัตร** (same testid `ta-cards-open`, same icon)
+ * and is offered to **GOD and Admin** (`canManageCards`): every `payment-cards` route is GOD/Admin of the account's
+ * workspace now, a Payment-only admin gets 403 and therefore no item. The modal shows the TikTok-side cards (sync /
+ * set primary / remove through a `cardManage` job) next to our own. `canPay` keeps its other uses (Balance reload,
+ * top-up). The "GOD/Payment only" notes about `ta-cards-open` below are history.
  * FEAT-053 (AC-19/AC-20, api-contract §2/§3) — the account's auto top-up channel: which channel the system uses
  * when it opens an auto top-up round for this account. It was a column **ช่องทาง auto** (`ta-auto-channel`) with
  * the two-value switch `ta-auto-channel-qr` / `ta-auto-channel-card`; since 2026-10-16 the column is gone, the
@@ -221,8 +226,11 @@ import type {
   BcTtLinkAccepted,
   BcTtLinkConflictBody,
   BcTtLinkLatestResponse,
+  CancelJobConflict,
+  CancelJobResponse,
   DiscoverOrgBody,
   JobType,
+  RunningJob,
   LoginConflictBody,
   LoginJobResponse,
   OrganizationsResponse,
@@ -250,6 +258,7 @@ const TopupsRowActions = resolveComponent('TopupsRowActions')
 const TiktokAccountsFavoriteStar = resolveComponent('TiktokAccountsFavoriteStar')
 const TiktokAccountsProxyCell = resolveComponent('TiktokAccountsProxyCell')
 const UCheckbox = resolveComponent('UCheckbox')
+const MoneyCell = resolveComponent('MoneyCell')
 
 const POLL_MS = 2000
 
@@ -494,9 +503,17 @@ async function onLogin(account: TikTokAccount) {
     openLoginModal(account, started?.jobId ?? null)
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
-    if (err.statusCode === 409) {
-      // a job or human task already exists for this account → follow it in the modal (body: jobId / humanTaskId)
+    if (err.statusCode === 409 && err.data?.reason === 'duplicate') {
+      // FEAT-085 — an open login normally comes back as 202 `reused` (followed above); a `duplicate` 409 is followed too
       openLoginModal(account, err.data?.jobType === 'discover' ? null : (err.data?.jobId ?? null))
+    } else if (err.statusCode === 409) {
+      // FEAT-085 — the only other 409s are gates (`inactive` / `accountDeleted` / `profileProvisioning`)
+      toast.add({
+        title: 'Could not start the login',
+        description: err.data?.error ?? 'Unexpected error',
+        color: 'warning'
+      })
+      void refresh()
     } else {
       toast.add({
         title: 'Could not start the login',
@@ -518,14 +535,15 @@ function askDelete(account: TikTokAccount) {
 type RowAction = DropdownMenuItem & { label: string, testid: string }
 
 /**
- * 2026-10-16 — the row's overflow menu: **บัตรที่จำไว้** (FEAT-051, GOD/Payment only — every payment-card route
- * answers 403 for an Admin, so the item is not even offered) and **Delete**. Both used to be a button per row.
+ * 2026-10-16 — the row's overflow menu: the cards item and **Delete**. Both used to be a button per row.
+ * FEAT-078 — the cards item is **จัดการบัตร**, GOD + Admin only (`canManageCards`; a Payment-only admin would get
+ * 403 from every payment-card route, so the item is not even offered).
  */
 function moreActions(account: TikTokAccount): RowAction[] {
   const items: RowAction[] = []
-  if (canPay.value) {
+  if (canManageCards.value) {
     items.push({
-      label: 'บัตรที่จำไว้',
+      label: 'จัดการบัตร',
       icon: 'i-lucide-credit-card',
       testid: 'ta-cards-open',
       onSelect: () => openCards(account)
@@ -578,8 +596,77 @@ const rows = computed<TikTokAccount[]>(() => {
   })
   // FEAT-063 (AC-6) — favorites first, stable: a plain `sort` on a boolean key keeps the relative order of every
   // two rows with the same favorite-ness (the API's `createdAt desc`), so a list with no favorites is untouched.
-  return [...merged].sort((x, y) => Number(effectiveFavorite(y)) - Number(effectiveFavorite(x)))
+  // FEAT-084 (AC-16) — the Balance header sorts by the THB value in both money modes (`balanceThb.amount`, the raw
+  // amount of a THB row; unknown → last), inside the favorites-first grouping.
+  const dir = balanceSort.value
+  return [...merged].sort((x, y) => {
+    const fav = Number(effectiveFavorite(y)) - Number(effectiveFavorite(x))
+    if (fav !== 0 || dir === 'none') return fav
+    const xv = accountBalanceThb(x)
+    const yv = accountBalanceThb(y)
+    if (xv === null || yv === null) return xv === null ? (yv === null ? 0 : 1) : -1
+    return dir === 'asc' ? xv - yv : yv - xv
+  })
 })
+
+// ── FEAT-084 — money mode (THB | สกุลของบัญชี), Balance sort and the THB footer ───────────────────────────────────
+const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('tiktok-accounts')
+const balanceSort = ref<'none' | 'desc' | 'asc'>('none')
+function toggleBalanceSort() {
+  balanceSort.value = balanceSort.value === 'none' ? 'desc' : balanceSort.value === 'desc' ? 'asc' : 'none'
+}
+
+function balanceNumber(a: TikTokAccount): number | null {
+  const raw = (a.balanceAmount ?? '').trim()
+  if (!raw) return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+/** THB value of one account's balance (`balanceThb.amount`, or the raw amount of a THB account); `null` = unknown */
+function accountBalanceThb(a: TikTokAccount): number | null {
+  return thbSortValue(balanceNumber(a), a.balanceCurrency, a.balanceThb?.amount ?? null)
+}
+
+/**
+ * `ta-balance-total` (spec A11) — summed here from the rows already on screen: THB rows as is, foreign rows via
+ * their `balanceThb.amount` (latest rate → `≈`), unknown currency / no rate → `+n ?`. No FX in the BO.
+ */
+const balanceTotal = computed(() => {
+  let thb = 0
+  let converted = false
+  let estimated = false
+  let any = false
+  const byCurrency: Record<string, number> = {}
+  const unconverted: Record<string, number> = {}
+  for (const a of rows.value) {
+    const n = balanceNumber(a)
+    if (n === null) continue
+    any = true
+    if (a.balanceCurrency) byCurrency[a.balanceCurrency] = (byCurrency[a.balanceCurrency] ?? 0) + n
+    const v = accountBalanceThb(a)
+    if (v === null) {
+      const key = a.balanceCurrency ?? '?'
+      unconverted[key] = (unconverted[key] ?? 0) + n
+      continue
+    }
+    thb += v
+    if (a.balanceCurrency !== 'THB') {
+      converted = true
+      if (a.balanceThb?.estimated) estimated = true
+    }
+  }
+  return {
+    any,
+    thb,
+    approx: converted || estimated,
+    byCurrency,
+    unconverted: Object.keys(unconverted).length > 0 ? unconverted : null
+  }
+})
+
+const balanceConverted = computed(() => rows.value.some(a => !!a.balanceThb))
+const balanceLatest = computed(() => latestThbBlock(rows.value.map(a => a.balanceThb)))
 
 // FEAT-076 — header checkbox over the rows currently visible (search + filters applied)
 const selectAllState = computed<boolean | 'indeterminate'>(() => {
@@ -602,7 +689,7 @@ function toggleSelectAll(on: boolean) {
 const syncStarting = ref<string | null>(null)
 // one poll loop per (kind, account id) — a balance reload must not cancel a sync that is being followed;
 // `done` decides on each snapshot whether the job it follows has finished
-type PollKind = 'discover' | 'balance'
+type PollKind = 'discover' | 'balance' | 'queue'
 interface AccountPoll {
   accountId: string
   timer: ReturnType<typeof setInterval>
@@ -686,6 +773,70 @@ function startDiscoverPoll(id: string) {
  * pressed Sync first), each tick is the existing single `GET /tiktok-accounts/:id`, the finished poll does the
  * one `refresh()` + toast it always did, and `onUnmounted` still clears it.
  */
+/**
+ * FEAT-085 — a row whose `runningJob` is `pending` / `waiting` is followed (one `GET /tiktok-accounts/:id` per
+ * 2 s, the same loop as a sync) until the dispatcher released it and a worker claimed it (`active`) or it is gone,
+ * so "รอคิว ลำดับที่ n" counts down and turns into the running badge without a manual Refresh.
+ */
+function isQueued(job: RunningJob | null | undefined): boolean {
+  return job?.status === 'pending' || job?.status === 'waiting'
+}
+function startQueuePoll(id: string) {
+  startPoll('queue', id, next => !isQueued(next.runningJob), (next) => {
+    if (next.runningJob?.type === 'discover') startDiscoverPoll(next.id)
+  })
+}
+watch(data, () => {
+  for (const account of data.value?.accounts ?? []) {
+    if (isQueued(account.runningJob)) startQueuePoll(account.id)
+  }
+})
+
+/** one `GET /tiktok-accounts/:id` merged into the row (after a cancel / a duplicate), then follow it if still queued */
+async function rereadAccount(id: string) {
+  try {
+    // retry: 0 — one request per action
+    const next = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(id)}`, { retry: 0 })
+    polledById.value = new Map(polledById.value).set(id, next)
+    if (isQueued(next.runningJob)) startQueuePoll(id)
+  } catch {
+    await refresh()
+  }
+}
+
+// ── FEAT-085 — cancel a pending job from the badge ───────────────────────────────────────────────────────────────────
+const cancelJobOpen = ref(false)
+const cancelJobTarget = ref<{ account: TikTokAccount, job: RunningJob } | null>(null)
+const cancelJobPosting = ref(false)
+const cancelJobModalContent = { 'data-testid': 'ta-job-cancel-modal' } as Record<string, string>
+
+function askCancelJob(account: TikTokAccount, job: RunningJob) {
+  cancelJobTarget.value = { account, job }
+  cancelJobOpen.value = true
+}
+
+async function runCancelJob() {
+  const target = cancelJobTarget.value
+  if (!target || cancelJobPosting.value) return
+  cancelJobPosting.value = true
+  try {
+    // retry: 0 — exactly one POST per click
+    await api<CancelJobResponse>(`/jobs/${encodeURIComponent(target.job.id)}/cancel`, { method: 'POST', retry: 0 })
+    toast.add({ title: 'ยกเลิกแล้ว', description: target.account.label ?? target.account.loginEmail, color: 'success' })
+  } catch (e) {
+    const err = e as FetchError<Partial<CancelJobConflict>>
+    toast.add({
+      title: 'ยกเลิกไม่ได้',
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: err.statusCode === 409 ? 'warning' : 'error'
+    })
+  } finally {
+    cancelJobPosting.value = false
+    cancelJobOpen.value = false
+    await rereadAccount(target.account.id)
+  }
+}
+
 async function refreshAndFollowDiscovers() {
   await refresh()
   for (const account of data.value?.accounts ?? []) {
@@ -837,6 +988,8 @@ const viewer = computed<TopupViewer>(() => ({
   roles: auth.admin.value?.roles ?? []
 }))
 const canPay = computed(() => canPayTopups(viewer.value))
+/** FEAT-078 — every `payment-cards` route is GOD or Admin (of the account's workspace); Payment-only → 403 */
+const canManageCards = computed(() => viewer.value.roles.includes('GOD') || viewer.value.roles.includes('Admin'))
 
 // ── FEAT-076 — GOD multi-select + bulk prefix ───────────────────────────────────────────────────────────────────────
 const isGod = computed(() => viewer.value.roles.includes('GOD'))
@@ -903,10 +1056,11 @@ async function onReloadBalance(account: TikTokAccount) {
   } catch (e) {
     setBalanceLoading(account.id, false)
     const err = e as FetchError<Partial<ApiErrorBody>>
+    // FEAT-085 — a 409 is a gate (`inactive` / `noBcOrg`), never "busy": an open balance job comes back as 202 `reused`
     toast.add({
       title: 'Could not reload the balance',
       description: err.data?.error ?? err.message ?? 'Unexpected error',
-      color: 'error'
+      color: err.statusCode === 409 ? 'warning' : 'error'
     })
   }
 }
@@ -977,23 +1131,33 @@ function runningJobReason(type: JobType): string {
 }
 
 /**
- * TASK-sync-queue-wait — text of the `ta-job-running` badge next to Sync/Login while `runningJob` exists. The
- * API now queues a sync/login click behind whatever already runs instead of 409ing, so `discover`/`login` keep
- * exactly their old wording (a second click just catches up to the same job) and every other type says the
- * click will wait its turn rather than fail.
+ * TASK-sync-queue-wait — tooltip of the `ta-job-running` badge next to Sync/Login while `runningJob` exists.
+ * FEAT-085: every click queues behind whatever already runs (the dispatcher releases jobs per profile), so an
+ * active job says new clicks will wait; a queued job names its type and why it waits.
  */
-function runningJobQueueHint(type: JobType): string {
-  if (type === 'discover' || type === 'login') return runningJobReason(type)
-  return `${runningJobReason(type)} · Sync/Login will queue behind it`
+function runningJobQueueHint(job: RunningJob): string {
+  const reason = runningJobReason(job.type)
+  if (job.status === 'pending') {
+    const why = waitingForText(job.waitingFor)
+    return why ? `${reason} · ${why}` : reason
+  }
+  if (job.status === 'waiting') return `${reason} · ${JOB_WAITING_LABEL}`
+  return `${reason} · new jobs will queue behind it`
+}
+
+/** FEAT-085 — the badge's own text: "รอคิว ลำดับที่ n" / "กำลังจะเริ่ม" / the running reason */
+function runningJobBadgeText(job: RunningJob): string {
+  if (job.status === 'pending') return queueLabel(job.queuePosition)
+  if (job.status === 'waiting') return JOB_WAITING_LABEL
+  return runningJobReason(job.type)
 }
 
 /**
  * TASK-sync-queue-wait — Sync no longer greys out while a job runs (the API queues a click behind it instead of
- * answering 409); `runningJob` is now purely informational, shown as the `ta-job-running` badge. The button is
- * disabled only for reasons the API will still refuse outright: an open OTP task or a disabled account.
+ * answering 409); `runningJob` is purely informational, shown as the `ta-job-running` badge. FEAT-085: the only
+ * reason left is a disabled account (no human task exists any more, so `needsHuman` no longer blocks).
  */
 function syncBlockedReason(account: TikTokAccount): string | null {
-  if (account.sessionStatus === 'needsHuman') return 'Needs OTP — finish the login first'
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -1025,11 +1189,13 @@ async function onSync(account: TikTokAccount, bcOrgId: string | null = null) {
     startDiscoverPoll(account.id)
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
-    if (err.statusCode === 409) {
-      // TASK-sync-queue-wait: 409 now means only an open human task (a waiting/active job dedupes into a 200
-      // instead of 409ing) → follow the account until the task is resolved and any job finishes
-      toast.add({ title: 'Already running', description: err.data?.error ?? label, color: 'info' })
+    if (err.statusCode === 409 && err.data?.reason === 'duplicate') {
+      // FEAT-085 — an open discover of the same scope normally comes back as 202 `reused`; follow it either way
       startDiscoverPoll(account.id)
+    } else if (err.statusCode === 409) {
+      // FEAT-085 — only gates are left (`inactive` / `accountDeleted` / `profileProvisioning`)
+      toast.add({ title: 'Could not start the sync', description: err.data?.error ?? label, color: 'warning' })
+      void refresh()
     } else {
       toast.add({
         title: 'Could not start the sync',
@@ -1157,15 +1323,13 @@ function setSubCreateFailed(id: string, text: string | null) {
 }
 
 /**
- * Why the row action is disabled (the tooltip text), `null` = enabled. The brief's rule is "a `bcOrgId` and no
- * running job"; `isActive` is checked too because the API answers 409 `inactive` for a disabled account, and
- * the running job is named by `runningJobReason()` (the sub-create job of another tab says so, anything else
- * gets the generic sentence instead of the wrong one).
+ * Why the row action is disabled (the tooltip text), `null` = enabled: a sub-create this page is already
+ * following (the same target → the API would answer `duplicate`), no `bcOrgId`, or a disabled account.
+ * FEAT-085: another job of the account never disables it any more — the new job simply queues behind it.
  */
 function subCreateBlockedReason(account: TikTokAccount): string | null {
   if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
   if (!account.bcOrgId) return 'Sync first'
-  if (account.runningJob) return runningJobReason(account.runningJob.type)
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -1227,7 +1391,7 @@ async function pollSubCreate(id: string, jobId: string, label: string) {
       setSubCreatePending(id, false)
       return
     }
-    if (job.status === 'waiting' || job.status === 'active') return
+    if (job.status === 'pending' || job.status === 'waiting' || job.status === 'active') return
     stopSubCreatePoll(id)
     setSubCreatePending(id, false)
     if (job.status === 'completed') {
@@ -1363,22 +1527,11 @@ function advCreateFailedFor(accountId: string): Record<string, string> {
 
 /**
  * Why every "สร้างบัญชีโฆษณา" button of this account is disabled (the tooltip text), `null` = enabled. The
- * per-org part (this org's own job still running, or a missing org, which has no button at all) is decided
- * inside `OrganizationRows`. A `bcSubCreate` job the page is following is named explicitly because the account
- * snapshot may not carry it as `runningJob` yet.
+ * per-org part (this org's own job still followed, or a missing org, which has no button at all) is decided
+ * inside `OrganizationRows`. FEAT-085: a job of the account (another org's create / QR job, a sub-create, a
+ * sync, a login, …) no longer disables it — the API queues the new job behind it; only a disabled account does.
  */
 function advCreateBlockedReason(account: TikTokAccount): string | null {
-  if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
-  // one create job per login: while this account has one running, every org of it would get a 409 `running`
-  if (advCreatePendingOrgs(account.id).length) return 'กำลังสร้างบัญชีโฆษณาอยู่'
-  // TASK-bc-tt-link — a QR job of this login is one job too (`running` for both buttons), and the account
-  // snapshot may not carry it as `runningJob` yet
-  if (ttLinkPendingOrgs(account.id).length) return 'กำลังออก QR เพิ่มบัญชี TikTok อยู่'
-  if (account.runningJob) {
-    if (account.runningJob.type === 'discover') return 'Sync in progress'
-    if (account.runningJob.type === 'login') return 'Login in progress'
-    return 'Job in progress'
-  }
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -1439,7 +1592,7 @@ async function pollAdvCreate(accountId: string, orgId: string, jobId: string, la
       setAdvCreatePending(key, false)
       return
     }
-    if (job.status === 'waiting' || job.status === 'active') return
+    if (job.status === 'pending' || job.status === 'waiting' || job.status === 'active') return
     stopAdvCreatePoll(key)
     setAdvCreatePending(key, false)
     if (job.status === 'completed') {
@@ -1555,7 +1708,7 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
     // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
     let latest = await api<BcTtLinkLatestResponse>(`${base}/latest`, { retry: 0 })
     const job = latest.job
-    const reusable = !!job && (job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
+    const reusable = !!job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
     if (!reusable) {
       // retry: 0 — exactly one POST per click (ofetch would otherwise queue a second job on 5xx)
       const res = await api<BcTtLinkAccepted>(base, { method: 'POST', retry: 0 })
@@ -1565,7 +1718,7 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
       // the new job has no state yet: the modal starts at "กำลังเปิด Business Center…" and polls from there
       latest = { job: null, linked: [] }
       void refresh()
-    } else if (job && (job.status === 'waiting' || job.status === 'active')) {
+    } else if (job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active')) {
       setTtLinkPending(advKey(account.id, org.orgId), true)
     }
     ttLinkAccount.value = account
@@ -1667,7 +1820,7 @@ function ttAccountsFor(accountId: string): Record<string, BcTikTokAccountsState>
 }
 
 // ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
-// FEAT-051 — saved cards of one account (GOD/Payment only; the column is not rendered for anybody else)
+// FEAT-051 / FEAT-078 — "จัดการบัตร" of one account (GOD/Admin only — `canManageCards`)
 const cardsOpen = ref(false)
 const cardsTarget = ref<TikTokAccount | null>(null)
 
@@ -1868,8 +2021,8 @@ onUnmounted(stopProxyPoll)
 
 // ── table ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
- * The list is a computed because some cells read `canPay`: the Balance cell's reload button and the "⋯" menu's
- * cards item must not exist at all for an Admin (FEAT-051 AC-35). Eight columns since
+ * The list is a computed because some cells read `canPay` / `canManageCards`: the Balance cell's reload button
+ * must not exist for an Admin (FEAT-051 AC-35) and the "⋯" menu's cards item not for a Payment-only viewer (FEAT-078). Eight columns since
  * the 2026-10-16 declutter, the Login email + Browser profile merge and the 2026-10-20 Label merge; ten since
  * FEAT-070 (Workspace + Proxy right after Account).
  */
@@ -2175,9 +2328,13 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
         }, () => 'Launching ads'))
       }
       if (syncing) {
-        children.push(h('span', { 'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted', 'data-testid': 'ta-adv-syncing' }, [
-          h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
-          'Syncing…'
+        // FEAT-085 — a discover still in the profile's queue says so instead of spinning
+        const queuedSync = a.runningJob?.status === 'pending'
+        children.push(h('span', { 'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted', 'data-testid': 'ta-adv-syncing', 'data-status': a.runningJob?.status ?? '' }, [
+          queuedSync
+            ? h(UIcon, { name: 'i-lucide-clock', class: 'size-3.5 shrink-0 text-warning' })
+            : h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
+          queuedSync ? 'Sync รอคิว' : 'Syncing…'
         ]))
       } else {
         children.push(h('span', {
@@ -2204,7 +2361,23 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
   },
   {
     id: 'balance',
-    header: 'Balance',
+    // FEAT-084 — sortable by the THB value in both modes ("เรียงด้วยค่า THB")
+    header: () => h(UButton, {
+      'label': 'Balance',
+      'color': 'neutral',
+      'variant': 'ghost',
+      'size': 'xs',
+      'class': '-mx-2 font-semibold',
+      'trailingIcon': balanceSort.value === 'none'
+        ? 'i-lucide-arrow-up-down'
+        : balanceSort.value === 'desc' ? 'i-lucide-arrow-down-wide-narrow' : 'i-lucide-arrow-up-narrow-wide',
+      'title': SORT_BY_THB_HINT,
+      'aria-label': `Balance — ${SORT_BY_THB_HINT}`,
+      'aria-sort': balanceSort.value === 'none' ? 'none' : balanceSort.value === 'desc' ? 'descending' : 'ascending',
+      'data-testid': 'ta-balance-sort',
+      'data-sort': balanceSort.value,
+      'onClick': toggleBalanceSort
+    }),
     cell: ({ row }) => {
       const a = row.original
       // 2026-10-16 — the amount and the currency are two elements now: grouped digits (`6,091.06`) + a coloured
@@ -2213,22 +2386,29 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       const text = balanceAmountText(a.balanceAmount)
       const blocked = balanceBlockedReason(a)
       const loading = balanceLoading.value.has(a.id)
+      // FEAT-084 — `ta-balance` is a `MoneyCell` now: `thb` mode `฿ 23,647` / `700.00 USD`, `account` mode the other
+      // way round, THB rows `6,091.06 THB` in both; the currency badge follows the line with the raw amount.
       const amountLine = h('div', { class: 'flex items-center gap-1 whitespace-nowrap' }, [
-        h('span', {
-          'class': text ? 'font-medium tabular-nums text-highlighted' : 'text-muted',
-          'data-testid': 'ta-balance',
-          'data-amount': a.balanceAmount ?? ''
-        }, text || '—'),
-        text && a.balanceCurrency
-          ? h(UBadge, {
-              'color': balanceCurrencyColor(a.balanceCurrency),
-              'variant': 'subtle',
-              'size': 'sm',
-              'class': 'font-medium whitespace-nowrap',
-              'data-testid': 'ta-balance-currency',
-              'data-currency': a.balanceCurrency
-            }, () => a.balanceCurrency)
-          : null,
+        text
+          ? h(MoneyCell, {
+              'class': 'font-medium text-highlighted',
+              'align': 'start',
+              'data-testid': 'ta-balance',
+              'data-amount': a.balanceAmount ?? '',
+              'native': { amount: balanceNumber(a), currency: a.balanceCurrency },
+              'thb': a.balanceThb?.amount ?? null,
+              'estimated': a.balanceThb?.estimated ?? false,
+              'rate': a.balanceThb?.rate ?? null,
+              'day': a.balanceThb?.day ?? null,
+              'mode': moneyMode.value,
+              'currencyColor': a.balanceCurrency ? balanceCurrencyColor(a.balanceCurrency) : null,
+              'currencyTestid': 'ta-balance-currency'
+            })
+          : h('span', {
+              'class': 'text-muted',
+              'data-testid': 'ta-balance',
+              'data-amount': a.balanceAmount ?? ''
+            }, '—'),
         canPay.value
           ? h(UTooltip, { text: blocked ?? 'Reload balance' }, () => h('span', { class: 'inline-flex' }, [
               h(UButton, {
@@ -2346,18 +2526,42 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       // TASK-sync-queue-wait: Sync/Login never grey out for `runningJob` any more (the API queues a click
       // behind it instead of 409ing) — this badge is what used to be the grey button's tooltip, now shown
       // unconditionally so the row still says a job runs without blocking the buttons.
-      const jobReasonText = job ? runningJobReason(job.type) : null
-      const jobQueueHint = job ? runningJobQueueHint(job.type) : null
-      const jobType = job?.type ?? ''
-      const jobBadge = jobReasonText
-        ? h(UTooltip, { text: jobQueueHint ?? jobReasonText }, () => h('span', {
-            'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted',
-            'data-testid': 'ta-job-running',
-            'data-type': jobType
-          }, [
-            h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
-            jobReasonText
-          ]))
+      // FEAT-085: pending → "รอคิว ลำดับที่ n" + the `waitingFor` reason as sub-text and a cancel button,
+      // waiting → "กำลังจะเริ่ม", active → the running reason with a spinner (as before)
+      const jobBadge = job
+        ? h('span', { class: 'inline-flex items-center gap-0.5' }, [
+            h(UTooltip, { text: runningJobQueueHint(job) }, () => h('span', {
+              'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted',
+              'data-testid': 'ta-job-running',
+              'data-type': job.type,
+              'data-status': job.status,
+              'data-queue-position': job.queuePosition ?? '',
+              'data-waiting-for': job.waitingFor ?? ''
+            }, [
+              job.status === 'active'
+                ? h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' })
+                : h(UIcon, { name: job.status === 'pending' ? 'i-lucide-clock' : 'i-lucide-hourglass', class: 'size-3.5 shrink-0 text-warning' }),
+              h('span', { class: 'flex flex-col leading-tight' }, [
+                h('span', runningJobBadgeText(job)),
+                job.status === 'pending' && job.waitingFor
+                  ? h('span', { 'class': 'text-[10px] text-dimmed', 'data-testid': 'ta-job-waiting-for' }, waitingForText(job.waitingFor) ?? '')
+                  : null
+              ])
+            ])),
+            // `POST /jobs/:id/cancel` is GOD / Admin (contract §4) — the same roles as the cards item
+            job.status === 'pending' && canManageCards.value
+              ? h(UTooltip, { text: 'ยกเลิกงานที่รอคิว' }, () => h(UButton, {
+                  'icon': 'i-lucide-x',
+                  'color': 'neutral',
+                  'variant': 'ghost',
+                  'size': 'xs',
+                  'aria-label': 'ยกเลิกงานที่รอคิว',
+                  'data-testid': 'ta-job-cancel',
+                  'data-job-id': job.id,
+                  'onClick': () => askCancelJob(row.original, job)
+                }))
+              : null
+          ])
         : null
       const wide = wideActions.value
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
@@ -2553,6 +2757,11 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             data-testid="ta-bulk-prefix"
             @click="bulkPrefixOpen = true"
           />
+          <!-- FEAT-084 — money mode of the Balance column (persisted per page) + the mode badge -->
+          <div class="flex flex-wrap items-center gap-2 sm:ms-auto">
+            <MoneyNote :mode="moneyMode" :converted="balanceConverted" :latest="balanceLatest" />
+            <MoneyModeSwitch :mode="moneyMode" @update:mode="setMoneyMode" />
+          </div>
         </div>
 
         <UAlert
@@ -2699,6 +2908,16 @@ const showTable = computed(() => !error.value && !isEmpty.value)
           class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted"
         >
           <span data-testid="ta-count">{{ rows.length }} accounts</span>
+          <!-- FEAT-084 — THB total of the listed balances, always THB whatever the mode -->
+          <span
+            v-if="balanceTotal.any"
+            class="flex flex-wrap items-baseline gap-x-2"
+            data-testid="ta-balance-total"
+            :data-thb="balanceTotal.thb"
+          >
+            <span class="font-medium text-highlighted tabular-nums">รวม {{ balanceTotal.approx ? '≈ ' : '' }}{{ formatThb(balanceTotal.thb) }}</span>
+            <MoneySubLine :by-currency="balanceTotal.byCurrency" :unconverted="balanceTotal.unconverted" />
+          </span>
         </div>
       </div>
 
@@ -2720,6 +2939,42 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         :account="deleteTarget"
         @deleted="onAccountDeleted"
       />
+      <!-- FEAT-085 — cancel a job that still waits in the profile's queue (`pending` only) -->
+      <UModal
+        v-model:open="cancelJobOpen"
+        title="ยกเลิกงานที่รอคิว?"
+        :description="cancelJobTarget ? `${cancelJobTarget.account.label ?? cancelJobTarget.account.loginEmail} · ${runningJobBadgeText(cancelJobTarget.job)}` : ''"
+        :dismissible="!cancelJobPosting"
+        :ui="{ content: 'max-w-md' }"
+        :content="cancelJobModalContent"
+      >
+        <template #body>
+          <div class="flex flex-col gap-4">
+            <p class="text-sm text-muted">
+              งาน {{ cancelJobTarget ? runningJobReason(cancelJobTarget.job.type) : '' }} ยังไม่ได้เริ่ม — ยกเลิกแล้วจะถูกลบออกจากคิว
+              และงานถัดไปของโปรไฟล์นี้จะได้เริ่มแทน
+            </p>
+            <div class="flex flex-wrap justify-end gap-2">
+              <UButton
+                label="ไม่ยกเลิก"
+                color="neutral"
+                variant="subtle"
+                :disabled="cancelJobPosting"
+                data-testid="ta-job-cancel-close"
+                @click="cancelJobOpen = false"
+              />
+              <UButton
+                label="ยกเลิกงาน"
+                icon="i-lucide-x"
+                color="error"
+                :loading="cancelJobPosting"
+                data-testid="ta-job-cancel-confirm"
+                @click="runCancelJob"
+              />
+            </div>
+          </div>
+        </template>
+      </UModal>
       <TiktokAccountsLoginModal
         v-model:open="loginOpen"
         :account-id="loginTarget?.id ?? null"

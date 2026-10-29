@@ -282,6 +282,14 @@ async function onOpenTopup(topup: TopupView) {
   void load(1, false, true)
 }
 
+/** FEAT-085 — 409 `duplicate` on ตรวจอีกครั้ง: a check job of the round already exists → quiet re-read */
+async function onRecheckTopup(topup: TopupView) {
+  const updated = await recheckTopup(topup)
+  if (updated || staleId.value !== topup.id) return
+  staleId.value = null
+  void load(1, false, true)
+}
+
 async function onConfirmTopup(topup: TopupView) {
   if (await confirmTopup(topup)) closeModal()
 }
@@ -349,12 +357,23 @@ const title = computed(() => {
  */
 const showOrgChip = computed(() => (props.account?.organizationCount ?? 0) > 1)
 
+// FEAT-084 — "แสดงเป็น: THB | สกุลของบัญชี" of the slideover (own key `money-mode:advertisers-slideover`); the
+// money shown is each advertiser's custom budget (`budget.amount/currency` + the FEAT-080 S block `budget.thb`)
+const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('advertisers-slideover')
+function hasBudgetAmount(adv: Advertiser): boolean {
+  const b = adv.budget
+  return !!b && b.mode === 'custom' && typeof b.amount === 'number' && Number.isFinite(b.amount) && !!b.currency
+}
+const moneyConverted = computed(() => items.value.some(a => !!a.budget?.thb))
+const moneyLatest = computed(() => latestThbBlock(items.value.map(a => a.budget?.thb)))
+
 function advOrgText(adv: Advertiser): string {
   return adv.bcOrgName || last4(adv.bcOrgId)
 }
 const canSync = computed(() => {
   const a = props.account
-  return !!a && a.advertiserCount === 0 && a.runningJob === null && a.sessionStatus !== 'needsHuman' && a.isActive
+  // FEAT-085 — a running/queued job never hides Sync (the click queues behind it or is reused); only a disabled account does
+  return !!a && a.advertiserCount === 0 && a.isActive
 })
 const emptyTitle = computed(() => hasFilter.value ? 'No match' : 'No advertisers yet')
 const emptyDescription = computed(() =>
@@ -445,6 +464,10 @@ function onSync() {
           label="Show missing"
           data-testid="ta-adv-missing"
         />
+        <div class="flex flex-wrap items-center gap-2 sm:ms-auto">
+          <MoneyNote :mode="moneyMode" :converted="moneyConverted" :latest="moneyLatest" />
+          <MoneyModeSwitch :mode="moneyMode" @update:mode="setMoneyMode" />
+        </div>
       </div>
 
       <!-- loading (first page) -->
@@ -585,7 +608,7 @@ function onSync() {
                   :account-name="adv.name"
                   @created="patchTopup"
                   @open="onOpenTopup"
-                  @recheck="recheckTopup"
+                  @recheck="onRecheckTopup"
                   @release="releaseTopup"
                   @changed="patchTopup"
                 />
@@ -604,6 +627,32 @@ function onSync() {
                   data-testid="ta-adv-id-copy"
                   @click="copyId(adv.tiktokAdvertiserId)"
                 />
+              </span>
+              <!-- FEAT-084 — advertiser budget (custom only), main/sub per the slideover's money mode -->
+              <span
+                v-if="hasBudgetAmount(adv)"
+                class="inline-flex items-start gap-1"
+                data-testid="ta-adv-budget"
+              >
+                <UIcon name="i-lucide-wallet" class="mt-0.5 size-3.5 shrink-0" />
+                <MoneyCell
+                  align="start"
+                  suffix="/วัน"
+                  :native="{ amount: adv.budget!.amount, currency: adv.budget!.currency }"
+                  :thb="adv.budget!.thb?.amount ?? null"
+                  :estimated="adv.budget!.thb?.estimated"
+                  :rate="adv.budget!.thb?.rate"
+                  :day="adv.budget!.thb?.day"
+                  :mode="moneyMode"
+                />
+              </span>
+              <span
+                v-else-if="adv.budget?.mode === 'unlimited'"
+                class="inline-flex items-center gap-1"
+                data-testid="ta-adv-budget"
+              >
+                <UIcon name="i-lucide-wallet" class="size-3.5 shrink-0" />
+                งบไม่จำกัด
               </span>
               <span class="inline-flex items-center gap-1" data-testid="ta-adv-owner">
                 <UIcon name="i-lucide-user-round" class="size-3.5 shrink-0" />

@@ -3,6 +3,7 @@
  * renders is typed here, nothing is computed by the API that the BO re-derives (the five ratios are BO-side,
  * contract §6, `app/utils/report-performance.ts`).
  */
+import type { FxReportBlock, SpendFx, SpendFxRow } from './fx'
 import type { ReportRangeInfo } from './reports'
 
 /** `{ id, name }` of a workspace as it appears inside rows and lists */
@@ -56,7 +57,8 @@ export interface PerfSpendDay {
 }
 
 /** PerfResults (contract §2) — `spendByDay` only on `results`, not on `previousResults` / workspace rows */
-export interface PerfResults {
+/** FEAT-084 — `spend` is THB; + `spendByCurrency` / `spendUnconverted` / `converted` */
+export interface PerfResults extends SpendFxRow {
   spend: number
   spendByDay?: PerfSpendDay[]
   usedAdvertisers: number
@@ -113,7 +115,7 @@ export interface PerfNow {
   notDelivering: PerfList<PerfNotDeliveringItem>
 }
 
-export interface PerfDayRow {
+export interface PerfDayRow extends SpendFx {
   day: string
   spend: number
   used: number
@@ -128,7 +130,7 @@ export interface PerfWorkspaceRow extends Omit<PerfResults, 'spendByDay'> {
   now: { accounts: number, advertisers: number, banned: number, launching: number }
 }
 
-export interface PerfUtmRow {
+export interface PerfUtmRow extends SpendFxRow {
   prefix: string
   source: string
   medium: string
@@ -155,7 +157,9 @@ export interface PerfAdvertiserRef {
   tiktokAdvertiserId: string | null
 }
 
-export interface PerfAccountRow {
+export interface PerfAccountRow extends SpendFxRow {
+  /** FEAT-084 — `currencyOfAdvertiser()` */
+  currency?: string | null
   account: PerfAccountRef | null
   workspace: PerfWorkspaceRef | null
   advertiser: PerfAdvertiserRef
@@ -178,6 +182,8 @@ export interface PerformanceResponse {
   byWorkspace: PerfWorkspaceRow[]
   byUtm: PerfUtmRow[]
   byAccount: PerfAccountRow[]
+  /** FEAT-084 §2.2 */
+  fx?: FxReportBlock
 }
 
 /** `?tab=` of `/reports/performance` (default `day`, omitted from the URL) */

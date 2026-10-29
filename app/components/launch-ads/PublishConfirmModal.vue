@@ -15,6 +15,9 @@
  * TASK-theme-cbo-cap — under CBO the page passes the **campaign** budget as `budget` and `cbo: true`: the cap is
  * then `budget.amount × accounts` (one campaign per account; its copies share that budget, so they do not
  * multiply it) and one extra row (`la-confirm-cbo`) says so. The copies row itself is unchanged.
+ *
+ * FEAT-086 (spec §3) — `adGroupGuardText`: the page's `la-adgroup-guard-text` when a rule applies to at least one
+ * target, else `null`; rendered as `la-confirm-adgroup-guard` iff non-null.
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { AdGroupBudget } from '#shared/types/ad-group-templates'
@@ -32,6 +35,8 @@ const props = defineProps<{
   submitting: boolean
   /** FEAT-066 — mirrors the `la-pause-after-publish` checkbox of the page */
   pauseAfterPublish: boolean
+  /** FEAT-086 — the ad group guard summary; `null` = no target is guarded (off / no rule anywhere) */
+  adGroupGuardText?: string | null
 }>()
 
 const emit = defineEmits<{ confirm: [] }>()
@@ -106,6 +111,15 @@ const capText = computed(() => formatBudgetCap(props.budget, props.cbo ? 1 : pro
         >
           <UIcon name="i-lucide-info" class="size-4 shrink-0" />
           หลังเผยแพร่ ระบบจะปิด campaign ให้ (หลังรอบ KPI ถัดไป)
+        </p>
+
+        <p
+          v-if="adGroupGuardText"
+          class="flex items-start gap-1.5 text-sm text-muted"
+          data-testid="la-confirm-adgroup-guard"
+        >
+          <UIcon name="i-lucide-shield-alert" class="mt-0.5 size-4 shrink-0" />
+          <span class="min-w-0 break-words">{{ adGroupGuardText }}</span>
         </p>
 
         <UCheckbox
