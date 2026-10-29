@@ -53,6 +53,9 @@ const shown = computed(() => [...props.rows].sort((a, b) =>
 ))
 
 const totalSpend = computed(() => props.rows.reduce((sum, r) => sum + r.spend, 0))
+/** FEAT-084 — the footer's raw breakdown (same-currency sums of the rows' `spendByCurrency`, never a conversion) */
+const footerByCurrency = computed(() => mergeByCurrency(props.rows.map(r => r.spendByCurrency)))
+const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.spendUnconverted)))
 </script>
 
 <template>
@@ -106,7 +109,12 @@ const totalSpend = computed(() => props.rows.reduce((sum, r) => sum + r.spend, 0
             {{ row.utmCampaigns.length > 0 ? row.utmCampaigns.join(', ') : REPORT_DASH }}
           </td>
           <td class="px-3 py-2 text-right tabular-nums" :class="row.spend ? '' : 'text-dimmed'">
-            {{ formatDecimal(row.spend) }}
+            <MoneyCell
+              data-testid="rf-account-spend"
+              :thb="row.spend"
+              :by-currency="row.spendByCurrency ?? {}"
+              :unconverted="row.spendUnconverted ?? null"
+            />
           </td>
           <td class="px-3 py-2">
             <ReportPerformanceStateBadge :state="row.state" testid="rf-account-state" />
@@ -122,7 +130,12 @@ const totalSpend = computed(() => props.rows.reduce((sum, r) => sum + r.spend, 0
           <td />
           <td />
           <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(totalSpend) }}
+            <MoneyCell
+              total
+              :thb="totalSpend"
+              :by-currency="footerByCurrency"
+              :unconverted="footerUnconverted"
+            />
           </td>
           <td />
         </tr>

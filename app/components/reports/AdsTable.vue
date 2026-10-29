@@ -14,6 +14,7 @@
  * hides the Order and Advertiser columns altogether.
  */
 import type { AdReportRow, ReportSortField } from '#shared/types/reports'
+import type { MoneyMode } from '~/utils/money'
 
 const props = withDefaults(defineProps<{
   rows: AdReportRow[]
@@ -29,14 +30,28 @@ const props = withDefaults(defineProps<{
   pending?: boolean
   /** id of the row whose slideover is open (highlighted) */
   activeId?: string | null
+  /**
+   * FEAT-084 — set by the order Report tab only: Spend / CPC / CPA become `MoneyCell`s (raw `metrics` + row
+   * `currency`, THB from `spendThb` / `costThb`). `null` (default, `/reports`) renders exactly as before.
+   */
+  moneyMode?: MoneyMode | null
 }>(), {
   prefix: 'rp',
   compact: false,
   sort: '-spend',
   sortable: false,
   pending: false,
-  activeId: null
+  activeId: null,
+  moneyMode: null
 })
+
+function costOf(row: AdReportRow, value: number | null, count: number, per = 1) {
+  return {
+    native: { amount: value, currency: row.currency ?? null },
+    thb: costThb(rowSpendThb(row.spendThb, row.spendUnconverted), count, per),
+    decimals: 2
+  }
+}
 
 const emit = defineEmits<{
   'select': [row: AdReportRow]
@@ -226,7 +241,18 @@ function adGroupLine(row: AdReportRow): string {
           <!-- metrics -->
           <template v-if="row.metrics">
             <td class="border-b border-default px-2 py-2 text-right tabular-nums">
-              {{ formatDecimal(row.metrics.spend) }}
+              <MoneyCell
+                v-if="moneyMode"
+                :data-testid="`${prefix}-row-spend`"
+                :native="{ amount: row.metrics.spend, currency: row.currency ?? null }"
+                :thb="rowSpendThb(row.spendThb, row.spendUnconverted)"
+                :unconverted="row.spendUnconverted ?? null"
+                :rate-text="row.currency && row.currency !== 'THB' ? averageRateText(row.spendThb, row.metrics.spend) : null"
+                :mode="moneyMode"
+              />
+              <template v-else>
+                {{ formatDecimal(row.metrics.spend) }}
+              </template>
             </td>
             <td class="border-b border-default px-2 py-2 text-right tabular-nums">
               {{ formatInt(row.metrics.impressions) }}
@@ -238,13 +264,19 @@ function adGroupLine(row: AdReportRow): string {
               {{ formatPercent(row.metrics.ctr) }}
             </td>
             <td class="border-b border-default px-2 py-2 text-right tabular-nums">
-              {{ formatDecimal(row.metrics.cpc) }}
+              <MoneyCell v-if="moneyMode" v-bind="costOf(row, row.metrics.cpc, row.metrics.clicks)" :mode="moneyMode" />
+              <template v-else>
+                {{ formatDecimal(row.metrics.cpc) }}
+              </template>
             </td>
             <td class="border-b border-default px-2 py-2 text-right tabular-nums">
               {{ formatInt(row.metrics.conversions) }}
             </td>
             <td class="border-b border-default px-2 py-2 text-right tabular-nums">
-              {{ formatDecimal(row.metrics.conversionCost) }}
+              <MoneyCell v-if="moneyMode" v-bind="costOf(row, row.metrics.conversionCost, row.metrics.conversions)" :mode="moneyMode" />
+              <template v-else>
+                {{ formatDecimal(row.metrics.conversionCost) }}
+              </template>
             </td>
           </template>
           <td

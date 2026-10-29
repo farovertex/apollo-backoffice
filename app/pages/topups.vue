@@ -34,6 +34,7 @@ import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { ReportRangeState } from '#shared/types/reports'
 import type { TopupStatus, TopupView, TopupsResponse } from '#shared/types/topups'
+import type { TopupSummary } from '#shared/types/fx'
 import type { TopupViewer } from '~/utils/topup'
 
 useSeoMeta({ title: 'Top-ups' })
@@ -103,6 +104,8 @@ observeSound(activeRows, activeLoaded)
 const historyRows = ref<TopupView[]>([])
 const historyTotal = ref(0)
 const historyPage = ref(1)
+/** FEAT-084 §5 — `summary` of the last `GET /topups` (every row of the filter, all pages); null on an older API */
+const historySummary = ref<TopupSummary | null>(null)
 const historyStatus = ref<'all' | TopupStatus>('all')
 const historyPending = ref(false)
 const historyLoaded = ref(false)
@@ -128,6 +131,7 @@ async function loadHistory() {
     if (s !== historySession) return
     historyRows.value = res.topups ?? []
     historyTotal.value = res.total ?? historyRows.value.length
+    historySummary.value = res.summary ?? null
     historyLoaded.value = true
     forbidden.value = null
   } catch (e) {
@@ -136,6 +140,7 @@ async function loadHistory() {
     const message = err.data?.error ?? err.message ?? 'โหลดประวัติไม่สำเร็จ'
     historyRows.value = []
     historyTotal.value = 0
+    historySummary.value = null
     if ((err.response?.status ?? err.statusCode) === 403) forbidden.value = message
     else historyError.value = message
   } finally {
@@ -281,6 +286,30 @@ const LIVE_LABEL: Record<string, string> = {
 }
 
 const rows = computed(() => tab.value === 'active' ? activeRows.value : historyRows.value)
+
+// ── FEAT-084 — money mode (default `account` on this page), the THB of a round, the badges ────────────────────────
+const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('topups')
+
+/**
+ * THB of one round: the stamped `fx.thbAmount` of a paid round (R, fixed), else the S block `thb.amount` (latest
+ * rate) of a not-yet-paid foreign round; a THB round is its own amount (MoneyCell prints it raw).
+ */
+function topupMoney(row: TopupView) {
+  const foreign = row.currency !== 'THB'
+  return {
+    native: { amount: row.amount, currency: row.currency },
+    thb: row.fx?.thbAmount ?? row.thb?.amount ?? null,
+    estimated: foreign && !row.fx && (row.thb?.estimated ?? true),
+    rate: row.fx?.rate ?? row.thb?.rate ?? null,
+    day: row.fx?.day ?? row.thb?.day ?? null
+  }
+}
+
+/** "ประมาณ — ยอดหักจริงของบัตรต่างจากนี้ได้" whenever a listed round is not in THB */
+const hasForeignRow = computed(() => rows.value.some(r => r.currency !== 'THB'))
+const moneyConverted = computed(() => rows.value.some(r => !!r.fx || !!r.thb))
+const moneyLatest = computed(() => latestThbBlock(rows.value.flatMap(r => [r.thb, r.fx])))
+const summaryUnconverted = computed(() => unconvertedFromList(historySummary.value?.unconverted))
 const pending = computed(() => tab.value === 'active' ? activePending.value : historyPending.value)
 const showActiveEmpty = computed(() => tab.value === 'active' && activeLoaded.value && activeRows.value.length === 0)
 const showHistoryEmpty = computed(() => tab.value === 'history' && historyLoaded.value && historyRows.value.length === 0)
@@ -438,6 +467,22 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
               aria-label="Workspace"
               data-testid="tp-filter-workspace"
             />
+
+            <!-- FEAT-084 — money mode of this page (default สกุลของบัญชี) + the badges -->
+            <div class="flex flex-wrap items-center gap-2 sm:ms-auto">
+              <UBadge
+                v-if="hasForeignRow"
+                color="warning"
+                variant="subtle"
+                size="sm"
+                icon="i-lucide-info"
+                data-testid="tp-fx-approx"
+              >
+                ประมาณ — ยอดหักจริงของบัตรต่างจากนี้ได้
+              </UBadge>
+              <MoneyNote :mode="moneyMode" :converted="moneyConverted" :latest="moneyLatest" />
+              <MoneyModeSwitch :mode="moneyMode" @update:mode="setMoneyMode" />
+            </div>
           </div>
 
           <UAlert
@@ -590,8 +635,13 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                   >
                     {{ topupWorkspaceText(row.workspaceId, row.workspace) }}
                   </td>
-                  <td class="border-b border-default px-2 py-2 text-right tabular-nums whitespace-nowrap" data-testid="tp-row-amount">
-                    {{ formatInt(row.amount) }}
+                  <td class="border-b border-default px-2 py-2 text-right tabular-nums whitespace-nowrap">
+                    <MoneyCell
+                      v-bind="topupMoney(row)"
+                      :mode="moneyMode"
+                      data-testid="tp-row-amount"
+                      :data-amount="row.amount"
+                    />
                   </td>
                   <!-- FEAT-051 — ช่องทาง: QR (every old row included) or บัตร + its last 4 digits -->
                   <td class="border-b border-default px-2 py-2" data-testid="tp-row-channel" :data-channel="topupChannel(row)">
@@ -720,6 +770,27 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
             class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted"
           >
             <span data-testid="tp-count">แสดง {{ rangeFrom }}–{{ rangeTo }} จาก {{ historyTotal }}</span>
+            <!-- FEAT-084 — THB total of every round of the filter (all pages), always THB whatever the mode -->
+            <span
+              v-if="historySummary"
+              class="flex flex-wrap items-baseline gap-x-1.5"
+              data-testid="tp-summary"
+              :data-thb="historySummary.totalThb"
+              :data-estimated="String(historySummary.estimated)"
+            >
+              <span class="font-medium text-highlighted tabular-nums" data-testid="tp-summary-thb">
+                รวม {{ historySummary.estimated || hasForeign(historySummary.byCurrency) ? '≈ ' : '' }}{{ formatThb(historySummary.totalThb) }}
+              </span>
+              <span v-if="Object.keys(historySummary.byCurrency).length > 0" class="tabular-nums" data-testid="tp-summary-breakdown">
+                ({{ byCurrencyText(historySummary.byCurrency, ' · ') }})
+              </span>
+              <span
+                v-if="summaryUnconverted"
+                class="font-medium text-warning"
+                :title="unconvertedTitle(summaryUnconverted)"
+                data-testid="money-unconverted"
+              >{{ unconvertedMarker(summaryUnconverted) }}</span>
+            </span>
             <UPagination
               v-if="historyTotal > LIMIT"
               :page="historyPage"

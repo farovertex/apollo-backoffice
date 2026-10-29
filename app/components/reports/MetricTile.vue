@@ -11,8 +11,11 @@ const props = withDefaults(defineProps<{
   label: string
   value: number | null
   previous?: number | null
-  /** `int` 1,234 · `dec` 1,234.50 · `pct` 2.71% (a pct tile compares in points, not in percent) */
-  format?: 'int' | 'dec' | 'pct'
+  /**
+   * `int` 1,234 · `dec` 1,234.50 · `pct` 2.71% (a pct tile compares in points, not in percent) ·
+   * FEAT-084 `thb` ฿ 1,235 (a converted / total THB amount, 0 decimals) · `thb2` ฿ 0.42 (THB cost metrics)
+   */
+  format?: 'int' | 'dec' | 'pct' | 'thb' | 'thb2'
   /** small caption under the value, e.g. the currency note of the spend tile (spec A8) */
   caption?: string
   lowerIsBetter?: boolean
@@ -38,6 +41,8 @@ const props = withDefaults(defineProps<{
 
 const text = computed(() => {
   if (props.format === 'pct') return formatPercent(props.value)
+  if (props.format === 'thb') return formatThb(props.value, 0)
+  if (props.format === 'thb2') return formatThb(props.value, 2)
   return props.format === 'dec' ? formatDecimal(props.value) : formatInt(props.value)
 })
 
@@ -50,7 +55,7 @@ const deltaText = computed(() => {
   if (d.direction === 'flat') return 'เท่าเดิม'
   if (props.format === 'pct') return `${arrow} ${formatDecimal(Math.abs(d.diff))} pt`
   if (d.percent === null) {
-    const abs = props.format === 'dec' ? formatDecimal(Math.abs(d.diff)) : formatInt(Math.abs(d.diff))
+    const abs = props.format === 'int' ? formatInt(Math.abs(d.diff)) : formatDecimal(Math.abs(d.diff))
     return `${arrow} ${abs}`
   }
   return `${arrow} ${formatDecimal(Math.abs(d.percent))}%`

@@ -663,6 +663,15 @@ function setUtmCollapsed(value: boolean) {
 
 // ── states ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const total = computed(() => data.value?.total ?? 0)
+
+// FEAT-084 — "แสดงเป็น: THB | สกุลของบัญชี", one `localStorage` key for the three tabs; the `account`-mode badge
+// quotes the newest S rate of the listed rows (balance / advertiser budget / campaign budget `thb` blocks)
+const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('ads-monitor')
+const moneyLatest = computed(() => latestThbBlock((data.value?.rows ?? []).flatMap(r => [
+  r.account?.balance?.thb,
+  r.advertiserBudget?.thb,
+  r.budget?.thb
+])))
 const unfilteredTotal = computed(() => data.value?.unfilteredTotal ?? 0)
 const settled = computed(() => loaded.value && !error.value && !forbidden.value)
 const isEmpty = computed(() => settled.value && unfilteredTotal.value === 0)
@@ -866,6 +875,11 @@ const intervalText = computed(() => {
               data-testid="am-clear"
               @click="clearFilters"
             />
+            <!-- FEAT-084 — money mode of the three tabs (one key for the page) + the mode badge -->
+            <div class="flex flex-wrap items-center gap-2 sm:ms-auto">
+              <MoneyNote :mode="moneyMode" :fx="data?.fx" :latest="moneyLatest" />
+              <MoneyModeSwitch :mode="moneyMode" @update:mode="setMoneyMode" />
+            </div>
           </div>
 
           <div v-if="showSkeleton" class="flex flex-col gap-2" data-testid="am-loading">
@@ -925,6 +939,9 @@ const intervalText = computed(() => {
               :level="tab"
               :rows="rows"
               :totals="data.totals"
+              :mode="moneyMode"
+              :spend-by-currency="data.spendByCurrency"
+              :spend-unconverted="data.spendUnconverted"
               :pending="pending"
               :name-collapsed="nameCollapsed"
               :utm-collapsed="utmCollapsed"

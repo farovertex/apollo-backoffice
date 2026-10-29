@@ -18,16 +18,17 @@ defineEmits<{ pick: [id: string] }>()
 type Col = 'name' | 'spend' | 'used' | 'registers' | 'depositors' | 'depositAmount' | 'costReg' | 'costDep' | 'avgDep'
   | 'depReg' | 'depBudget' | 'bans' | 'runs' | 'accounts' | 'banned' | 'launching'
 
-interface NumCol { key: Exclude<Col, 'name'>, label: string, fmt: 'int' | 'dec' | 'pct', tone?: string }
+/** FEAT-084 — `thb` = the THB spend (`MoneyCell`), `thb2` = a THB cost ratio (`฿ 12.30`) */
+interface NumCol { key: Exclude<Col, 'name'>, label: string, fmt: 'int' | 'dec' | 'pct' | 'thb' | 'thb2', tone?: string }
 
 const NUM_COLS: NumCol[] = [
-  { key: 'spend', label: 'Spend', fmt: 'dec' },
+  { key: 'spend', label: 'Spend', fmt: 'thb' },
   { key: 'used', label: 'Used', fmt: 'int' },
   { key: 'registers', label: 'Register', fmt: 'int' },
   { key: 'depositors', label: 'Deposit', fmt: 'int' },
   { key: 'depositAmount', label: 'Amount', fmt: 'dec' },
-  { key: 'costReg', label: 'Cost/Reg', fmt: 'dec' },
-  { key: 'costDep', label: 'Cost/Dep', fmt: 'dec' },
+  { key: 'costReg', label: 'Cost/Reg', fmt: 'thb2' },
+  { key: 'costDep', label: 'Cost/Dep', fmt: 'thb2' },
   { key: 'avgDep', label: 'Avg Dep', fmt: 'dec' },
   { key: 'depReg', label: 'Dep/Reg', fmt: 'pct' },
   { key: 'depBudget', label: 'Dep/Budget', fmt: 'dec' },
@@ -63,6 +64,8 @@ function valuesOf(r: Omit<PerfResults, 'spendByDay'>, now: { accounts: number, b
 
 function fmt(value: number | null, kind: NumCol['fmt']): string {
   if (kind === 'pct') return formatPercent(value)
+  if (kind === 'thb') return formatThb(value, 0)
+  if (kind === 'thb2') return formatThb(value, 2)
   return kind === 'dec' ? formatDecimal(value) : formatInt(value)
 }
 
@@ -145,7 +148,16 @@ const footer = computed(() => valuesOf(props.results, {
             class="px-3 py-2 text-right tabular-nums"
             :class="!item.values[c.key] ? 'text-dimmed' : (c.tone ?? '')"
           >
-            {{ fmt(item.values[c.key], c.fmt) }}
+            <MoneyCell
+              v-if="c.fmt === 'thb'"
+              data-testid="rf-workspace-spend"
+              :thb="item.values[c.key]"
+              :by-currency="item.row.spendByCurrency ?? {}"
+              :unconverted="item.row.spendUnconverted ?? null"
+            />
+            <template v-else>
+              {{ fmt(item.values[c.key], c.fmt) }}
+            </template>
           </td>
         </tr>
       </tbody>
@@ -155,7 +167,16 @@ const footer = computed(() => valuesOf(props.results, {
             รวมทั้งหมด
           </td>
           <td v-for="c in NUM_COLS" :key="c.key" class="px-3 py-2 text-right tabular-nums">
-            {{ fmt(footer[c.key], c.fmt) }}
+            <MoneyCell
+              v-if="c.fmt === 'thb'"
+              total
+              :thb="footer[c.key]"
+              :by-currency="results.spendByCurrency ?? {}"
+              :unconverted="results.spendUnconverted ?? null"
+            />
+            <template v-else>
+              {{ fmt(footer[c.key], c.fmt) }}
+            </template>
           </td>
         </tr>
       </tfoot>

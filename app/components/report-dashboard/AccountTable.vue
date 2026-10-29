@@ -3,6 +3,10 @@
  * FEAT-069 — `rd-table-account`: per advertiser Account · Workspace (GOD) · Advertiser · Spend · Impr · Clicks ·
  * Conv · Register · Deposit · Amount · Dep/Budget · Status now (`perfStateBadge`), "UTM ร่วม" chip
  * (`rd-utm-shared`) when the advertiser's UTM key is shared; sorted by Dep/Budget desc (nulls last) then spend desc.
+ *
+ * FEAT-084 — `metrics.spend` is THB (the API sums `spendThb`), so Dep/Budget and the sort already use THB; the
+ * spend cell is a `MoneyCell` (`฿ 665` / `20.10 USD`, `+n ?` for `spendUnconverted`), the footer `฿` total with
+ * the merged raw breakdown.
  */
 import type { DashboardAccountRow } from '#shared/types/report-dashboard'
 
@@ -43,6 +47,9 @@ const totals = computed(() => {
   }
   return t
 })
+
+const footerByCurrency = computed(() => mergeByCurrency(props.rows.map(r => r.spendByCurrency)))
+const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.spendUnconverted)))
 </script>
 
 <template>
@@ -114,8 +121,13 @@ const totals = computed(() => {
               {{ last4(row.advertiser.tiktokAdvertiserId) }}
             </div>
           </td>
-          <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(row.metrics.spend) }}
+          <td class="px-3 py-2 text-right">
+            <MoneyCell
+              data-testid="rd-account-spend"
+              :thb="row.metrics.spend"
+              :by-currency="row.spendByCurrency ?? {}"
+              :unconverted="row.spendUnconverted ?? null"
+            />
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(row.metrics.impressions) }}
@@ -150,8 +162,13 @@ const totals = computed(() => {
           </td>
           <td v-if="isGod" />
           <td />
-          <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(totals.spend) }}
+          <td class="px-3 py-2 text-right">
+            <MoneyCell
+              total
+              :thb="totals.spend"
+              :by-currency="footerByCurrency"
+              :unconverted="footerUnconverted"
+            />
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(totals.impressions) }}

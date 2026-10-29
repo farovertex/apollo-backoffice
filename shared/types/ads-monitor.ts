@@ -16,7 +16,7 @@
  * one. Rendered by `AdsMonitorUtmCell` as a collapsible column right after `name` (campaign tab: after
  * `cover`), linking to `/reports/utm` pre-filtered to that set + the monitor's current range.
  */
-import type { ThbBlock } from './fx'
+import type { FxReportBlock, SpendFx, SpendThbRow, ThbBlock } from './fx'
 import type { BannedAd } from './report-banned'
 import type { KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
 
@@ -243,8 +243,8 @@ export interface MonitorUtm extends MonitorUtmSet {
   others: MonitorUtmSet[]
 }
 
-/** One row of any tab (contract §3.1 / §3.2 / §3.3). */
-export interface MonitorRow {
+/** One row of any tab (contract §3.1 / §3.2 / §3.3). FEAT-084 §3 — + `currency` / `spendThb` / `spendUnconverted`. */
+export interface MonitorRow extends SpendThbRow {
   level: MonitorLevel
   /** the TikTok id of this level — the `tiktokId` of a toggle */
   id: string
@@ -299,8 +299,8 @@ export interface MonitorRow {
   utm: MonitorUtm | null
 }
 
-/** Shared 200 envelope of the three list endpoints. */
-export interface AdsMonitorResponse {
+/** Shared 200 envelope of the three list endpoints. FEAT-084 §3 — `totals` THB + `spendByCurrency` / `spendUnconverted` / `fx`. */
+export interface AdsMonitorResponse extends SpendFx {
   rows: MonitorRow[]
   page: number
   limit: number
@@ -318,6 +318,7 @@ export interface AdsMonitorResponse {
    * otherwise `{ id: <query value>, name }` with `name` from the newest matching group, `null` when none.
    */
   campaign: { id: string, name: string | null } | null
+  fx?: FxReportBlock
 }
 
 /** `POST /ads-monitor/toggle` body (strict on the API side). */

@@ -10,7 +10,7 @@
  */
 export const REPORT_HELP: Record<string, string> = {
   // ── Performance `rf` ──────────────────────────────────────────────────────────────────────────────────────────────
-  'rf-tile-spend': 'ค่าโฆษณารวมของ advertiser ทุกตัวในช่วงที่เลือก\nมาจากยอดรวมรายวันที่ job kpi ดึงจาก TikTok Ads (แถวรวมของ advertiser ต่อวัน)\nหน่วยตามสกุลเงินของบัญชี ไม่แปลงค่า · วันตัดตามโซน Asia/Bangkok\nเทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน',
+  'rf-tile-spend': 'ค่าโฆษณารวมของ advertiser ทุกตัวในช่วงที่เลือก\nมาจากยอดรวมรายวันที่ job kpi ดึงจาก TikTok Ads (แถวรวมของ advertiser ต่อวัน)\nเป็น THB: บัญชีสกุลอื่นแปลงด้วยอัตรา mid-market ของวันนั้น (fastforex) · ยอดที่แปลงไม่ได้แสดงแยกเป็น +n ? · วันตัดตามโซน Asia/Bangkok\nเทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน',
   'rf-spend-chart': 'แท่งละหนึ่งวัน = spend ของวันนั้น\nเลือกวันเดียว = โชว์ 7 วันล่าสุดถึงวันนั้นแทน',
   'rf-tile-used': 'จำนวน advertiser ที่มี spend > 0 ในช่วง\nบัญชี = TikTok account ที่ advertiser เหล่านั้นสังกัด (นับไม่ซ้ำ)',
   'rf-tile-registers': 'ผลรวมคนสมัคร (total_register) จากระบบ UTM\nนับเฉพาะ UTM ที่ workspace นี้ใช้ใน ad template / order ที่เคยยิง\nวันตัดตามเวลาไทย · UTM ที่หลาย workspace ใช้ร่วมนับเต็มให้ทุก workspace (ยอดรวมนับครั้งเดียว)',
@@ -65,7 +65,7 @@ export const REPORT_HELP: Record<string, string> = {
   // ── Dashboard `rd` ────────────────────────────────────────────────────────────────────────────────────────────────
   'rd-hero': 'Dep / Budget = ยอดฝาก ÷ Spend (กี่เท่า)\nยอดฝากจากระบบ UTM ของ UTM ที่ workspace ใช้ · Spend จากยอดรวมรายวันของ TikTok\nเทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน',
   'rd-tile-depBudget': 'Dep / Budget = ยอดฝาก ÷ Spend (กี่เท่า)\nยอดฝากจากระบบ UTM ของ UTM ที่ workspace ใช้ · Spend จากยอดรวมรายวันของ TikTok\nเทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน',
-  'rd-tile-spend': 'ค่าโฆษณารวมในช่วง จากยอดรวมรายวันที่ job kpi ดึงจาก TikTok Ads\nหน่วยตามสกุลเงินของบัญชี ไม่แปลงค่า',
+  'rd-tile-spend': 'ค่าโฆษณารวมในช่วง จากยอดรวมรายวันที่ job kpi ดึงจาก TikTok Ads\nเป็น THB: บัญชีสกุลอื่นแปลงด้วยอัตรา mid-market ของวันนั้น (fastforex) · ยอดที่แปลงไม่ได้แสดงแยกเป็น +n ?',
   'rd-tile-impressions': 'จำนวนครั้งที่โฆษณาถูกแสดง (impressions ของ TikTok) รวมทุก advertiser ในช่วง\nCPM = Spend ÷ impressions × 1,000 (คิดใหม่จากผลรวม ไม่ใช่ค่าเฉลี่ยของแต่ละบัญชี)',
   'rd-tile-clicks': 'จำนวนคลิก (clicks ของ TikTok) รวมในช่วง\nCTR = clicks ÷ impressions × 100 · CPC = Spend ÷ clicks (คิดใหม่จากผลรวม)',
   'rd-tile-conversions': 'conversions ตามที่ TikTok นับ (pixel/event ของ ad account) รวมในช่วง\nCost/Conv = Spend ÷ conversions · Conv rate = conversions ÷ clicks × 100\nคนละตัวกับคนสมัคร/คนฝากของระบบ UTM',

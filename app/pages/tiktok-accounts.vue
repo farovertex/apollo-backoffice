@@ -255,6 +255,7 @@ const TopupsRowActions = resolveComponent('TopupsRowActions')
 const TiktokAccountsFavoriteStar = resolveComponent('TiktokAccountsFavoriteStar')
 const TiktokAccountsProxyCell = resolveComponent('TiktokAccountsProxyCell')
 const UCheckbox = resolveComponent('UCheckbox')
+const MoneyCell = resolveComponent('MoneyCell')
 
 const POLL_MS = 2000
 
@@ -584,8 +585,77 @@ const rows = computed<TikTokAccount[]>(() => {
   })
   // FEAT-063 (AC-6) — favorites first, stable: a plain `sort` on a boolean key keeps the relative order of every
   // two rows with the same favorite-ness (the API's `createdAt desc`), so a list with no favorites is untouched.
-  return [...merged].sort((x, y) => Number(effectiveFavorite(y)) - Number(effectiveFavorite(x)))
+  // FEAT-084 (AC-16) — the Balance header sorts by the THB value in both money modes (`balanceThb.amount`, the raw
+  // amount of a THB row; unknown → last), inside the favorites-first grouping.
+  const dir = balanceSort.value
+  return [...merged].sort((x, y) => {
+    const fav = Number(effectiveFavorite(y)) - Number(effectiveFavorite(x))
+    if (fav !== 0 || dir === 'none') return fav
+    const xv = accountBalanceThb(x)
+    const yv = accountBalanceThb(y)
+    if (xv === null || yv === null) return xv === null ? (yv === null ? 0 : 1) : -1
+    return dir === 'asc' ? xv - yv : yv - xv
+  })
 })
+
+// ── FEAT-084 — money mode (THB | สกุลของบัญชี), Balance sort and the THB footer ───────────────────────────────────
+const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('tiktok-accounts')
+const balanceSort = ref<'none' | 'desc' | 'asc'>('none')
+function toggleBalanceSort() {
+  balanceSort.value = balanceSort.value === 'none' ? 'desc' : balanceSort.value === 'desc' ? 'asc' : 'none'
+}
+
+function balanceNumber(a: TikTokAccount): number | null {
+  const raw = (a.balanceAmount ?? '').trim()
+  if (!raw) return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+/** THB value of one account's balance (`balanceThb.amount`, or the raw amount of a THB account); `null` = unknown */
+function accountBalanceThb(a: TikTokAccount): number | null {
+  return thbSortValue(balanceNumber(a), a.balanceCurrency, a.balanceThb?.amount ?? null)
+}
+
+/**
+ * `ta-balance-total` (spec A11) — summed here from the rows already on screen: THB rows as is, foreign rows via
+ * their `balanceThb.amount` (latest rate → `≈`), unknown currency / no rate → `+n ?`. No FX in the BO.
+ */
+const balanceTotal = computed(() => {
+  let thb = 0
+  let converted = false
+  let estimated = false
+  let any = false
+  const byCurrency: Record<string, number> = {}
+  const unconverted: Record<string, number> = {}
+  for (const a of rows.value) {
+    const n = balanceNumber(a)
+    if (n === null) continue
+    any = true
+    if (a.balanceCurrency) byCurrency[a.balanceCurrency] = (byCurrency[a.balanceCurrency] ?? 0) + n
+    const v = accountBalanceThb(a)
+    if (v === null) {
+      const key = a.balanceCurrency ?? '?'
+      unconverted[key] = (unconverted[key] ?? 0) + n
+      continue
+    }
+    thb += v
+    if (a.balanceCurrency !== 'THB') {
+      converted = true
+      if (a.balanceThb?.estimated) estimated = true
+    }
+  }
+  return {
+    any,
+    thb,
+    approx: converted || estimated,
+    byCurrency,
+    unconverted: Object.keys(unconverted).length > 0 ? unconverted : null
+  }
+})
+
+const balanceConverted = computed(() => rows.value.some(a => !!a.balanceThb))
+const balanceLatest = computed(() => latestThbBlock(rows.value.map(a => a.balanceThb)))
 
 // FEAT-076 — header checkbox over the rows currently visible (search + filters applied)
 const selectAllState = computed<boolean | 'indeterminate'>(() => {
@@ -2212,7 +2282,23 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
   },
   {
     id: 'balance',
-    header: 'Balance',
+    // FEAT-084 — sortable by the THB value in both modes ("เรียงด้วยค่า THB")
+    header: () => h(UButton, {
+      'label': 'Balance',
+      'color': 'neutral',
+      'variant': 'ghost',
+      'size': 'xs',
+      'class': '-mx-2 font-semibold',
+      'trailingIcon': balanceSort.value === 'none'
+        ? 'i-lucide-arrow-up-down'
+        : balanceSort.value === 'desc' ? 'i-lucide-arrow-down-wide-narrow' : 'i-lucide-arrow-up-narrow-wide',
+      'title': SORT_BY_THB_HINT,
+      'aria-label': `Balance — ${SORT_BY_THB_HINT}`,
+      'aria-sort': balanceSort.value === 'none' ? 'none' : balanceSort.value === 'desc' ? 'descending' : 'ascending',
+      'data-testid': 'ta-balance-sort',
+      'data-sort': balanceSort.value,
+      'onClick': toggleBalanceSort
+    }),
     cell: ({ row }) => {
       const a = row.original
       // 2026-10-16 — the amount and the currency are two elements now: grouped digits (`6,091.06`) + a coloured
@@ -2221,22 +2307,29 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       const text = balanceAmountText(a.balanceAmount)
       const blocked = balanceBlockedReason(a)
       const loading = balanceLoading.value.has(a.id)
+      // FEAT-084 — `ta-balance` is a `MoneyCell` now: `thb` mode `฿ 23,647` / `700.00 USD`, `account` mode the other
+      // way round, THB rows `6,091.06 THB` in both; the currency badge follows the line with the raw amount.
       const amountLine = h('div', { class: 'flex items-center gap-1 whitespace-nowrap' }, [
-        h('span', {
-          'class': text ? 'font-medium tabular-nums text-highlighted' : 'text-muted',
-          'data-testid': 'ta-balance',
-          'data-amount': a.balanceAmount ?? ''
-        }, text || '—'),
-        text && a.balanceCurrency
-          ? h(UBadge, {
-              'color': balanceCurrencyColor(a.balanceCurrency),
-              'variant': 'subtle',
-              'size': 'sm',
-              'class': 'font-medium whitespace-nowrap',
-              'data-testid': 'ta-balance-currency',
-              'data-currency': a.balanceCurrency
-            }, () => a.balanceCurrency)
-          : null,
+        text
+          ? h(MoneyCell, {
+              'class': 'font-medium text-highlighted',
+              'align': 'start',
+              'data-testid': 'ta-balance',
+              'data-amount': a.balanceAmount ?? '',
+              'native': { amount: balanceNumber(a), currency: a.balanceCurrency },
+              'thb': a.balanceThb?.amount ?? null,
+              'estimated': a.balanceThb?.estimated ?? false,
+              'rate': a.balanceThb?.rate ?? null,
+              'day': a.balanceThb?.day ?? null,
+              'mode': moneyMode.value,
+              'currencyColor': a.balanceCurrency ? balanceCurrencyColor(a.balanceCurrency) : null,
+              'currencyTestid': 'ta-balance-currency'
+            })
+          : h('span', {
+              'class': 'text-muted',
+              'data-testid': 'ta-balance',
+              'data-amount': a.balanceAmount ?? ''
+            }, '—'),
         canPay.value
           ? h(UTooltip, { text: blocked ?? 'Reload balance' }, () => h('span', { class: 'inline-flex' }, [
               h(UButton, {
@@ -2561,6 +2654,11 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             data-testid="ta-bulk-prefix"
             @click="bulkPrefixOpen = true"
           />
+          <!-- FEAT-084 — money mode of the Balance column (persisted per page) + the mode badge -->
+          <div class="flex flex-wrap items-center gap-2 sm:ms-auto">
+            <MoneyNote :mode="moneyMode" :converted="balanceConverted" :latest="balanceLatest" />
+            <MoneyModeSwitch :mode="moneyMode" @update:mode="setMoneyMode" />
+          </div>
         </div>
 
         <UAlert
@@ -2707,6 +2805,16 @@ const showTable = computed(() => !error.value && !isEmpty.value)
           class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted"
         >
           <span data-testid="ta-count">{{ rows.length }} accounts</span>
+          <!-- FEAT-084 — THB total of the listed balances, always THB whatever the mode -->
+          <span
+            v-if="balanceTotal.any"
+            class="flex flex-wrap items-baseline gap-x-2"
+            data-testid="ta-balance-total"
+            :data-thb="balanceTotal.thb"
+          >
+            <span class="font-medium text-highlighted tabular-nums">รวม {{ balanceTotal.approx ? '≈ ' : '' }}{{ formatThb(balanceTotal.thb) }}</span>
+            <MoneySubLine :by-currency="balanceTotal.byCurrency" :unconverted="balanceTotal.unconverted" />
+          </span>
         </div>
       </div>
 

@@ -19,16 +19,17 @@ const props = defineProps<{
 type Col = 'utm' | 'advertisers' | 'spend' | 'registers' | 'depositors' | 'depositAmount' | 'costReg' | 'costDep'
   | 'avgDep' | 'depReg' | 'depBudget'
 
-interface NumCol { key: Exclude<Col, 'utm'>, label: string, fmt: 'int' | 'dec' | 'pct' }
+/** FEAT-084 — `thb` = the THB spend (`MoneyCell`), `thb2` = a THB cost ratio (`฿ 12.30`) */
+interface NumCol { key: Exclude<Col, 'utm'>, label: string, fmt: 'int' | 'dec' | 'pct' | 'thb' | 'thb2' }
 
 const NUM_COLS: NumCol[] = [
   { key: 'advertisers', label: 'Advertisers', fmt: 'int' },
-  { key: 'spend', label: 'Spend', fmt: 'dec' },
+  { key: 'spend', label: 'Spend', fmt: 'thb' },
   { key: 'registers', label: 'Register', fmt: 'int' },
   { key: 'depositors', label: 'Deposit', fmt: 'int' },
   { key: 'depositAmount', label: 'Amount', fmt: 'dec' },
-  { key: 'costReg', label: 'Cost/Reg', fmt: 'dec' },
-  { key: 'costDep', label: 'Cost/Dep', fmt: 'dec' },
+  { key: 'costReg', label: 'Cost/Reg', fmt: 'thb2' },
+  { key: 'costDep', label: 'Cost/Dep', fmt: 'thb2' },
   { key: 'avgDep', label: 'Avg Dep', fmt: 'dec' },
   { key: 'depReg', label: 'Dep/Reg', fmt: 'pct' },
   { key: 'depBudget', label: 'Dep/Budget', fmt: 'dec' }
@@ -54,6 +55,8 @@ function valuesOf(r: { advertisers: number, spend: number | null, registers: num
 
 function fmt(value: number | null, kind: NumCol['fmt']): string {
   if (kind === 'pct') return formatPercent(value)
+  if (kind === 'thb') return formatThb(value, 0)
+  if (kind === 'thb2') return formatThb(value, 2)
   return kind === 'dec' ? formatDecimal(value) : formatInt(value)
 }
 
@@ -107,6 +110,9 @@ const footer = computed(() => {
   values.advertisers = null
   return values
 })
+
+const footerByCurrency = computed(() => mergeByCurrency(props.rows.map(r => r.spendByCurrency)))
+const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.spendUnconverted)))
 </script>
 
 <template>
@@ -166,11 +172,17 @@ const footer = computed(() => {
             class="px-3 py-2 text-right tabular-nums"
             :class="!item.values[c.key] ? 'text-dimmed' : ''"
           >
-            {{ fmt(item.values[c.key], c.fmt) }}
-            <span
-              v-if="c.key === 'spend' && item.row.spendCurrency && item.row.spendCurrency !== 'THB'"
-              class="ml-1 text-xs text-muted"
-            >{{ item.row.spendCurrency }}</span>
+            <MoneyCell
+              v-if="c.fmt === 'thb'"
+              data-testid="rf-utm-spend"
+              :data-spend-currency="item.row.spendCurrency ?? ''"
+              :thb="item.values[c.key]"
+              :by-currency="item.row.spendByCurrency ?? {}"
+              :unconverted="item.row.spendUnconverted ?? null"
+            />
+            <template v-else>
+              {{ fmt(item.values[c.key], c.fmt) }}
+            </template>
           </td>
         </tr>
       </tbody>
@@ -180,7 +192,16 @@ const footer = computed(() => {
             รวม {{ formatInt(rows.length) }} UTM
           </td>
           <td v-for="c in NUM_COLS" :key="c.key" class="px-3 py-2 text-right tabular-nums">
-            {{ c.key === 'advertisers' ? '' : fmt(footer[c.key], c.fmt) }}
+            <MoneyCell
+              v-if="c.fmt === 'thb'"
+              total
+              :thb="footer[c.key]"
+              :by-currency="footerByCurrency"
+              :unconverted="footerUnconverted"
+            />
+            <template v-else>
+              {{ c.key === 'advertisers' ? '' : fmt(footer[c.key], c.fmt) }}
+            </template>
           </td>
         </tr>
       </tfoot>
