@@ -2,6 +2,7 @@
  * FEAT-069 — `GET /reports/dashboard` (api-contract.md v1 §3) and `GET /reports/dashboard/now` (§4). 1:1 with
  * the responses. Shared identity blocks come from `report-performance.ts` (same API views).
  */
+import type { BalanceThb, FxReportBlock, SpendFx, SpendFxRow } from './fx'
 import type { KpiMetrics, ReportRangeInfo } from './reports'
 import type {
   PerfAccountRef,
@@ -15,7 +16,8 @@ import type {
   PerfWorkspaceRef
 } from './report-performance'
 
-export interface DashboardFunnel {
+/** FEAT-084 — `metrics.spend` and the cost metrics are THB; `spendByCurrency` / `spendUnconverted` / `converted` added */
+export interface DashboardFunnel extends SpendFxRow {
   metrics: KpiMetrics
   utm: PerfUtmTotals
   winLose: number
@@ -23,7 +25,8 @@ export interface DashboardFunnel {
   sharedWith: PerfWorkspaceRef[]
 }
 
-export interface DashboardDailyPoint {
+/** FEAT-084 — `spend` is THB */
+export interface DashboardDailyPoint extends SpendFx {
   day: string
   spend: number
   impressions: number
@@ -49,16 +52,18 @@ export interface DashboardBalance {
   accounts: number
 }
 
-export interface DashboardWorkspaceRow {
+export interface DashboardWorkspaceRow extends SpendFxRow {
   workspace: PerfWorkspaceRef
   admin: PerfAdminRef | null
   metrics: KpiMetrics
   utm: PerfUtmTotals
   winLose: number
-  now: { accounts: number, advertisers: number, launching: number, banned: number, balance: DashboardBalance[] }
+  now: { accounts: number, advertisers: number, launching: number, banned: number, balance: DashboardBalance[], balanceThb?: BalanceThb }
 }
 
-export interface DashboardAccountRow {
+export interface DashboardAccountRow extends SpendFxRow {
+  /** FEAT-084 — `currencyOfAdvertiser()` */
+  currency?: string | null
   account: PerfAccountRef | null
   workspace: PerfWorkspaceRef | null
   advertiser: PerfAdvertiserRef
@@ -81,6 +86,9 @@ export interface DashboardResponse {
   hourly: DashboardHourlyPoint[] | null
   byWorkspace: DashboardWorkspaceRow[]
   byAccount: DashboardAccountRow[]
+  /** FEAT-084 §2.1 — scope-wide balances (absent on an older API) */
+  now?: { balance: DashboardBalance[], balanceThb: BalanceThb }
+  fx?: FxReportBlock
 }
 
 export interface DashboardRejectedAd {

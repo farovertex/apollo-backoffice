@@ -109,3 +109,75 @@ export interface FxManualResult {
   before: { rate: number, source: FxSource } | null
   restamped: number
 }
+
+/*
+ * FEAT-084 (api-contract v1 §1.2–§1.4, §5) — reports in THB. Every key the API added in this feature is typed
+ * **optional** on the widened views below so a response from an older API (or a test stub without them) still
+ * renders the raw figures without a console error (spec AC-18).
+ */
+
+/** §1.2 — raw spend per ISO currency (`{ THB: 1000, USD: 25.1 }`), only currencies seen; `{}` when none */
+export type MoneyByCurrency = Record<string, number>
+
+/** §1.2 — raw spend that could not be converted, keyed by ISO or `"?"` (unknown currency); `null` when none */
+export type MoneyUnconverted = Record<string, number> | null
+
+/** §1.3 — one foreign currency of the response's range */
+export interface FxRangeRate {
+  pair: string
+  currency: string
+  from: string | null
+  to: string | null
+  min: number | null
+  max: number | null
+  days: number
+  estimatedDays: number
+  missingDays: number
+}
+
+/** §1.3 — response-level `fx` of the three report routes and of `/ads-monitor/*` */
+export interface FxReportBlock {
+  base: string
+  rates: FxRangeRate[]
+  convertedRows: number
+  unconvertedRows: number
+}
+
+/** §1.4 / §5 — one currency that could not be converted (`currency: null` = unknown) */
+export interface MoneyUnconvertedItem {
+  currency: string | null
+  amount: number
+}
+
+/** §1.4 — Σ of a set of account balances in THB (THB as is, foreign × latest rate) */
+export interface BalanceThb {
+  amount: number
+  estimated: boolean
+  unconverted: MoneyUnconvertedItem[]
+}
+
+/** §5 — `GET /topups` `summary` over every row matching the list filters (all pages) */
+export interface TopupSummary {
+  totalThb: number
+  byCurrency: MoneyByCurrency
+  unconverted: MoneyUnconvertedItem[]
+  estimated: boolean
+}
+
+/** §1.1 — the three keys every aggregated `spend` carries next to it */
+export interface SpendFx {
+  spendByCurrency?: MoneyByCurrency
+  spendUnconverted?: MoneyUnconverted
+}
+
+/** §1.1 — `SpendFx` + `converted` on rows that aggregate snapshots */
+export interface SpendFxRow extends SpendFx {
+  converted?: boolean
+}
+
+/** §3 / §4 — single-account rows: raw `metrics.spend` + `currency` + `spendThb` */
+export interface SpendThbRow {
+  currency?: string | null
+  spendThb?: number | null
+  spendUnconverted?: MoneyUnconverted
+}
