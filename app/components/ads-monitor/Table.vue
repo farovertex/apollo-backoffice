@@ -56,6 +56,8 @@
  */
 import type { MonitorLevel, MonitorRow, ToggleTarget } from '#shared/types/ads-monitor'
 import type { KpiMetrics, ReportRangeState } from '#shared/types/reports'
+import type { MoneyByCurrency, MoneyUnconverted } from '#shared/types/fx'
+import type { MoneyMode } from '~/utils/money'
 
 const props = defineProps<{
   level: MonitorLevel
@@ -70,6 +72,11 @@ const props = defineProps<{
   range: ReportRangeState
   /** FEAT-064 — the campaign id currently in the URL (`?campaignId=`), drives `am-row-filter`'s pressed state */
   campaignId?: string
+  /** FEAT-084 — the page's money mode (`useMoneyMode('ads-monitor')`), default `thb` */
+  mode?: MoneyMode
+  /** FEAT-084 — response-level raw breakdown of `totals.spend` (THB), for the Total row's sub line */
+  spendByCurrency?: MoneyByCurrency
+  spendUnconverted?: MoneyUnconverted
 }>()
 
 const emit = defineEmits<{
@@ -205,6 +212,41 @@ function budgetText(row: MonitorRow): string {
   return formatDecimal(row.budget?.amount ?? null)
 }
 
+/**
+ * FEAT-084 — money columns of a single-account row: Spend = raw `metrics.spend` + row `currency` with the stored
+ * `spendThb` (R amount, hover = average rate); CPC / CPM / CPA in `thb` mode = `spendThb ÷ count` (`costThb`, a
+ * division, no FX), in `account` mode the raw values. `null` = not a money column (rendered as before).
+ */
+const COST_PER: Partial<Record<keyof KpiMetrics, { count: keyof KpiMetrics, per: number }>> = {
+  cpc: { count: 'clicks', per: 1 },
+  cpm: { count: 'impressions', per: 1000 },
+  conversionCost: { count: 'conversions', per: 1 }
+}
+
+function moneyOf(row: MonitorRow, metric: keyof KpiMetrics) {
+  const currency = row.currency ?? null
+  const spendThb = row.spendThb ?? null
+  if (metric === 'spend') {
+    return {
+      native: { amount: row.metrics.spend, currency },
+      thb: spendThb,
+      unconverted: row.spendUnconverted ?? null,
+      rateText: currency && currency !== 'THB' ? averageRateText(spendThb, row.metrics.spend) : null,
+      decimals: 0
+    }
+  }
+  const cost = COST_PER[metric]
+  if (!cost) return null
+  const count = row.metrics[cost.count]
+  return {
+    native: { amount: row.metrics[metric], currency },
+    thb: costThb(spendThb, typeof count === 'number' ? count : null, cost.per),
+    unconverted: null,
+    rateText: null,
+    decimals: 2
+  }
+}
+
 function bidText(row: MonitorRow): string {
   return row.bid?.pricing || row.bid?.strategy || REPORT_DASH
 }
@@ -297,7 +339,13 @@ function scheduleText(row: MonitorRow): string {
             :class="column.align === 'right' ? 'text-right tabular-nums' : ''"
             :data-field="column.key"
           >
-            <template v-if="column.metric">
+            <MoneyCell
+              v-if="column.metric && moneyOf(row, column.metric)"
+              v-bind="moneyOf(row, column.metric)!"
+              :mode="mode ?? 'thb'"
+              :data-testid="`am-row-${column.key}`"
+            />
+            <template v-else-if="column.metric">
               {{ formatMetric(row.metrics[column.metric], column.format) }}
             </template>
 
@@ -423,6 +471,7 @@ function scheduleText(row: MonitorRow): string {
             <AdsMonitorBudgetCell
               v-else-if="column.key === 'advertiserBudget'"
               :row="row"
+              :mode="mode ?? 'thb'"
               @ask="emit('budget', row)"
             />
 
@@ -431,7 +480,18 @@ function scheduleText(row: MonitorRow): string {
               class="whitespace-nowrap"
               :title="row.budget?.mode ?? ''"
               data-testid="am-row-budget"
-            >{{ budgetText(row) }}</span>
+            >
+              <MoneyCell
+                v-if="row.budget?.amount != null && row.budget.currency"
+                :native="{ amount: row.budget.amount, currency: row.budget.currency }"
+                :thb="row.budget.thb?.amount ?? null"
+                :estimated="row.budget.thb?.estimated"
+                :rate="row.budget.thb?.rate"
+                :day="row.budget.thb?.day"
+                :mode="mode ?? 'thb'"
+              />
+              <template v-else>{{ budgetText(row) }}</template>
+            </span>
 
             <span
               v-else-if="column.key === 'bid'"
@@ -470,7 +530,19 @@ function scheduleText(row: MonitorRow): string {
             :class="index === footColumns.length - 1 ? 'rounded-br-lg border-r' : ''"
             :data-field="column.key"
           >
-            <template v-if="column.metric">
+            <!-- FEAT-084 — `totals` is THB (Σ spendThb of every listed group): ฿ in both modes + raw breakdown -->
+            <MoneyCell
+              v-if="column.metric === 'spend'"
+              total
+              data-testid="am-total-spend"
+              :thb="totals.spend"
+              :by-currency="spendByCurrency ?? {}"
+              :unconverted="spendUnconverted ?? null"
+            />
+            <template v-else-if="column.metric && COST_PER[column.metric]">
+              {{ formatThb(totals[column.metric], 2) }}
+            </template>
+            <template v-else-if="column.metric">
               {{ formatMetric(totals[column.metric], column.format) }}
             </template>
             <template v-else>
