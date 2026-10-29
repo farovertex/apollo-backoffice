@@ -51,6 +51,11 @@ export interface LaunchAdvertiser {
   missingSince: string | null
   /** 0-based position in the Business Center list; null until a discover round wrote it */
   bcOrder: number | null
+  /**
+   * FEAT-083 (api-contract v1 §3) — effective currency (`currencyOfAdvertiser`: own `currency` → account
+   * `balanceCurrency` → null). `null` = unknown → the BO never lets it be picked ("กด Sync/อ่านยอดก่อน").
+   */
+  currency: string | null
   /** `status === 'active' && missingSince === null` — only these can be picked */
   selectable: boolean
 }
@@ -305,6 +310,16 @@ export interface RejectedTarget {
 export interface CreateOrderRejectedBody {
   error: string
   rejected: RejectedTarget[]
+}
+
+/**
+ * FEAT-083 (api-contract v1 §4) — 409 of `POST /campaign-orders` when a target's effective currency is unknown;
+ * every unknown target in body order. Nothing was written.
+ */
+export interface CreateOrderCurrencyUnknownBody {
+  error: string
+  reason: 'currencyUnknown'
+  advertisers: Array<{ tiktokAccountId: string, advertiserId: string, name: string }>
 }
 
 /**

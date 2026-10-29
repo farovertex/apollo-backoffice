@@ -34,7 +34,8 @@ export type Placement = 'website' | 'instantPage'
 export type AgeGroup = '13-17' | '18-24' | '25-34' | '35-44' | '45-54' | '55+'
 export type Gender = 'all' | 'male' | 'female'
 export type BudgetType = 'daily' | 'lifetime'
-export type Currency = 'THB'
+/** FEAT-083 — the template currency (`config.budget.currency`); `CURRENCIES` of the API = THB, USD */
+export type Currency = 'THB' | 'USD'
 export type ScheduleMode = 'continuous' | 'dateRange'
 export type StartTimeMode = 'now' | 'scheduled'
 export type Timezone = 'Asia/Bangkok'
@@ -198,6 +199,11 @@ export interface AdGroupTemplate {
    * `catalogVersion` with `options.catalogVersion`).
    */
   kind?: AdGroupTemplateKind
+  /**
+   * FEAT-083 (api-contract v1 §1.4) — the template currency = `config.budget.currency`, computed by the view
+   * mapper; `null` only for a malformed legacy config. Optional in this type so an older API still type-checks.
+   */
+  currency?: string | null
   /** `name` is null when the workspace row is gone */
   workspace: { id: string, name: string | null }
   /** `username` is null when the admin row is gone */
