@@ -110,6 +110,18 @@
  * serves is cleared (A6, answer-driven, not computed from the template's own workspace). The scope line
  * `la-tpl-scope` (absent for `none`) and the three empty-state texts of `la-agt-empty` / `la-adt-empty` follow
  * `templateScopeKind`. `retryTemplates()` always re-runs with the current scope.
+ *
+ * FEAT-086 (spec "UI behaviour" §3, AC-22, api-contract §5/§6.1) — line `la-adgroup-guard` directly under
+ * `la-pause-after-publish`: the ad group guard this order will snapshot. `laGuardMode` (`inherit` default) +
+ * `laGuardRule` are page state like `pauseAfterPublish`. `la-adgroup-guard-text` (`data-mode`, `data-source`):
+ * custom → the order's rule (formatted with the selection's single currency, else "สกุลของบัญชี" +
+ * `la-adgroup-guard-currency-warn`), off → "ไม่ใช้กฎ…", inherit → from the selected advertisers' `adGroupGuard`
+ * blocks of `GET /launch/targets` (all the same → that rule + its layer · none → "ไม่มีกฎปิด ad group" · else
+ * `mixed` with the counts). `la-adgroup-guard-edit` opens `la-adgroup-guard-popover` (mode radio + RuleFields,
+ * apply disabled while invalid). `body()` adds `adGroupGuard` only when publishing with a mode other than inherit;
+ * the confirm modal gets the same text as `adGroupGuardText` (null when nothing would be guarded).
+ * The page has no draft/publish state of its own (the mode is the button pressed), so the line is always shown and
+ * says it applies to Create & publish only; Save as draft never sends the key.
  */
 import { formatTimeAgo, useLocalStorage } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -134,6 +146,8 @@ import type {
   LaunchTargetsResponse,
   PublishMode
 } from '#shared/types/campaign-orders'
+import type { AdGroupGuardMode, AdGroupGuardRule, AdGroupGuardSource } from '#shared/types/ad-group-guard'
+import type { AdGroupGuardRuleDraft } from '~/utils/ad-group-guard'
 
 useSeoMeta({ title: 'Launch ads' })
 
@@ -669,6 +683,75 @@ const adTemplateId = ref<string | null>(null)
 const copies = ref(1)
 /** FEAT-066 — page state like `copies` (survives step changes); only sent on publish, never on draft */
 const pauseAfterPublish = ref(false)
+
+// ── FEAT-086 · ad group guard of the order (spec §3) ─────────────────────────────────────────────────────────────────
+const laGuardMode = ref<AdGroupGuardMode>('inherit')
+const laGuardRule = ref<AdGroupGuardRule | null>(null)
+const GUARD_MODES: AdGroupGuardMode[] = ['inherit', 'custom', 'off']
+const GUARD_POPOVER_MODE_LABEL: Record<AdGroupGuardMode, string> = {
+  inherit: 'ตามบัญชี / workspace',
+  custom: 'กำหนดเอง',
+  off: 'ไม่ใช้กฎ'
+}
+
+/** the `adGroupGuard` blocks of the selected advertisers (an absent key = no rule) */
+const guardBlocks = computed(() => selectedAccounts.value.map(account => effectiveOrNone(advertiserOf(account)?.adGroupGuard)))
+const guardCurrencies = computed(() => [...new Set(guardBlocks.value.map(b => b.currency).filter((c): c is string => !!c))])
+/** the selection mixes currencies — one custom rule is read in each account's own currency (A3) */
+const guardMixedCurrency = computed(() => guardCurrencies.value.length > 1)
+
+const guardSummary = computed<{ text: string, source: AdGroupGuardSource | 'mixed', applies: boolean }>(() => {
+  if (laGuardMode.value === 'off') return { text: 'ไม่ใช้กฎปิด ad group ใน order นี้', source: 'order', applies: false }
+  if (laGuardMode.value === 'custom' && laGuardRule.value) {
+    const currency = guardCurrencies.value.length === 1 ? guardCurrencies.value[0]! : null
+    return {
+      text: `ปิด ad group เมื่อ ${formatAdGroupGuardRule(laGuardRule.value, currency)} — กำหนดเองใน order นี้`,
+      source: 'order',
+      applies: true
+    }
+  }
+  const blocks = guardBlocks.value
+  const withRule = blocks.filter(b => b.rule)
+  if (withRule.length === 0) return { text: 'ไม่มีกฎปิด ad group', source: 'none', applies: false }
+  const first = blocks[0]!
+  const same = blocks.every(b => b.source === first.source && b.currency === first.currency && sameAdGroupGuardRule(b.rule, first.rule))
+  if (same && first.rule) {
+    const layer = first.source === 'account' ? 'กฎของบัญชี' : 'กฎของ workspace'
+    return { text: `ปิด ad group เมื่อ ${formatAdGroupGuardRule(first.rule, first.currency)} — ${layer}`, source: first.source, applies: true }
+  }
+  return {
+    text: `ตามกฎของแต่ละบัญชี (${withRule.length} มีกฎ · ${blocks.length - withRule.length} ไม่มี)`,
+    source: 'mixed',
+    applies: true
+  }
+})
+
+/** the confirm modal line — null when no target would be guarded */
+const guardConfirmText = computed(() => (guardSummary.value.applies ? guardSummary.value.text : null))
+
+// popover draft (applied to the page state only by "ใช้")
+const guardPopoverOpen = ref(false)
+const guardDraftMode = ref<AdGroupGuardMode>('inherit')
+const guardDraft = ref<AdGroupGuardRuleDraft>(emptyAdGroupGuardDraft())
+const guardDraftValid = ref(false)
+const guardCanApply = computed(() => guardDraftMode.value !== 'custom' || guardDraftValid.value)
+
+watch(guardPopoverOpen, (open) => {
+  if (!open) return
+  guardDraftMode.value = laGuardMode.value
+  guardDraft.value = adGroupGuardDraftOf(laGuardRule.value)
+})
+
+function applyGuard() {
+  if (!guardCanApply.value) return
+  if (guardDraftMode.value === 'custom') {
+    const parsed = parseAdGroupGuardDraft(guardDraft.value)
+    if (!parsed.rule) return
+    laGuardRule.value = parsed.rule
+  }
+  laGuardMode.value = guardDraftMode.value
+  guardPopoverOpen.value = false
+}
 const agtSearch = ref('')
 const adtSearch = ref('')
 
@@ -1032,6 +1115,12 @@ function body(publishMode: PublishMode): CreateOrderBody {
     // FEAT-066 (A5) — omit the key unless publishing with the box checked; draft never sends it, and every
     // existing exact-body assertion that predates this flag keeps passing
     ...(publishMode === 'publish' && pauseAfterPublish.value ? { pauseAfterPublish: true } : {}),
+    // FEAT-086 — omitted for inherit and for every draft (the API answers 400 for draft + key)
+    ...(publishMode === 'publish' && laGuardMode.value !== 'inherit'
+      ? { adGroupGuard: laGuardMode.value === 'custom' && laGuardRule.value
+          ? { mode: 'custom' as const, rule: laGuardRule.value }
+          : { mode: 'off' as const } }
+      : {}),
     targets: selectedAccounts.value.map(account => ({
       tiktokAccountId: account.id,
       advertiserId: selection.value[account.id] as string
@@ -2404,6 +2493,93 @@ onUnmounted(() => {
                 data-testid="la-pause-after-publish"
               />
 
+              <!-- FEAT-086 — the ad group guard this order will snapshot (Create & publish only) -->
+              <div class="flex flex-col gap-1 rounded-md border border-default p-2 text-xs" data-testid="la-adgroup-guard">
+                <div class="flex items-start gap-2">
+                  <UIcon name="i-lucide-shield-alert" class="mt-0.5 size-4 shrink-0 text-muted" />
+                  <span
+                    class="min-w-0 grow break-words text-highlighted"
+                    data-testid="la-adgroup-guard-text"
+                    :data-mode="laGuardMode"
+                    :data-source="guardSummary.source"
+                  >{{ guardSummary.text }}</span>
+                  <UPopover v-model:open="guardPopoverOpen" :content="{ align: 'end', side: 'top' }">
+                    <UButton
+                      label="แก้"
+                      icon="i-lucide-pencil"
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      class="shrink-0"
+                      data-testid="la-adgroup-guard-edit"
+                    />
+                    <template #content>
+                      <div class="flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-3 p-3" data-testid="la-adgroup-guard-popover">
+                        <p class="text-sm font-semibold text-highlighted">
+                          กฎปิด ad group ของ order นี้
+                        </p>
+                        <div
+                          class="flex flex-wrap items-center gap-1"
+                          role="radiogroup"
+                          aria-label="กฎปิด ad group ของ order นี้"
+                          data-testid="la-adgroup-guard-mode"
+                          :data-mode="guardDraftMode"
+                        >
+                          <UButton
+                            v-for="mode in GUARD_MODES"
+                            :key="mode"
+                            :label="GUARD_POPOVER_MODE_LABEL[mode]"
+                            :color="guardDraftMode === mode ? 'primary' : 'neutral'"
+                            :variant="guardDraftMode === mode ? 'solid' : 'outline'"
+                            size="xs"
+                            role="radio"
+                            :aria-checked="guardDraftMode === mode"
+                            :data-testid="`la-adgroup-guard-mode-${mode}`"
+                            @click="guardDraftMode = mode"
+                          />
+                        </div>
+                        <AdGroupGuardRuleFields
+                          v-if="guardDraftMode === 'custom'"
+                          v-model="guardDraft"
+                          testid="la-adgroup-guard"
+                          :currency="guardCurrencies.length === 1 ? guardCurrencies[0]! : null"
+                          @valid="guardDraftValid = $event"
+                        />
+                        <p v-else-if="guardDraftMode === 'inherit'" class="text-xs text-muted">
+                          ใช้กฎที่ตั้งไว้ที่บัญชีหรือ workspace ของแต่ละบัญชี
+                        </p>
+                        <p v-else class="text-xs text-muted">
+                          ไม่ปิด ad group อัตโนมัติใน order นี้
+                        </p>
+                        <div class="flex justify-end gap-2">
+                          <UButton
+                            label="ยกเลิก"
+                            color="neutral"
+                            variant="subtle"
+                            size="sm"
+                            data-testid="la-adgroup-guard-cancel"
+                            @click="guardPopoverOpen = false"
+                          />
+                          <UButton
+                            label="ใช้"
+                            size="sm"
+                            :disabled="!guardCanApply"
+                            data-testid="la-adgroup-guard-apply"
+                            @click="applyGuard"
+                          />
+                        </div>
+                      </div>
+                    </template>
+                  </UPopover>
+                </div>
+                <span
+                  v-if="guardMixedCurrency && laGuardMode === 'custom'"
+                  class="text-warning"
+                  data-testid="la-adgroup-guard-currency-warn"
+                >บัญชีที่เลือกมีหลายสกุลเงิน — ตัวเลขจะถูกใช้ตามสกุลของแต่ละบัญชี</span>
+                <span class="text-dimmed">ใช้กับ Create &amp; publish เท่านั้น</span>
+              </div>
+
               <!--
                 FEAT-062 — one DOM instance of the step actions (AS-2): the last block of the sticky aside at
                 `lg+`, a fixed bottom bar below it. The page body carries `pb-20 lg:pb-0` for the bar.
@@ -2470,6 +2646,7 @@ onUnmounted(() => {
         :cbo="budgetIsCbo"
         :submitting="submitting"
         :pause-after-publish="pauseAfterPublish"
+        :ad-group-guard-text="guardConfirmText"
         @confirm="confirmPublish"
       />
     </template>
