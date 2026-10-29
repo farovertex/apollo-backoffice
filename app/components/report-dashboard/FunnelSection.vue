@@ -81,7 +81,8 @@ const sharedNote = computed(() => {
         :help="REPORT_HELP['rd-tile-depBudget']"
         class="bg-default"
       />
-      <dl class="grid grid-cols-2 gap-3" :class="$slots['hero-extra'] ? 'lg:grid-cols-5' : 'lg:grid-cols-4'">
+      <!-- FEAT-084 — with the balance tile the 5th column reaches the hero's corner: keep it clear of the info hint -->
+      <dl class="grid grid-cols-2 gap-3" :class="$slots['hero-extra'] ? 'lg:grid-cols-5 lg:pr-7' : 'lg:grid-cols-4'">
         <div class="flex min-w-0 flex-col">
           <dt class="text-xs text-muted">
             Spend

@@ -268,7 +268,7 @@ const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('ad-slideover')
 const kpis = computed(() => {
   const m = ad.value?.metrics
   const currency = ad.value?.currency ?? null
-  const spendThb = ad.value?.spendThb ?? null
+  const spendThb = rowSpendThb(ad.value?.spendThb, ad.value?.spendUnconverted)
   // FEAT-084 — Spend / CPA are money cells: raw `metrics` + `currency`, THB = `spendThb` / `costThb()` (a division)
   const money = (amount: number | null, thb: number | null, decimals: number) => ({
     native: { amount, currency },

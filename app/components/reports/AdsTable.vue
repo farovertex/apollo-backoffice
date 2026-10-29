@@ -48,7 +48,7 @@ const props = withDefaults(defineProps<{
 function costOf(row: AdReportRow, value: number | null, count: number, per = 1) {
   return {
     native: { amount: value, currency: row.currency ?? null },
-    thb: costThb(row.spendThb ?? null, count, per),
+    thb: costThb(rowSpendThb(row.spendThb, row.spendUnconverted), count, per),
     decimals: 2
   }
 }
@@ -245,7 +245,7 @@ function adGroupLine(row: AdReportRow): string {
                 v-if="moneyMode"
                 :data-testid="`${prefix}-row-spend`"
                 :native="{ amount: row.metrics.spend, currency: row.currency ?? null }"
-                :thb="row.spendThb ?? null"
+                :thb="rowSpendThb(row.spendThb, row.spendUnconverted)"
                 :unconverted="row.spendUnconverted ?? null"
                 :rate-text="row.currency && row.currency !== 'THB' ? averageRateText(row.spendThb, row.metrics.spend) : null"
                 :mode="moneyMode"

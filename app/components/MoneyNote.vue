@@ -8,14 +8,17 @@
 import type { FxReportBlock } from '#shared/types/fx'
 import type { MoneyMode } from '~/utils/money'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   mode: MoneyMode
   fx?: FxReportBlock | null
   /** newest rate of the page's S blocks — the `account` mode text */
   latest?: { rate: number, day: string } | null
-  /** explicit visibility for pages without an `fx` block (accounts / top-ups) */
+  /**
+   * explicit visibility for pages without an `fx` block (accounts / top-ups); left `undefined` (not cast to
+   * `false` by Vue's boolean-prop rule) so the `fx.convertedRows` rule applies when it is not passed
+   */
   converted?: boolean
-}>()
+}>(), { fx: null, latest: null, converted: undefined })
 
 const visible = computed(() => props.converted ?? fxHasConverted(props.fx))
 

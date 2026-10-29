@@ -225,7 +225,7 @@ const COST_PER: Partial<Record<keyof KpiMetrics, { count: keyof KpiMetrics, per:
 
 function moneyOf(row: MonitorRow, metric: keyof KpiMetrics) {
   const currency = row.currency ?? null
-  const spendThb = row.spendThb ?? null
+  const spendThb = rowSpendThb(row.spendThb, row.spendUnconverted)
   if (metric === 'spend') {
     return {
       native: { amount: row.metrics.spend, currency },

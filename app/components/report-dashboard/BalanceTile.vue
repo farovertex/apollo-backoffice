@@ -40,10 +40,12 @@ const thbText = computed(() => {
   return `รวม ${b.estimated ? '≈ ' : ''}${formatThb(b.amount)}`
 })
 
-const breakdown = computed(() =>
-  balances.value.length === 0
-    ? REPORT_DASH
-    : balances.value.map(b => formatNative(b.amount, b.currency)).join(' · '))
+/** `['100,000.00 THB ·', '700.00 USD']` — the breakdown line, one chunk per currency so it wraps between them */
+const breakdownParts = computed(() => {
+  if (balances.value.length === 0) return [REPORT_DASH]
+  const parts = balances.value.map(b => formatNative(b.amount, b.currency))
+  return parts.map((p, i) => (i < parts.length - 1 ? `${p} ·` : p))
+})
 
 const unconverted = computed(() => unconvertedFromList(balanceThb.value?.unconverted))
 
@@ -69,11 +71,14 @@ const accounts = computed(() => balances.value.reduce((acc, b) => acc + b.accoun
       {{ thbText }}
     </dd>
     <dd class="flex min-w-0 flex-wrap items-baseline gap-x-1 text-xs text-muted tabular-nums">
+      <!-- the per-currency list wraps between currencies (one item never breaks) instead of being cut -->
       <span
-        class="truncate"
+        class="flex min-w-0 flex-wrap gap-x-1"
         :class="thbText ? '' : 'text-lg font-semibold text-highlighted'"
         data-testid="rd-balance-breakdown"
-      >{{ breakdown }}</span>
+      >
+        <span v-for="(part, i) in breakdownParts" :key="i" class="whitespace-nowrap">{{ part }}</span>
+      </span>
       <span
         v-if="unconverted"
         class="font-medium text-warning"

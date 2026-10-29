@@ -177,6 +177,17 @@ export function averageRateText(thb: number | null | undefined, native: number |
 }
 
 /**
+ * `spendThb` of a single-account row as a `MoneyCell` should read it: the API sends `0` when nothing of the row
+ * was convertible (contract §3) — with a `spendUnconverted` block that `0` means "unknown", not "free", so the cell
+ * shows the raw amount with the `?` marker instead of `฿ 0`.
+ */
+export function rowSpendThb(spendThb: number | null | undefined, spendUnconverted: MoneyUnconverted | undefined): number | null {
+  if (!isNum(spendThb)) return null
+  if (spendThb === 0 && unconvertedTotal(spendUnconverted) > 0) return null
+  return spendThb
+}
+
+/**
  * THB value a money column sorts by in **both** modes (B5): the converted amount when there is one, the raw
  * amount when the native currency is THB, `null` (sorted last) otherwise.
  */

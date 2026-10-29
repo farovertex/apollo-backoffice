@@ -135,7 +135,8 @@ const shape = computed<Shape>(() => {
 const nativeNumber = computed(() => `${formatNumber(nativeAmount.value, props.nativeDecimals)}${props.suffix}`)
 const badge = computed(() => (props.currencyColor && nativeCurrency.value ? props.currencyColor : null))
 
-const marker = computed(() => unconvertedMarker(props.unconverted))
+// a raw main amount with the `?` marker already says "not converted" — no second `+n ?` for the same money
+const marker = computed(() => (shape.value.missing ? '' : unconvertedMarker(props.unconverted)))
 const markerTitle = computed(() => unconvertedTitle(props.unconverted))
 
 const hover = computed(() => {
