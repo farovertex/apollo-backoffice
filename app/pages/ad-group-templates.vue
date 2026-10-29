@@ -139,6 +139,18 @@ const page = ref(1)
 const search = ref('')
 const searchDebounced = refDebounced(search, DEBOUNCE_MS)
 
+/**
+ * FEAT-083 (spec AC-11) — currency filter `agt-filter-currency`: `ทุกสกุลเงิน` (`all`, no param) first, then
+ * `options.currency`; anything else sends `?currency=<code>`. Part of `queryKey`, resets the page like the others.
+ */
+const CURRENCY_ALL = 'all'
+const currencyFilter = ref<string>(CURRENCY_ALL)
+const currencyFilterItems = computed(() => [
+  { label: 'ทุกสกุลเงิน', value: CURRENCY_ALL },
+  ...(options.value?.currency ?? []).map(item => ({ label: item.label, value: item.value }))
+])
+const hasCurrencyFilter = computed(() => currencyFilter.value !== CURRENCY_ALL)
+
 const items = ref<AdGroupTemplate[]>([])
 const total = ref(0)
 const pending = ref(true)
@@ -161,7 +173,9 @@ async function load() {
         page: page.value,
         limit: LIMIT,
         q: q || undefined,
-        workspaceId: createdBy.value !== 'all' ? createdBy.value : undefined
+        workspaceId: createdBy.value !== 'all' ? createdBy.value : undefined,
+        // FEAT-083 (api-contract v1 §1.5) — only when a currency is picked
+        currency: currencyFilter.value !== CURRENCY_ALL ? currencyFilter.value : undefined
       }
     })
     if (s !== session) return
@@ -192,7 +206,14 @@ watch(createdBy, () => {
   page.value = 1
 })
 
-const queryKey = computed(() => `${page.value}|${searchDebounced.value.trim()}|${createdBy.value}`)
+// FEAT-083 — and for the currency filter
+watch(currencyFilter, () => {
+  page.value = 1
+})
+
+const queryKey = computed(() =>
+  `${page.value}|${searchDebounced.value.trim()}|${createdBy.value}|${currencyFilter.value}`
+)
 watch(queryKey, () => {
   void load()
 })
@@ -219,13 +240,14 @@ const isFilterMine = computed(() => !isFilterAll.value && createdBy.value === ho
 const isFilterOtherCreator = computed(() => !isFilterAll.value && !isFilterMine.value)
 
 const baseEmpty = computed(() =>
-  loaded.value && !error.value && !forbidden.value && total.value === 0 && !hasSearch.value
+  loaded.value && !error.value && !forbidden.value && total.value === 0 && !hasSearch.value && !hasCurrencyFilter.value
 )
 const isEmpty = computed(() => baseEmpty.value && isFilterAll.value)
 const isEmptyMine = computed(() => baseEmpty.value && isFilterMine.value)
 const isEmptyCreator = computed(() => baseEmpty.value && isFilterOtherCreator.value)
+// FEAT-083 — an empty result under a currency filter is a "no match" too
 const isNoMatch = computed(() =>
-  loaded.value && !error.value && !forbidden.value && total.value === 0 && hasSearch.value
+  loaded.value && !error.value && !forbidden.value && total.value === 0 && (hasSearch.value || hasCurrencyFilter.value)
 )
 const showTable = computed(() =>
   !error.value && !forbidden.value && !isEmpty.value && !isEmptyMine.value && !isEmptyCreator.value && !isNoMatch.value
@@ -253,6 +275,11 @@ function shortDateTime(iso: string): string {
 /** `<placement label>` — FEAT-061 dropped `optimizationEvent` from the shape */
 function placementCell(template: AdGroupTemplate): string {
   return labelOf(options.value?.placement, template.config?.placement)
+}
+
+/** FEAT-083 — the view's top-level `currency` (fallback `config.budget.currency` for an older API), `?` when unknown */
+function templateCurrency(template: AdGroupTemplate): string {
+  return template.currency ?? template.config.budget?.currency ?? '?'
 }
 
 /** `<amount 2 decimals> <currency label> / <budgetType label>` — e.g. `300.00 THB / รายวัน` */
@@ -449,6 +476,14 @@ function onDeleted() {
               @update:model-value="(v: string) => createdBy = v"
             />
           </span>
+          <USelect
+            v-model="currencyFilter"
+            :items="currencyFilterItems"
+            :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
+            class="w-full sm:w-auto sm:min-w-36"
+            aria-label="Currency"
+            data-testid="agt-filter-currency"
+          />
         </div>
 
         <UAlert
@@ -561,11 +596,21 @@ function onDeleted() {
         <UEmpty
           v-else-if="isNoMatch"
           icon="i-lucide-search-x"
-          title="No templates match your search"
+          :title="hasSearch ? 'No templates match your search' : `No ${currencyFilter} templates`"
           data-testid="agt-no-match"
         >
           <template #actions>
             <UButton
+              v-if="hasCurrencyFilter"
+              label="Show all currencies"
+              icon="i-lucide-coins"
+              color="neutral"
+              variant="outline"
+              data-testid="agt-clear-currency"
+              @click="currencyFilter = CURRENCY_ALL"
+            />
+            <UButton
+              v-if="hasSearch"
               label="Clear search"
               icon="i-lucide-x"
               color="neutral"
@@ -626,6 +671,7 @@ function onDeleted() {
                 v-for="template in items"
                 :key="template.id"
                 :data-id="template.id"
+                :data-currency="templateCurrency(template)"
                 data-slot="tr"
                 data-testid="agt-row"
               >
@@ -644,7 +690,16 @@ function onDeleted() {
                   <span class="whitespace-nowrap" data-testid="agt-placement">{{ placementCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-3 py-2">
-                  <span class="whitespace-nowrap" data-testid="agt-budget">{{ budgetCell(template) }}</span>
+                  <div class="flex items-center gap-1.5">
+                    <span class="whitespace-nowrap" data-testid="agt-budget">{{ budgetCell(template) }}</span>
+                    <UBadge
+                      :label="templateCurrency(template)"
+                      :color="templateCurrency(template) === 'THB' ? 'neutral' : 'info'"
+                      variant="subtle"
+                      size="sm"
+                      data-testid="agt-currency"
+                    />
+                  </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <span data-testid="agt-schedule">{{ scheduleCell(template) }}</span>

@@ -632,7 +632,9 @@ const PAGE_TEXT = {
   bidReadonly: (label: string) => `กลยุทธ์การเสนอราคา: ${label} — ตั้งจากหน้าแคมเปญ (TikTok แสดงแบบอ่านอย่างเดียวบนหน้ากลุ่มโฆษณา)`,
   bidReadonlyNothing: 'ไม่มีช่องให้กรอกบนหน้ากลุ่มโฆษณา',
   budgetCboNote: 'ใช้งบประมาณแผนการโฆษณา (CBO) — หน้ากลุ่มโฆษณาไม่มีช่องงบ',
-  budgetCboSummary: 'งบที่แผนการโฆษณา (CBO)'
+  budgetCboSummary: 'งบที่แผนการโฆษณา (CBO)',
+  /** FEAT-083 */
+  currencyHelp: 'สกุลเงินของ template — ใช้กับงบแคมเปญ (CBO) และงบกลุ่มโฆษณา · หน้า Launch แสดงเฉพาะบัญชีสกุลเดียวกัน'
 } as const
 /** FEAT-013 — the removed section's TikTok title, kept as the sub-heading of the toggles inside `bidding` (A9) */
 const ADVANCED_HEADING = 'ตำแหน่งโฆษณาที่เข้าเกณฑ์ › การตั้งค่าขั้นสูง'
@@ -897,11 +899,20 @@ const minBudgetHint = computed(() =>
 
 /** FEAT-061 — the campaign (CBO) minimum of the campaign budget's currency; `null` without the key (older API) */
 const campaignMinBudget = computed(() =>
-  props.options.campaignMinBudget?.[state.config.campaign.budget.currency] ?? null
+  props.options.campaignMinBudget?.[state.config.budget.currency] ?? null
 )
 const campaignMinBudgetHint = computed(() =>
-  campaignMinBudget.value === null ? '' : `ขั้นต่ำ ${campaignMinBudget.value} ${state.config.campaign.budget.currency}`
+  campaignMinBudget.value === null ? '' : `ขั้นต่ำ ${campaignMinBudget.value} ${state.config.budget.currency}`
 )
+
+/**
+ * FEAT-083 (api-contract v1 §1.3) — the CBO campaign budget currency **mirrors** the template currency
+ * (`config.budget.currency`); there is no second select. Kept in the state only so a loaded row round-trips; the
+ * body always sends `campaign.budget.currency === budget.currency` (`buildConfig`).
+ */
+watch(() => state.config.budget.currency, (currency) => {
+  state.config.campaign.budget.currency = currency
+}, { immediate: true })
 
 /** FEAT-061 — `targetCpa` is money in the ad group's currency */
 const targetCpaSuffix = computed(() => state.config.budget.currency)
@@ -1108,8 +1119,10 @@ function makeSchema(
       if (campaign.budget.amount === '') {
         ctx.addIssue({ code: 'custom', path: amountPath, message: MSG.campaignBudgetRequired })
       } else {
-        const min = campaignMin?.[campaign.budget.currency] ?? null
-        const issue = moneyIssue(campaign.budget.amount, CAMPAIGN_MONEY, min, campaign.budget.currency)
+        // FEAT-083 — the campaign budget is in the template currency (mirrored, no own select)
+        const currency = data.config.budget.currency
+        const min = campaignMin?.[currency] ?? null
+        const issue = moneyIssue(campaign.budget.amount, CAMPAIGN_MONEY, min, currency)
         if (issue) ctx.addIssue({ code: 'custom', path: amountPath, message: issue })
       }
     }
@@ -1234,7 +1247,8 @@ function configFromState(): AdGroupConfig {
     ? {
         type: c.campaign.budget.type as AdGroupBudget['type'],
         amount: Number(campaignAmount),
-        currency: c.campaign.budget.currency as AdGroupBudget['currency']
+        // FEAT-083 — always the template currency (api-contract v1 §1.3 cross-field rule)
+        currency: c.budget.currency as AdGroupBudget['currency']
       }
     : null
   const campaign: AdGroupCampaign = {
@@ -1390,6 +1404,8 @@ function resolveFieldName(rawPath: string): string | null {
   // TASK-adgroup-dayparting — `config.daypartingSchedule.mon[0]` folds onto `config.daypartingSchedule`
   const path = rawPath.replace(/\[(\d+)\]/g, '.$1')
   if (path === 'config.campaign.budget' && showCampaignBudget.value) return 'config.campaign.budget.amount'
+  // FEAT-083 — the mirrored campaign currency has no control of its own: its issue lands under the campaign budget
+  if (path === 'config.campaign.budget.currency' && showCampaignBudget.value) return 'config.campaign.budget.amount'
   let candidate = path
   while (candidate !== '') {
     if (visibleFieldNames.value.has(candidate)) return candidate
@@ -1605,6 +1621,28 @@ const submitLabel = computed(() => {
             <p class="text-sm text-muted xl:col-span-2" data-testid="agt-campaign-name-note">
               {{ CAMPAIGN_NAME_NOTE }}
             </p>
+
+            <!--
+              FEAT-083 — the template currency (`config.budget.currency`), always visible: it sets the currency of
+              the ad-group budget, the CBO campaign budget (mirrored) and targetCpa, and the Launch page only offers
+              this template to advertisers of the same currency
+            -->
+            <UFormField
+              label="Currency"
+              name="config.budget.currency"
+              required
+              :help="PAGE_TEXT.currencyHelp"
+              :error="serverErrors['config.budget.currency']"
+            >
+              <USelect
+                v-model="state.config.budget.currency"
+                :items="options.currency"
+                value-key="value"
+                class="w-full sm:w-48"
+                :disabled="submitting"
+                data-testid="agt-form-budget-currency"
+              />
+            </UFormField>
 
             <UFormField
               label="Budget strategy"
@@ -2090,8 +2128,9 @@ const submitLabel = computed(() => {
                 {{ PAGE_TEXT.budgetCboNote }}
               </p>
 
-              <!-- type + amount + currency keep their own three columns → they span the section grid -->
-              <div v-if="showAdGroupBudget" class="grid gap-4 sm:grid-cols-3 xl:col-span-2">
+              <!-- type + amount keep their own two columns → they span the section grid (FEAT-083: the currency
+                   moved to the campaign section, it is the template currency for both budgets) -->
+              <div v-if="showAdGroupBudget" class="grid gap-4 sm:grid-cols-2 xl:col-span-2">
                 <UFormField
                   label="Budget type"
                   name="config.budget.type"
@@ -2128,22 +2167,6 @@ const submitLabel = computed(() => {
                   <template #help>
                     <span data-testid="agt-form-min-budget">{{ minBudgetHint }}</span>
                   </template>
-                </UFormField>
-
-                <UFormField
-                  label="Currency"
-                  name="config.budget.currency"
-                  required
-                  :error="serverErrors['config.budget.currency']"
-                >
-                  <USelect
-                    v-model="state.config.budget.currency"
-                    :items="options.currency"
-                    value-key="value"
-                    class="w-full"
-                    :disabled="submitting"
-                    data-testid="agt-form-budget-currency"
-                  />
                 </UFormField>
               </div>
 

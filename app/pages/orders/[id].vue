@@ -585,8 +585,9 @@ const campaignSnapshot = computed(() => {
   parts.push(CAMPAIGN_BID_TEXT[campaign.bidStrategy ?? ''] ?? String(campaign.bidStrategy ?? '—'))
   if (Number.isFinite(targetCpa)) {
     // `lifetime` only so the helper does not append " / day" — a target CPA is not a daily budget
-    const currency = budget?.currency ?? order.value?.budget?.currency ?? 'THB'
-    parts.push(`target CPA ${formatBudgetAmount(targetCpa as number, { type: 'lifetime', amount: 0, currency })}`)
+    // FEAT-083 — no guessed `THB`: a budget without a currency prints `?`
+    const currency = budget?.currency ?? order.value?.budget?.currency ?? null
+    parts.push(`target CPA ${formatBudgetAmount(targetCpa as number, { type: 'lifetime', currency })}`)
   }
   return { text: parts.join(' · '), name: campaign.name ?? null }
 })
