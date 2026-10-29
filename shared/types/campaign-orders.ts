@@ -34,9 +34,13 @@ import type { SessionStatus } from './tiktok-accounts'
 import type { AdGroupBudget, AdGroupConfig } from './ad-group-templates'
 import type { AdConfig } from './ad-templates'
 
-/** Why a TikTok account cannot be launched right now (api-contract §4, evaluated in this order). */
+/**
+ * Why a TikTok account cannot be launched right now (api-contract §4, evaluated in this order). FEAT-085: a
+ * running/pending job never makes an account unavailable any more (`jobRunning` / `buildInProgress` are gone);
+ * `needsHuman` survives only for legacy `sessionStatus` rows.
+ */
 export type UnavailableReason
-  = 'inactive' | 'notLoggedIn' | 'needsHuman' | 'jobRunning' | 'buildInProgress' | 'noActiveAdvertiser'
+  = 'inactive' | 'notLoggedIn' | 'needsHuman' | 'noActiveAdvertiser'
 
 /** `POST /campaign-orders` 409 reasons = the readiness reasons plus the per-advertiser check. */
 export type RejectedReason = UnavailableReason | 'advertiserNotSelectable'
@@ -324,11 +328,11 @@ export interface CreateOrderCurrencyUnknownBody {
 
 /**
  * 409 body of `POST /builds/:id/cancel`, `/stop-before-publish` and `/retry` (carries the current build
- * status). FEAT-055 — `/retry` adds `reason: 'buildInProgress'` when the account already has another
- * `queued`/`running` build; absent for every other 409 shape.
+ * status). FEAT-085 — the FEAT-055 `reason: 'buildInProgress'` of `/retry` is gone (a retried build simply
+ * queues behind the account's other build); `/retry` answers `retryFailedOrCancelledOnly` / `retryAccountGone`.
  */
 export interface BuildConflictBody {
   error: string
   status: BuildStatus
-  reason?: 'buildInProgress'
+  reason?: 'retryFailedOrCancelledOnly' | 'retryAccountGone' | 'invalidState'
 }

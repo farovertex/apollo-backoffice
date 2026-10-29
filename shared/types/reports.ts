@@ -310,12 +310,17 @@ export interface FetchNowResponse {
   report: AdvertiserReport
 }
 
-/** Why a fetch-now was refused. */
-export type FetchNowConflictReason
-  = 'fetching' | 'jobRunning' | 'buildInProgress' | 'needsHuman' | 'notLoggedIn' | 'inactive'
+/**
+ * Why a fetch-now was refused. FEAT-085 (api-contract §2.2): `fetching` / `jobRunning` / `buildInProgress` /
+ * `needsHuman` are gone — an open kpi job of the account answers `duplicate` (with its id and queue position).
+ */
+export type FetchNowConflictReason = 'duplicate' | 'notLoggedIn' | 'inactive'
 
 /** `POST /advertisers/:id/report/fetch-now` 409 body (`error` is the Thai sentence shown in the toast). */
 export interface FetchNowConflictBody {
   error: string
   reason: FetchNowConflictReason
+  jobId?: string
+  status?: 'pending' | 'waiting' | 'active'
+  queuePosition?: number | null
 }

@@ -1,4 +1,5 @@
 import type { FetchError } from 'ofetch'
+import type { MaybeDuplicateBody } from '~/utils/job-queue'
 import type { TopupClaimConflictBody, TopupClaimResponse, TopupMutationResponse, TopupView } from '#shared/types/topups'
 
 /**
@@ -30,8 +31,18 @@ export function useTopupPay(onChange?: (topup: TopupView) => void) {
   const staleId = ref<string | null>(null)
 
   function notifyError(title: string, e: unknown, fallback: string) {
-    const err = e as FetchError<Partial<TopupClaimConflictBody>>
+    const err = e as FetchError<Partial<TopupClaimConflictBody & MaybeDuplicateBody>>
     const status = err.response?.status ?? err.statusCode
+    // FEAT-085 — 409 `duplicate` (e.g. ตรวจอีกครั้ง while a check job of the round is still queued/running)
+    if (status === 409 && isDuplicate(err.data)) {
+      toast.add({
+        'title': duplicateText(err.data?.queuePosition),
+        'description': err.data?.error,
+        'color': 'warning',
+        'data-testid': 'ta-toast'
+      } as Parameters<typeof toast.add>[0])
+      return err
+    }
     toast.add({
       title,
       'description': err.data?.error ?? err.message ?? fallback,
@@ -85,7 +96,9 @@ export function useTopupPay(onChange?: (topup: TopupView) => void) {
       )
       return changed(res.topup)
     } catch (e) {
-      notifyError(failureTitle, e, 'ทำรายการไม่สำเร็จ')
+      const err = notifyError(failureTitle, e, 'ทำรายการไม่สำเร็จ')
+      // FEAT-085 — a `duplicate` means a job of this round already exists: the row is stale, the caller re-reads it
+      if ((err.response?.status ?? err.statusCode) === 409 && isDuplicate(err.data)) staleId.value = topup.id
       return null
     } finally {
       busyId.value = null

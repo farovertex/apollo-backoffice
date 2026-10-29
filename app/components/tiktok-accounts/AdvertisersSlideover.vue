@@ -282,6 +282,14 @@ async function onOpenTopup(topup: TopupView) {
   void load(1, false, true)
 }
 
+/** FEAT-085 — 409 `duplicate` on ตรวจอีกครั้ง: a check job of the round already exists → quiet re-read */
+async function onRecheckTopup(topup: TopupView) {
+  const updated = await recheckTopup(topup)
+  if (updated || staleId.value !== topup.id) return
+  staleId.value = null
+  void load(1, false, true)
+}
+
 async function onConfirmTopup(topup: TopupView) {
   if (await confirmTopup(topup)) closeModal()
 }
@@ -364,7 +372,8 @@ function advOrgText(adv: Advertiser): string {
 }
 const canSync = computed(() => {
   const a = props.account
-  return !!a && a.advertiserCount === 0 && a.runningJob === null && a.sessionStatus !== 'needsHuman' && a.isActive
+  // FEAT-085 — a running/queued job never hides Sync (the click queues behind it or is reused); only a disabled account does
+  return !!a && a.advertiserCount === 0 && a.isActive
 })
 const emptyTitle = computed(() => hasFilter.value ? 'No match' : 'No advertisers yet')
 const emptyDescription = computed(() =>
@@ -599,7 +608,7 @@ function onSync() {
                   :account-name="adv.name"
                   @created="patchTopup"
                   @open="onOpenTopup"
-                  @recheck="recheckTopup"
+                  @recheck="onRecheckTopup"
                   @release="releaseTopup"
                   @changed="patchTopup"
                 />

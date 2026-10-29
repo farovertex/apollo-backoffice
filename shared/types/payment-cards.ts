@@ -74,7 +74,7 @@ export interface TikTokCardView {
 }
 
 export type CardManageAction = 'sync' | 'setPrimary' | 'remove'
-export type CardManageJobStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
+export type CardManageJobStatus = 'pending' | 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
 
 export interface CardManageResult {
   cards: number
@@ -136,10 +136,16 @@ export interface CardManageRequestBody {
   dryRun?: boolean
 }
 
-/** 409 of the three job routes: `jobId` is present for "มี job จัดการบัตรค้างอยู่" (follow it), absent for the gates */
+/**
+ * 409 of the three job routes: FEAT-085 — `reason: 'duplicate'` + `jobId` = an open cardManage job of the account
+ * (follow it); `inactive` / `noBcOrg` = the gates (no `jobId`).
+ */
 export interface CardManageConflictBody {
   error: string
+  reason?: 'duplicate' | 'inactive' | 'noBcOrg'
   jobId?: string
+  status?: 'pending' | 'waiting' | 'active'
+  queuePosition?: number | null
 }
 
 /** `DELETE /tiktok-accounts/:id/payment-cards/:cardId` 200 */

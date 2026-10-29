@@ -92,7 +92,7 @@ const orgLabel = computed<string>(() => {
 /** no job yet, or one that has not reached the QR screen: the browser is still working on it */
 const issuing = computed(() => {
   const j = job.value
-  return !j || j.status === 'waiting' || j.status === 'active'
+  return !j || j.status === 'pending' || j.status === 'waiting' || j.status === 'active'
 })
 /**
  * Terminal without a QR — `failed` / `cancelled` (the API cancels a job when the stack is reset or a human
