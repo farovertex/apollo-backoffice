@@ -16,6 +16,7 @@
  * one. Rendered by `AdsMonitorUtmCell` as a collapsible column right after `name` (campaign tab: after
  * `cover`), linking to `/reports/utm` pre-filtered to that set + the monitor's current range.
  */
+import type { ThbBlock } from './fx'
 import type { BannedAd } from './report-banned'
 import type { KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
 
@@ -130,6 +131,8 @@ export interface MonitorAccountBalance {
   at: string | null
   /** last read error — a sentence safe to show */
   error: string | null
+  /** FEAT-080 — `amount` at the latest rate; `null` when it cannot be converted */
+  thb: ThbBlock | null
 }
 
 export interface MonitorAccountRef {
@@ -156,6 +159,9 @@ export interface MonitorNamedRef {
 export interface MonitorBudget {
   amount: number | null
   mode: string | null
+  /** FEAT-080 — `advertisers` currency (own → BC wallet) */
+  currency: string | null
+  thb: ThbBlock | null
 }
 
 /** FEAT-060 — `advertisers.budget.edits`: the modal's daily edit-quota counter. */
@@ -192,6 +198,8 @@ export interface MonitorAdvertiserBudget {
   error: string | null
   /** why the button may not be pressed, computed by the API — the BO never re-derives this rule */
   settable: { ok: boolean, reason: string | null }
+  /** FEAT-080 — `amount` at the latest rate; `null` for unlimited / THB / unknown */
+  thb: ThbBlock | null
 }
 
 export interface MonitorBid {
@@ -390,6 +398,8 @@ export interface AdvertiserBudgetView {
   setAt: string | null
   lastError: string | null
   edits: AdvertiserBudgetEdits | null
+  /** FEAT-080 (`toBudgetView` 8th key) — `amount` at the latest rate */
+  thb: ThbBlock | null
 }
 
 /** `POST /advertisers/:advertiserId/budget` 202 body. */
