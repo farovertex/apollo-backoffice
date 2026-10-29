@@ -262,7 +262,7 @@ export interface AdConfigRequest extends Omit<AdConfig, 'identity' | 'utm'> {
  * refused the code · `failed` = we could not ask. A template that was never checked has **no** `postInfo`
  * (`null`) — the BO renders that as "ยังไม่ได้ตรวจ".
  */
-export type AdTemplatePostInfoStatus = 'verifying' | 'verified' | 'invalid' | 'failed'
+export type AdTemplatePostInfoStatus = 'verifying' | 'verified' | 'invalid' | 'failed' | 'deleted'
 
 /**
  * FEAT-042 — why a lookup did not end in `verified` (api-contract §1.1 `error`):
