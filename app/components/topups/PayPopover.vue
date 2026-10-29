@@ -29,6 +29,12 @@
  * the request does not answer 200 nothing is shown and the fallback table of `app/utils/topup.ts` is used, so
  * the FEAT-051 behaviour is untouched. A currency with a per-day cap also renders one extra read-only line,
  * `<prefix>-remaining-today` ("เหลือวันนี้ X <CUR>"), which does not exist without a cap.
+ *
+ * FEAT-077 (spec "UI behaviour", AC-20, api-contract §6.5/§10) — when that same options answer says
+ * `telegram.available === true` and the QR channel is selected, a switch `ta-adv-topup-telegram`
+ * ("ส่ง Telegram (<chatTitle>)", **on** by default) sits under the channel chooser. On → the `POST` body is
+ * byte-identical to before (no `sendTelegram` key); off → `sendTelegram: false`. Card channel, `available: false`
+ * or no options answer → no element and never the key.
  */
 import type { FetchError } from 'ofetch'
 import type { PopoverProps } from '@nuxt/ui'
@@ -86,6 +92,21 @@ const amount = ref<number | undefined>(props.defaultAmount)
 const submitting = ref(false)
 const serverError = ref<string | null>(null)
 const touched = ref(false)
+/**
+ * TASK T2b (2026-10-29) — the amount field is `autofocus`ed by the HTML attribute **and** by the popover's own
+ * focus trap (Reka UI `PopoverContent` auto-focuses the first focusable descendant on open, so removing the
+ * attribute alone changes nothing). The FIRST control an admin clicks after opening — the channel toggle, the
+ * Telegram switch below it, anything — therefore blurs this field before it was ever edited. `touched = true` on
+ * that blur showed `ta-adv-topup-amount-error` for an amount nobody tried yet, inserting a new flex child above
+ * the channel/switch/submit block and shifting all of them down by that line's height (+gap) **mid real pointer
+ * gesture** (mousedown/focus → shift → mouseup lands on whatever moved into the old slot) — on the accounts-table
+ * popover this made a plain mouse click on `ta-adv-topup-telegram` land on `ta-adv-topup-channel-qr` instead,
+ * leaving the switch unchanged (qa-exec round 1, AC-20 account-level popover). `edited` makes blur show the error
+ * only once the admin actually typed into the field; `submit()`/`next()` still force `touched = true` on their own
+ * (a submit attempt with nothing typed yet must still show the error), so no existing assertion changes — every
+ * spec that checks `ta-adv-topup-amount-error` fills the field before blurring.
+ */
+const edited = ref(false)
 
 const popoverContent = { 'data-testid': 'ta-adv-topup-popover' } as PopoverProps['content']
 
@@ -108,6 +129,14 @@ const cardBlocked = computed(() => cardChannelBlockedReason(props.balanceCurrenc
  */
 const qrBlocked = computed(() => qrChannelBlockedReason(props.balanceCurrency, topupOptions.value))
 const isCard = computed(() => channel.value === 'card')
+
+// ── FEAT-077 · "ส่ง Telegram" (manual QR round of an account whose prefix is linked to a group) ──────────────────────
+const telegramOption = computed(() => topupOptions.value?.telegram?.available === true ? topupOptions.value.telegram : null)
+const showTelegram = computed(() => telegramOption.value !== null && !isCard.value)
+const sendTelegram = ref(true)
+const telegramLabel = computed(() => `ส่ง Telegram (${telegramOption.value?.chatTitle || REPORT_DASH})`)
+/** spread into the QR body: nothing while the switch is on (or absent), `{ sendTelegram: false }` when switched off */
+const telegramBody = computed<{ sendTelegram?: false }>(() => (showTelegram.value && !sendTelegram.value ? { sendTelegram: false } : {}))
 
 function selectChannel(next: TopupChannel) {
   if (next === 'card' && cardBlocked.value) return
@@ -164,6 +193,8 @@ watch(open, (isOpen) => {
   amount.value = props.defaultAmount
   serverError.value = null
   touched.value = false
+  edited.value = false
+  sendTelegram.value = true
   channel.value = startChannel()
   // FEAT-053 — exactly one `GET /topups/options` per open
   void loadOptions(props.tiktokAccountId)
@@ -202,7 +233,7 @@ async function submit() {
       const res = await api<AccountTopupResponse>('/topups/accounts', {
         method: 'POST',
         retry: 0,
-        body: { tiktokAccountIds: [props.tiktokAccountId], amount: amount.value }
+        body: { tiktokAccountIds: [props.tiktokAccountId], amount: amount.value, ...telegramBody.value }
       })
       const row = res.results?.[0]
       open.value = false
@@ -217,7 +248,8 @@ async function submit() {
       body: {
         tiktokAccountId: props.tiktokAccountId,
         advertiserId: props.advertiserId,
-        amount: amount.value
+        amount: amount.value,
+        ...telegramBody.value
       }
     })
     open.value = false
@@ -272,7 +304,8 @@ function failToast(message: string, status: number | undefined) {
           :placeholder="String(amountMin)"
           autofocus
           data-testid="ta-adv-topup-amount"
-          @blur="touched = true"
+          @update:model-value="edited = true"
+          @blur="touched = touched || edited"
         />
         <p v-if="errorText" class="text-xs text-error" data-testid="ta-adv-topup-amount-error">
           {{ errorText }}
@@ -340,6 +373,16 @@ function failToast(message: string, status: number | undefined) {
             {{ qrBlocked }}
           </p>
         </div>
+
+        <!-- FEAT-077 — only when this account's manual QR round would go to its prefix's Telegram group -->
+        <USwitch
+          v-if="showTelegram"
+          v-model="sendTelegram"
+          :label="telegramLabel"
+          size="sm"
+          :ui="{ label: 'text-xs break-words' }"
+          data-testid="ta-adv-topup-telegram"
+        />
 
         <UButton
           v-if="!isCard"

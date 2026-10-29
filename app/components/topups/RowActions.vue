@@ -18,6 +18,12 @@
  *
  * FEAT-053 — `prefix` is also handed to the pay popover, where it names the one new element of that feature
  * (`<prefix>-remaining-today`). Every other id inside the popover is unchanged.
+ *
+ * FEAT-077 (spec "UI behaviour", AC-18) — a QR round paid in the prefix's Telegram group (`telegram.status`
+ * `pending` / `sent`) gets **no** button at all (`topupRowActions()` → nothing; claim / qr would answer 409) but the
+ * line `<prefix>-telegram` (`data-tg-status`): `Telegram · <chatTitle>` + `รอ QR แล้วจะส่งเข้ากลุ่ม` /
+ * `ส่งแล้ว <HH:mm> · รอจ่ายในกลุ่ม`. A round whose send failed for good gets its normal buttons back plus a muted
+ * `data-tg-status="failed"` line whose `title` is the API's `lastError`. No `telegram` block → nothing changes.
  */
 import type { TopupView } from '#shared/types/topups'
 import type { TopupViewer } from '~/utils/topup'
@@ -60,6 +66,8 @@ const emit = defineEmits<{
 }>()
 
 const actions = computed(() => topupRowActions(props.topup, props.viewer))
+/** FEAT-077 — the Telegram line of this round (null = none) */
+const telegramLine = computed(() => topupTelegramLine(props.topup))
 const payTestid = computed(() => props.prefix === 'tp-row' ? 'tp-row-retry' : `${props.prefix}-pay`)
 const defaultAmount = computed(() => actions.value.retry ? retryAmount(props.topup) : undefined)
 /** a recheck job is already running for this round (409 "กำลังตรวจอยู่" is pending) */
@@ -96,6 +104,24 @@ async function onCancel() {
 
 <template>
   <span class="inline-flex flex-wrap items-center gap-1">
+    <!-- FEAT-077 — paid in the Telegram group (pending / sent) or fell back to the BO (failed) -->
+    <span
+      v-if="telegramLine"
+      class="inline-flex min-w-0 flex-col text-xs"
+      :title="telegramLine.hint ?? undefined"
+      :data-testid="`${prefix}-telegram`"
+      :data-tg-status="telegramLine.status"
+    >
+      <span v-if="telegramLine.title" class="inline-flex min-w-0 items-center gap-1 font-medium text-highlighted">
+        <UIcon name="i-lucide-send" class="size-3.5 shrink-0 text-info" />
+        <span class="truncate">{{ telegramLine.title }}</span>
+      </span>
+      <span class="text-muted" :class="telegramLine.status === 'failed' ? 'inline-flex items-center gap-1' : ''">
+        <UIcon v-if="telegramLine.status === 'failed'" name="i-lucide-send" class="size-3.5 shrink-0" />
+        {{ telegramLine.text }}
+      </span>
+    </span>
+
     <TopupsPayPopover
       v-if="actions.pay"
       :tiktok-account-id="tiktokAccountId"

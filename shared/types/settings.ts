@@ -49,3 +49,24 @@ export interface UtmSettings {
   /** ISO | null — newest `updatedAt` over all prefix rows */
   updatedAt: string | null
 }
+
+/**
+ * FEAT-077 (api-contract v1 §3, §10) — `GET`/`PATCH /settings/telegram` 200 body (GOD only).
+ * The whole Telegram QR-group feature is gated by `enabled` **and** a server-side bot token (`configured`); the
+ * groups themselves are linked per prefix on `/settings/prefixes`.
+ */
+export interface TelegramSettings {
+  /** the GOD switch — `false` while no settings document / sub-document exists */
+  enabled: boolean
+  /** `TELEGRAM_BOT_TOKEN` is set on the server (never the token itself) */
+  configured: boolean
+  /** cached `getMe().username`; `null` when not configured or Telegram could not be reached */
+  botUsername: string | null
+  /** ISO | null — `null` while the settings document does not exist */
+  updatedAt: string | null
+}
+
+/** `PATCH /settings/telegram` body — strict on the API side: exactly this key */
+export interface TelegramSettingsBody {
+  enabled: boolean
+}
