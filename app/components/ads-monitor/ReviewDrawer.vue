@@ -98,7 +98,17 @@ const appealStateColor = computed(() => APPEAL_BADGE_COLOR[appealState.value])
 const appealStateIcon = computed(() => APPEAL_BADGE_ICON[appealState.value])
 
 const appealable = computed(() => detail.value?.appealable ?? { ok: false, reason: null })
-const appealBlockedText = computed(() => (appealable.value.ok ? '' : appealableReasonText(appealable.value.reason, review.value?.appeal)))
+/**
+ * The API's rule, plus the one case it cannot know yet: right after our own 202 the stored `appealable` still
+ * says `ok` until the next GET lands, while `appealPending` is already set — so a second appeal must be
+ * refused here too (`appealPending` is also what the API would answer 409 with).
+ */
+const canAppeal = computed(() => appealable.value.ok && !appealPending.value)
+const appealBlockedText = computed(() => {
+  if (canAppeal.value) return ''
+  if (appealable.value.ok && appealPending.value) return appealableReasonText('appealPending')
+  return appealableReasonText(appealable.value.reason, review.value?.appeal)
+})
 
 /** "ยื่นโดย <displayName> เมื่อ <dd/MM HH:mm> · เหตุผล: <reason text>" */
 const lastAppealLine = computed(() => {
@@ -350,9 +360,13 @@ onUnmounted(() => {
 // (spec: full width ≤ 768 px).
 const drawerContent = computed(() => ({
   'data-testid': 'am-review-drawer',
-  'data-polling': polling.value ? '1' : '0',
-  'class': 'w-full max-w-full min-[769px]:max-w-[720px]'
+  'data-polling': polling.value ? '1' : '0'
 }) as SlideoverProps['content'])
+/**
+ * The width goes through `ui.content` (tailwind-merge), **not** through the `content` attrs above: a `class`
+ * attribute there is concatenated with the theme's own `max-w-md` and loses the cascade.
+ */
+const drawerUi = { content: 'w-full max-w-full min-[769px]:max-w-[720px]', body: 'flex flex-col gap-4' }
 const closeButton = { 'data-testid': 'am-review-close' } as SlideoverProps['close']
 const frameModalContent = { 'data-testid': 'am-review-frame-modal' } as ModalProps['content']
 </script>
@@ -364,7 +378,7 @@ const frameModalContent = { 'data-testid': 'am-review-frame-modal' } as ModalPro
     side="right"
     :close="closeButton"
     :content="drawerContent"
-    :ui="{ body: 'flex flex-col gap-4' }"
+    :ui="drawerUi"
   >
     <template #description>
       <span class="block truncate text-xs text-muted" data-testid="am-review-ad-name">{{ adName }}</span>
@@ -412,14 +426,14 @@ const frameModalContent = { 'data-testid': 'am-review-frame-modal' } as ModalPro
             <span v-if="review" class="text-sm text-muted" data-testid="am-review-summary">{{ summaryText }}</span>
           </div>
 
-          <UTooltip :text="appealBlockedText" :disabled="appealable.ok">
+          <UTooltip :text="appealBlockedText" :disabled="canAppeal">
             <span class="inline-flex" :title="appealBlockedText || undefined">
               <UButton
                 label="อุทธรณ์"
                 icon="i-lucide-gavel"
                 color="primary"
                 variant="outline"
-                :disabled="!appealable.ok || formOpen"
+                :disabled="!canAppeal || formOpen"
                 data-testid="am-appeal-open"
                 @click="openForm"
               />
@@ -461,7 +475,7 @@ const frameModalContent = { 'data-testid': 'am-review-frame-modal' } as ModalPro
               variant="subtle"
               size="xs"
               class="w-fit"
-              :disabled="!appealable.ok || formOpen"
+              :disabled="!canAppeal || formOpen"
               data-testid="am-appeal-retry"
               @click="openForm"
             />
