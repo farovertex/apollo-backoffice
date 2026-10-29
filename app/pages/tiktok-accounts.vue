@@ -2258,9 +2258,13 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
         }, () => 'Launching ads'))
       }
       if (syncing) {
-        children.push(h('span', { 'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted', 'data-testid': 'ta-adv-syncing' }, [
-          h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
-          'Syncing…'
+        // FEAT-085 — a discover still in the profile's queue says so instead of spinning
+        const queuedSync = a.runningJob?.status === 'pending'
+        children.push(h('span', { 'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted', 'data-testid': 'ta-adv-syncing', 'data-status': a.runningJob?.status ?? '' }, [
+          queuedSync
+            ? h(UIcon, { name: 'i-lucide-clock', class: 'size-3.5 shrink-0 text-warning' })
+            : h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
+          queuedSync ? 'Sync รอคิว' : 'Syncing…'
         ]))
       } else {
         children.push(h('span', {
@@ -2848,7 +2852,7 @@ const showTable = computed(() => !error.value && !isEmpty.value)
                 color="neutral"
                 variant="subtle"
                 :disabled="cancelJobPosting"
-                data-testid="ta-job-cancel-dismiss"
+                data-testid="ta-job-cancel-close"
                 @click="cancelJobOpen = false"
               />
               <UButton
