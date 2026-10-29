@@ -40,6 +40,12 @@ const props = withDefaults(defineProps<{
   suffix?: string
   /** `start` for left-aligned columns; default `end` (numbers) */
   align?: 'start' | 'end'
+  /**
+   * render the native currency code as a coloured `UBadge` (the accounts Balance column, 2026-10-16 rule); the
+   * badge follows whichever line shows the native amount
+   */
+  currencyColor?: 'neutral' | 'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'error' | null
+  currencyTestid?: string
 }>(), {
   native: null,
   thb: null,
@@ -54,7 +60,9 @@ const props = withDefaults(defineProps<{
   decimals: 0,
   nativeDecimals: 2,
   suffix: '',
-  align: 'end'
+  align: 'end',
+  currencyColor: null,
+  currencyTestid: 'money-currency'
 })
 
 function num(v: unknown): number | null {
@@ -73,7 +81,8 @@ const approx = computed(() => (props.estimated ? '≈ ' : ''))
 const thbText = computed(() => `${approx.value}${formatThb(thbAmount.value, props.decimals)}${props.suffix}`)
 const nativeText = computed(() => `${formatNative(nativeAmount.value, nativeCurrency.value, props.nativeDecimals)}${props.suffix}`)
 
-type Shape = { main: string, sub: string, currency: string, mainValue: number | null, missing: boolean }
+/** `nativeOn` = which line shows the raw amount (for the optional currency badge) */
+type Shape = { main: string, sub: string, currency: string, mainValue: number | null, missing: boolean, nativeOn?: 'main' | 'sub' }
 
 const shape = computed<Shape>(() => {
   if (aggregate.value) {
@@ -96,7 +105,7 @@ const shape = computed<Shape>(() => {
   const amount = nativeAmount.value
   // THB-native: raw in both modes, never a sub line (A12)
   if (cur === 'THB') {
-    return { main: nativeText.value, sub: '', currency: 'THB', mainValue: amount, missing: false }
+    return { main: nativeText.value, sub: '', currency: 'THB', mainValue: amount, missing: false, nativeOn: amount === null ? undefined : 'main' }
   }
   // nothing raw to show: a THB-only figure (e.g. a THB cost metric) or a dash
   if (amount === null) {
@@ -106,10 +115,10 @@ const shape = computed<Shape>(() => {
   }
   // foreign or unknown currency, no THB amount: raw with the yellow `?` marker in `thb` mode
   if (thbAmount.value === null) {
-    return { main: nativeText.value, sub: '', currency: cur ?? '', mainValue: amount, missing: props.mode === 'thb' }
+    return { main: nativeText.value, sub: '', currency: cur ?? '', mainValue: amount, missing: props.mode === 'thb', nativeOn: 'main' }
   }
   if (props.mode === 'thb') {
-    return { main: thbText.value, sub: nativeText.value, currency: 'THB', mainValue: thbAmount.value, missing: false }
+    return { main: thbText.value, sub: nativeText.value, currency: 'THB', mainValue: thbAmount.value, missing: false, nativeOn: 'sub' }
   }
   const rateSuffix = props.rate !== null && Number.isFinite(props.rate) ? ` (${formatNumber(props.rate, 2)})` : ''
   return {
@@ -117,9 +126,14 @@ const shape = computed<Shape>(() => {
     sub: `≈ ${formatThb(thbAmount.value, props.decimals)}${props.suffix}${rateSuffix}`,
     currency: cur ?? '',
     mainValue: amount,
-    missing: false
+    missing: false,
+    nativeOn: 'main'
   }
 })
+
+/** the number part of the raw amount, for the badge rendering (`700.00` + badge `USD`) */
+const nativeNumber = computed(() => `${formatNumber(nativeAmount.value, props.nativeDecimals)}${props.suffix}`)
+const badge = computed(() => (props.currencyColor && nativeCurrency.value ? props.currencyColor : null))
 
 const marker = computed(() => unconvertedMarker(props.unconverted))
 const markerTitle = computed(() => unconvertedTitle(props.unconverted))
@@ -150,7 +164,18 @@ const dataThb = computed(() => {
     :title="hover"
   >
     <span class="whitespace-nowrap" data-testid="money-main">
-      {{ shape.main }}<span
+      <template v-if="badge && shape.nativeOn === 'main'">
+        {{ nativeNumber }}
+        <UBadge
+          :color="badge"
+          variant="subtle"
+          size="sm"
+          class="font-medium"
+          :data-testid="currencyTestid"
+          :data-currency="nativeCurrency"
+        >{{ nativeCurrency }}</UBadge>
+      </template>
+      <template v-else>{{ shape.main }}</template><span
         v-if="shape.missing"
         class="ms-1 font-semibold text-warning"
         :title="UNCONVERTED_HINT"
@@ -162,7 +187,18 @@ const dataThb = computed(() => {
       class="text-xs whitespace-nowrap text-muted"
       data-testid="money-sub"
     >
-      <span v-if="shape.sub">{{ shape.sub }}</span>
+      <template v-if="shape.sub && badge && shape.nativeOn === 'sub'">
+        {{ nativeNumber }}
+        <UBadge
+          :color="badge"
+          variant="subtle"
+          size="xs"
+          class="font-medium"
+          :data-testid="currencyTestid"
+          :data-currency="nativeCurrency"
+        >{{ nativeCurrency }}</UBadge>
+      </template>
+      <span v-else-if="shape.sub">{{ shape.sub }}</span>
       <span
         v-if="marker"
         class="font-medium text-warning"
