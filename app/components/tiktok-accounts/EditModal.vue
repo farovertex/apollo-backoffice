@@ -48,6 +48,15 @@
  * the preselection never renders blank. It is one more field of the diff: untouched → no `prefixId` key;
  * another prefix → `prefixId: <id>`; `ไม่มี prefix` → `prefixId: null`. 403 / 404 of the prefix gate (nothing
  * written, other keys included) → `ta-edit-error`.
+ * FEAT-086 (spec "UI behaviour" §2, AC-21, api-contract §4) — block **กฎปิด ad group** (`ta-edit-guard`) right after
+ * `ta-edit-auto`: mode radio `ta-edit-guard-mode` (`-inherit` / `-custom` / `-off`) seeded from `row.adGroupGuard`
+ * (`accountAdGroupGuard()`, a row without the key = inherit); `inherit` shows `ta-edit-guard-inherited` (the
+ * workspace rule from `row.adGroupGuardEffective` when its source is `workspace`, else why there is none);
+ * `custom` shows `AdGroupGuardRuleFields` (`ta-edit-guard-*`) in the account currency and is **disabled** while
+ * the currency is unknown (`ta-edit-guard-currency-unknown`, the API would answer 409). The block is sent whole
+ * under `adGroupGuard` only when `{ mode, rule }` differs from the row (`inherit`/`off` without `rule`), inside the
+ * same single diff PATCH; 400/409 land in `ta-edit-error` like the auto top-up block (a 400 path
+ * `adGroupGuard.rule.<key>` is also shown under that input).
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -56,6 +65,8 @@ import type { ApiErrorBody } from '#shared/types/auth'
 import type { PaymentCardView, PaymentCardsResponse } from '#shared/types/payment-cards'
 import type { PatchAccountAutoTopupConfig, PatchAccountBody, TikTokAccount } from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupChannel } from '#shared/types/topups'
+import type { AdGroupGuardMode, AdGroupGuardRule } from '#shared/types/ad-group-guard'
+import type { AdGroupGuardDraftErrors, AdGroupGuardRuleDraft } from '~/utils/ad-group-guard'
 
 const props = defineProps<{
   account: TikTokAccount | null
@@ -74,6 +85,9 @@ const AUTO_BALANCE_LABEL = 'ดึงยอดตอนนี้'
 const AUTO_BALANCE_READING = 'กำลังอ่าน…'
 const AUTO_BALANCE_TOAST = 'กำลังอ่านยอดคงเหลือ…'
 const AUTO_SYNC_FIRST = 'กด Sync ก่อน'
+/** FEAT-086 — §4.1 409 text, shown before the request instead */
+const GUARD_CURRENCY_UNKNOWN = 'ยังไม่รู้สกุลเงินของบัญชีนี้ — กด Sync ก่อน'
+const GUARD_MODES: AdGroupGuardMode[] = ['inherit', 'custom', 'off']
 
 const emit = defineEmits<{
   updated: [account: TikTokAccount]
@@ -123,6 +137,9 @@ interface FormState {
   autoAmount: string
   /** FEAT-076 — the prefix id, `NO_PREFIX` for none */
   prefixId: string
+  /** FEAT-086 — the account's ad group guard layer */
+  guardMode: AdGroupGuardMode
+  guardDraft: AdGroupGuardRuleDraft
 }
 
 function numberText(value: number | null): string {
@@ -144,7 +161,9 @@ function stateOf(account: TikTokAccount | null): FormState {
     autoCardId: auto.cardId,
     autoMinBalance: numberText(auto.minBalance),
     autoAmount: numberText(auto.amount),
-    prefixId: account?.prefix?.id ?? NO_PREFIX
+    prefixId: account?.prefix?.id ?? NO_PREFIX,
+    guardMode: accountAdGroupGuard(account).mode,
+    guardDraft: adGroupGuardDraftOf(accountAdGroupGuard(account).rule)
   }
 }
 
@@ -255,8 +274,26 @@ const schema = z.object({
   autoCardId: z.string().nullable(),
   autoMinBalance: z.string(),
   autoAmount: z.string(),
-  prefixId: z.string()
+  prefixId: z.string(),
+  guardMode: z.enum(['inherit', 'custom', 'off']),
+  guardDraft: z.object({
+    minSpend: z.string(),
+    maxCpm: z.string(),
+    minConversions: z.string(),
+    combine: z.enum(['or', 'and'])
+  })
 }).superRefine((data, ctx) => {
+  // ── FEAT-086 · the ad group guard block (contract §1.1/§4.1) — only a custom rule has numbers to check ──
+  if (data.guardMode === 'custom' && guardChanged.value) {
+    if (!currency.value) {
+      ctx.addIssue({ code: 'custom', path: ['guardMode'], message: GUARD_CURRENCY_UNKNOWN })
+    } else {
+      const parsed = parseAdGroupGuardDraft(data.guardDraft)
+      if (!parsed.rule) {
+        ctx.addIssue({ code: 'custom', path: ['guardDraft'], message: Object.values(parsed.errors).join(' · ') })
+      }
+    }
+  }
   if (!data.emailPassword && original.value.emailPassword) {
     ctx.addIssue({ code: 'custom', path: ['emailPassword'], message: 'Email password is required' })
   }
@@ -301,6 +338,43 @@ const showEmailPassword = ref(false)
 const showPassword = ref(false)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
+/** FEAT-086 — RuleFields shows every client message once a submit was refused; API 400 issues per input */
+const guardShowErrors = ref(false)
+const guardServerErrors = ref<AdGroupGuardDraftErrors>({})
+
+/** the block the form would send (`rule` null unless custom + valid) */
+function guardNext(data: Pick<FormState, 'guardMode' | 'guardDraft'>): { mode: AdGroupGuardMode, rule: AdGroupGuardRule | null } {
+  if (data.guardMode !== 'custom') return { mode: data.guardMode, rule: null }
+  return { mode: 'custom', rule: parseAdGroupGuardDraft(data.guardDraft).rule }
+}
+
+const guardChanged = computed(() => {
+  const current = accountAdGroupGuard(props.account)
+  const next = guardNext(state)
+  if (next.mode !== current.mode) return true
+  if (next.mode !== 'custom') return false
+  // an invalid custom draft counts as a change (Save is enabled and zod refuses it with the message)
+  return !next.rule || !sameAdGroupGuardRule(next.rule, current.rule)
+})
+
+const guardCurrency = computed(() => props.account?.adGroupGuardEffective?.currency ?? currency.value)
+
+/** spec §2 — what `inherit` means for this account */
+const guardInheritedText = computed(() => {
+  const cur = guardCurrency.value
+  if (!cur) return GUARD_CURRENCY_UNKNOWN.split(' — ')[0]
+  const effective = props.account?.adGroupGuardEffective
+  const savedMode = accountAdGroupGuard(props.account).mode
+  if (savedMode !== 'inherit') return `หลังบันทึกจะใช้กฎของ workspace สกุล ${cur} (ถ้ามี)`
+  if (effective?.source === 'workspace' && effective.rule) return `ปิด ad group เมื่อ ${formatAdGroupGuardRule(effective.rule, cur)}`
+  return `workspace ยังไม่ตั้งกฎสกุล ${cur}`
+})
+
+function setGuardMode(mode: AdGroupGuardMode) {
+  if (mode === 'custom' && !currency.value) return
+  state.guardMode = mode
+  guardServerErrors.value = {}
+}
 
 /** true while at least one of the seven fields differs from the row (the raw input, before zod normalises it) */
 const dirty = computed(() =>
@@ -315,6 +389,7 @@ const dirty = computed(() =>
   || state.autoMinBalance.trim() !== original.value.autoMinBalance
   || state.autoAmount.trim() !== original.value.autoAmount
   || state.prefixId !== original.value.prefixId
+  || guardChanged.value
 )
 
 interface PrefixItem {
@@ -343,6 +418,8 @@ function resetForm() {
   showPassword.value = false
   submitting.value = false
   submitError.value = null
+  guardShowErrors.value = false
+  guardServerErrors.value = {}
   balanceRequested.value = false
   balanceBusy.value = false
 }
@@ -398,6 +475,16 @@ async function onReadBalance() {
 function errorState(e: unknown): { title: string, description?: string } {
   const err = e as FetchError<Partial<ApiErrorBody>>
   const issues = err.data?.issues?.map(i => i.message).filter(Boolean)
+  // FEAT-086 — a 400 on the guard block also goes under its input
+  const guardIssues: AdGroupGuardDraftErrors = {}
+  for (const issue of err.data?.issues ?? []) {
+    const path = String(issue.path ?? '')
+    if (!path.startsWith('adGroupGuard')) continue
+    const key = path.split('.')[2]
+    if (key === 'minSpend' || key === 'maxCpm' || key === 'minConversions') guardIssues[key] = issue.message
+    else guardIssues.rule = issue.message
+  }
+  guardServerErrors.value = guardIssues
   return {
     title: err.data?.error ?? err.message ?? 'Could not save the account',
     description: issues && issues.length ? issues.join(' · ') : undefined
@@ -437,6 +524,11 @@ function changedBody(data: Schema): PatchAccountBody {
   if (autoChanged) body.autoTopupConfig = next
   // FEAT-076 — only when the select changed; `ไม่มี prefix` detaches
   if (data.prefixId !== original.value.prefixId) body.prefixId = data.prefixId === NO_PREFIX ? null : data.prefixId
+  // FEAT-086 — the whole block, only when `{ mode, rule }` differs from the row; inherit/off carry no `rule`
+  if (guardChanged.value) {
+    const next = guardNext(data)
+    body.adGroupGuard = next.mode === 'custom' && next.rule ? { mode: 'custom', rule: next.rule } : { mode: next.mode === 'off' ? 'off' : 'inherit' }
+  }
   return body
 }
 
@@ -480,6 +572,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         :validate-on="['input']"
         class="space-y-4"
         @submit="onSubmit"
+        @error="guardShowErrors = true"
       >
         <UFormField label="Label" name="label" hint="Shown everywhere instead of the login email">
           <UInput
@@ -717,6 +810,65 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               @click="onReadBalance()"
             />
           </div>
+        </div>
+
+        <!-- FEAT-086 — กฎปิด ad group: the account layer (inherit / custom / off), same single diff PATCH -->
+        <div
+          class="space-y-3 rounded-md border border-default p-3"
+          data-testid="ta-edit-guard"
+          :data-mode="state.guardMode"
+        >
+          <p class="text-sm font-medium text-highlighted">
+            กฎปิด ad group
+          </p>
+
+          <UFormField name="guardMode">
+            <div
+              class="flex flex-wrap items-center gap-1"
+              role="radiogroup"
+              aria-label="กฎปิด ad group ของบัญชีนี้"
+              data-testid="ta-edit-guard-mode"
+              :data-mode="state.guardMode"
+            >
+              <UButton
+                v-for="mode in GUARD_MODES"
+                :key="mode"
+                :label="AGG_MODE_LABEL[mode]"
+                :color="state.guardMode === mode ? 'primary' : 'neutral'"
+                :variant="state.guardMode === mode ? 'solid' : 'outline'"
+                size="xs"
+                role="radio"
+                :aria-checked="state.guardMode === mode"
+                :disabled="submitting || (mode === 'custom' && !currency)"
+                :data-testid="`ta-edit-guard-mode-${mode}`"
+                @click="setGuardMode(mode)"
+              />
+            </div>
+          </UFormField>
+
+          <p v-if="!currency" class="text-xs text-warning" data-testid="ta-edit-guard-currency-unknown">
+            {{ GUARD_CURRENCY_UNKNOWN }}
+          </p>
+
+          <p
+            v-if="state.guardMode === 'inherit'"
+            class="text-sm text-muted"
+            data-testid="ta-edit-guard-inherited"
+          >
+            {{ guardInheritedText }}
+          </p>
+          <p v-else-if="state.guardMode === 'off'" class="text-sm text-muted" data-testid="ta-edit-guard-off">
+            บัญชีนี้ไม่ใช้กฎปิด ad group (order ยังตั้งทับได้)
+          </p>
+          <AdGroupGuardRuleFields
+            v-else
+            v-model="state.guardDraft"
+            testid="ta-edit-guard"
+            :currency="currency"
+            :disabled="submitting"
+            :show-errors="guardShowErrors"
+            :server-errors="guardServerErrors"
+          />
         </div>
 
         <UAlert
