@@ -255,20 +255,35 @@ const hourlySeries = computed<AdSeriesHourlyResponse | null>(() =>
 )
 
 const chartCaption = computed(() => {
-  if (view.value === 'daily') return `${metricMeta.value.label} รายวัน · 30 วันล่าสุด`
+  // FEAT-084 — the chart stays raw: the spend series names its ISO code
+  const label = metric.value === 'spend' && ad.value?.currency ? `${metricMeta.value.label} (${ad.value.currency})` : metricMeta.value.label
+  if (view.value === 'daily') return `${label} รายวัน · 30 วันล่าสุด`
   const suffix = mode.value === 'delta' ? 'ต่อชั่วโมง' : 'สะสม'
-  return `${metricMeta.value.label} ${suffix} · ${date.value}${hourlySeries.value?.final ? ' · ปิดยอดแล้ว' : ''}`
+  return `${label} ${suffix} · ${date.value}${hourlySeries.value?.final ? ' · ปิดยอดแล้ว' : ''}`
 })
+
+// FEAT-084 — "แสดงเป็น: THB | สกุลของบัญชี" of the slideover (own key `money-mode:ad-slideover`)
+const { mode: moneyMode, setMode: setMoneyMode } = useMoneyMode('ad-slideover')
 
 const kpis = computed(() => {
   const m = ad.value?.metrics
+  const currency = ad.value?.currency ?? null
+  const spendThb = ad.value?.spendThb ?? null
+  // FEAT-084 — Spend / CPA are money cells: raw `metrics` + `currency`, THB = `spendThb` / `costThb()` (a division)
+  const money = (amount: number | null, thb: number | null, decimals: number) => ({
+    native: { amount, currency },
+    thb,
+    decimals,
+    unconverted: decimals === 0 ? (ad.value?.spendUnconverted ?? null) : null,
+    rateText: decimals === 0 && currency && currency !== 'THB' ? averageRateText(spendThb, amount) : null
+  })
   return [
-    { key: 'spend', label: 'Spend', text: formatDecimal(m?.spend ?? null) },
+    { key: 'spend', label: 'Spend', text: formatDecimal(m?.spend ?? null), money: m ? money(m.spend, spendThb, 0) : null },
     { key: 'impressions', label: 'Impressions', text: formatInt(m?.impressions ?? null) },
     { key: 'clicks', label: 'Clicks', text: formatInt(m?.clicks ?? null) },
     { key: 'ctr', label: 'CTR', text: formatPercent(m?.ctr ?? null) },
     { key: 'conversions', label: 'Conversions', text: formatInt(m?.conversions ?? null) },
-    { key: 'cpa', label: 'CPA', text: formatDecimal(m?.conversionCost ?? null) }
+    { key: 'cpa', label: 'CPA', text: formatDecimal(m?.conversionCost ?? null), money: m ? money(m.conversionCost, costThb(spendThb, m.conversions), 2) : null }
   ]
 })
 
@@ -390,6 +405,12 @@ const TABS: { key: Tab, label: string }[] = [
       </UAlert>
 
       <template v-else-if="ad">
+        <!-- FEAT-084 — money mode of the slideover + the badge (only when this ad's spend was converted) -->
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <MoneyNote :mode="moneyMode" :converted="!!ad.currency && ad.currency !== 'THB' && ad.spendThb != null" />
+          <MoneyModeSwitch :mode="moneyMode" @update:mode="setMoneyMode" />
+        </div>
+
         <!-- header -->
         <div class="flex flex-wrap items-start gap-3">
           <ReportsAdThumb :url="ad.media?.coverUrl ?? null" :is-video="!!ad.media?.isVideo" size="md" />
@@ -546,7 +567,15 @@ const TABS: { key: Tab, label: string }[] = [
                 {{ item.label }}
               </dt>
               <dd class="text-base font-semibold tabular-nums text-highlighted" :data-kpi="item.key">
-                {{ item.text }}
+                <MoneyCell
+                  v-if="'money' in item && item.money"
+                  v-bind="item.money"
+                  :mode="moneyMode"
+                  align="start"
+                />
+                <template v-else>
+                  {{ item.text }}
+                </template>
               </dd>
             </div>
           </dl>
