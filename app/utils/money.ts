@@ -185,3 +185,22 @@ export function thbSortValue(native: number | null | undefined, currency: string
   if (currency === 'THB' && isNum(native)) return native
   return null
 }
+
+/**
+ * Σ of several raw per-currency maps (same currency only — never a conversion); used where a table footer is the
+ * sum of its rows (dashboard account table). `{}` when empty.
+ */
+export function mergeByCurrency(maps: Array<MoneyByCurrency | null | undefined>): MoneyByCurrency {
+  const out: MoneyByCurrency = {}
+  for (const m of maps) {
+    if (!m) continue
+    for (const [k, v] of Object.entries(m)) if (isNum(v)) out[k] = (out[k] ?? 0) + v
+  }
+  return out
+}
+
+/** same as `mergeByCurrency` for the unconverted maps; `null` when nothing is unconverted */
+export function mergeUnconverted(maps: Array<MoneyUnconverted | undefined>): MoneyUnconverted {
+  const out = mergeByCurrency(maps)
+  return Object.keys(out).length > 0 ? out : null
+}

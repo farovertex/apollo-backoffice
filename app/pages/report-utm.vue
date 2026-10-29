@@ -57,7 +57,10 @@ const REFRESH_MAX_MS = 120_000
 const ALL_PREFIX = 'all'
 const PREFIX_ALL_LABEL = '— ทุก Prefix —'
 
-const NOTE_TEXT = 'source, medium และ campaign ต้องพิมพ์ให้ตรงทุกตัวอักษร · Spend คือค่าโฆษณาของ ads ที่ระบบสร้างจาก template ที่ผูก UTM นี้ หน่วยตามสกุลของ ad account ไม่ได้แปลงค่า · วันของ Spend ตัดตาม timezone ของ ad account (ตั้งเป็น Asia/Bangkok ทุกบัญชี) ส่วนยอดสมัครตัดเวลาไทย · "—" คือ UTM ที่ยังไม่มี ads จากระบบ'
+// FEAT-084 — the currency sentence ("หน่วยตามสกุลของ ad account ไม่ได้แปลงค่า") became the THB wording of the
+// response's `fx` (`fxReportCaption`, in `noteText`); the matching and timing sentences stay as they were
+const NOTE_HEAD = 'source, medium และ campaign ต้องพิมพ์ให้ตรงทุกตัวอักษร · Spend คือค่าโฆษณาของ ads ที่ระบบสร้างจาก template ที่ผูก UTM นี้ เป็น THB'
+const NOTE_TAIL = 'วันของ Spend ตัดตาม timezone ของ ad account (ตั้งเป็น Asia/Bangkok ทุกบัญชี) ส่วนยอดสมัครตัดเวลาไทย · "—" คือ UTM ที่ยังไม่มี ads จากระบบ'
 const FORBIDDEN_TEXT = 'คุณไม่มีสิทธิ์ดูรายงานนี้'
 const LOAD_FALLBACK = 'โหลดรายงานไม่สำเร็จ'
 const REFRESH_FALLBACK = 'สั่งดึงยอดไม่สำเร็จ'
@@ -375,6 +378,8 @@ const totalsFtdConversion = computed(() => {
   return t ? ftdConversionPct(t.depositors, t.registers) : null
 })
 
+const noteText = computed(() => `${NOTE_HEAD} (${fxReportCaption(report.value?.fx)}) · ${NOTE_TAIL}`)
+
 /** `<currency> · <n> ads` — what the spend of a row is made of */
 function spendTitle(spendCurrency: string | null, adCount: number): string {
   return `${spendCurrency ?? REPORT_DASH} · ${adCount} ads`
@@ -490,8 +495,14 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
               />
             </div>
             <p class="mt-3 text-xs text-muted" data-testid="ru-note">
-              {{ NOTE_TEXT }}
+              {{ noteText }}
             </p>
+            <MoneyNote
+              v-if="report"
+              mode="thb"
+              :fx="report.fx"
+              class="mt-2"
+            />
           </div>
 
           <div v-if="showSkeleton" class="flex flex-col gap-2" data-testid="ru-loading">
@@ -617,19 +628,18 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                     :data-null="row.spend === null ? 'true' : 'false'"
                     :title="spendTitle(row.spendCurrency, row.adCount)"
                   >
-                    {{ formatDecimal(row.spend) }}
-                    <span
-                      v-if="row.spendCurrency && row.spendCurrency !== 'THB'"
-                      class="ml-1 text-xs text-muted"
-                      data-testid="ru-currency"
-                    >{{ row.spendCurrency }}</span>
+                    <MoneyCell
+                      :thb="row.spend"
+                      :by-currency="row.spendByCurrency ?? {}"
+                      :unconverted="row.spendUnconverted ?? null"
+                    />
                   </td>
                   <td
                     class="px-3 py-2 text-right tabular-nums"
                     data-testid="ru-cpd"
                     :data-null="row.costPerDeposit === null ? 'true' : 'false'"
                   >
-                    {{ formatDecimal(row.costPerDeposit) }}
+                    {{ formatThb(row.costPerDeposit, 2) }}
                   </td>
                   <td
                     class="px-3 py-2 text-right tabular-nums"
@@ -675,11 +685,16 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                   >
                     {{ formatDecimal(report.totals.winLose) }}
                   </td>
-                  <td class="px-3 py-2 text-right tabular-nums">
-                    {{ formatDecimal(report.totals.spend) }}
+                  <td class="px-3 py-2 text-right tabular-nums" data-testid="ru-foot-spend">
+                    <MoneyCell
+                      total
+                      :thb="report.totals.spend"
+                      :by-currency="report.totals.spendByCurrency ?? {}"
+                      :unconverted="report.totals.spendUnconverted ?? null"
+                    />
                   </td>
                   <td class="px-3 py-2 text-right tabular-nums">
-                    {{ formatDecimal(report.totals.costPerDeposit) }}
+                    {{ formatThb(report.totals.costPerDeposit, 2) }}
                   </td>
                   <td class="px-3 py-2 text-right tabular-nums" data-testid="ru-foot-depbud">
                     {{ formatPercent(totalsDepPerBudget) }}

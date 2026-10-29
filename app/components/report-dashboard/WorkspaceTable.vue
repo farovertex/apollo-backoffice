@@ -3,6 +3,10 @@
  * FEAT-069 — `rd-table-workspace` (GOD only): per workspace Spend · Impressions · Clicks · Conversions ·
  * Register · Deposit · Amount · Dep/Budget · (now) Accounts · Launching · Banned · Balance; sorted by Dep/Budget
  * desc (nulls last) then spend desc; footer `rd-workspace-footer` = the funnel totals.
+ *
+ * FEAT-084 — spend is THB (`MoneyCell total` + raw `THB x + USD y` sub), Dep/Budget from that THB spend (the API's
+ * `metrics.spend`); the Balance cell keeps the per-currency list as its sub line under the workspace's
+ * `now.balanceThb` ("≈ ฿" when estimated; the list alone when the API has no `balanceThb`).
  */
 import type { DashboardFunnel, DashboardWorkspaceRow } from '#shared/types/report-dashboard'
 
@@ -21,6 +25,13 @@ function depBudget(depositAmount: number, spend: number): number | null {
 const shown = computed(() => [...props.rows].sort((a, b) =>
   perfCompare(depBudget(a.utm.depositAmount, a.metrics.spend), depBudget(b.utm.depositAmount, b.metrics.spend), -1)
   || b.metrics.spend - a.metrics.spend))
+
+/** raw balances of one workspace as a `{ currency: amount }` map (unknown currency → not listed; it is in `unconverted`) */
+function balanceMap(row: DashboardWorkspaceRow): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const b of row.now.balance) if (b.currency) out[b.currency] = (out[b.currency] ?? 0) + b.amount
+  return out
+}
 
 function balanceText(row: DashboardWorkspaceRow): string {
   if (row.now.balance.length === 0) return REPORT_DASH
@@ -80,8 +91,14 @@ const HEADERS: { label: string, key?: string }[] = [
             </button>
             <span v-if="row.admin?.displayName" class="ml-2 text-xs text-muted">{{ row.admin.displayName }}</span>
           </td>
-          <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(row.metrics.spend) }}
+          <td class="px-3 py-2 text-right">
+            <MoneyCell
+              data-testid="rd-workspace-spend"
+              total
+              :thb="row.metrics.spend"
+              :by-currency="row.spendByCurrency ?? {}"
+              :unconverted="row.spendUnconverted ?? null"
+            />
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(row.metrics.impressions) }}
@@ -113,8 +130,18 @@ const HEADERS: { label: string, key?: string }[] = [
           <td class="px-3 py-2 text-right tabular-nums" :class="row.now.banned > 0 ? 'text-error' : ''">
             {{ formatInt(row.now.banned) }}
           </td>
-          <td class="px-3 py-2 text-right tabular-nums text-muted">
-            {{ balanceText(row) }}
+          <td class="px-3 py-2 text-right tabular-nums text-muted" data-testid="rd-workspace-balance">
+            <MoneyCell
+              v-if="row.now.balanceThb"
+              total
+              :thb="row.now.balanceThb.amount"
+              :estimated="row.now.balanceThb.estimated"
+              :by-currency="balanceMap(row)"
+              :unconverted="unconvertedFromList(row.now.balanceThb.unconverted)"
+            />
+            <template v-else>
+              {{ balanceText(row) }}
+            </template>
           </td>
         </tr>
       </tbody>
@@ -123,8 +150,13 @@ const HEADERS: { label: string, key?: string }[] = [
           <td class="sticky left-0 z-[1] bg-elevated px-3 py-2">
             รวมทั้งหมด
           </td>
-          <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(funnel.metrics.spend) }}
+          <td class="px-3 py-2 text-right">
+            <MoneyCell
+              total
+              :thb="funnel.metrics.spend"
+              :by-currency="funnel.spendByCurrency ?? {}"
+              :unconverted="funnel.spendUnconverted ?? null"
+            />
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(funnel.metrics.impressions) }}

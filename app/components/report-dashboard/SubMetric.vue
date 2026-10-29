@@ -4,13 +4,15 @@ const props = withDefaults(defineProps<{
   label: string
   value: number | null
   previous?: number | null
-  format?: 'dec' | 'pct' | 'int'
+  /** FEAT-084 `thb` = a THB cost metric, `฿ 0.42` */
+  format?: 'dec' | 'pct' | 'int' | 'thb'
   lowerIsBetter?: boolean
   testid: string
 }>(), { previous: null, format: 'dec', lowerIsBetter: false })
 
 const text = computed(() => {
   if (props.format === 'pct') return formatPercent(props.value)
+  if (props.format === 'thb') return formatThb(props.value, 2)
   return props.format === 'int' ? formatInt(props.value) : formatDecimal(props.value)
 })
 const delta = computed(() => tileDelta(props.value, props.previous ?? null, props.lowerIsBetter))

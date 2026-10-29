@@ -77,9 +77,16 @@ type Shape = { main: string, sub: string, currency: string, mainValue: number | 
 
 const shape = computed<Shape>(() => {
   if (aggregate.value) {
+    const codes = Object.keys(props.byCurrency ?? {})
+    // one foreign currency only (a single-account report row) → `20.10 USD`; several → `THB 1,000 + USD 20.10`
+    const sub = !hasForeign(props.byCurrency)
+      ? ''
+      : codes.length === 1
+        ? formatNative(props.byCurrency![codes[0]!], codes[0], props.nativeDecimals)
+        : byCurrencyText(props.byCurrency)
     return {
       main: thbAmount.value === null ? MONEY_DASH : thbText.value,
-      sub: hasForeign(props.byCurrency) ? byCurrencyText(props.byCurrency) : '',
+      sub,
       currency: 'THB',
       mainValue: thbAmount.value,
       missing: false

@@ -3,6 +3,7 @@
  * FEAT-069 — tab "รายวัน" (`rf-table-day`): one row per day of the range, newest first (API order), no sort;
  * footer "ทั้งช่วง" = sums, except Used, which is the range's distinct count (`results.usedAdvertisers`).
  * `range=all` → `byDay` is `[]` and the note `rf-day-empty` replaces the table.
+ * FEAT-084 — `spend` is THB (`MoneyCell`, raw `THB x + USD y` sub, `+n ?` for `spendUnconverted`).
  */
 import type { PerfDayRow } from '#shared/types/report-performance'
 
@@ -27,6 +28,9 @@ const totals = computed(() => {
   }
   return t
 })
+
+const footerByCurrency = computed(() => mergeByCurrency(props.rows.map(r => r.spendByCurrency)))
+const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.spendUnconverted)))
 
 const HEADERS: { label: string, key?: string }[] = [
   { label: 'Day' },
@@ -91,7 +95,12 @@ function dim(value: number): string {
             />
           </td>
           <td class="px-3 py-2 text-right tabular-nums" :class="dim(row.spend)">
-            {{ formatDecimal(row.spend) }}
+            <MoneyCell
+              data-testid="rf-day-spend"
+              :thb="row.spend"
+              :by-currency="row.spendByCurrency ?? {}"
+              :unconverted="row.spendUnconverted ?? null"
+            />
           </td>
           <td class="px-3 py-2 text-right tabular-nums" :class="dim(row.used)">
             {{ formatInt(row.used) }}
@@ -125,7 +134,12 @@ function dim(value: number): string {
             ทั้งช่วง
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(totals.spend) }}
+            <MoneyCell
+              total
+              :thb="totals.spend"
+              :by-currency="footerByCurrency"
+              :unconverted="footerUnconverted"
+            />
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(usedTotal) }}

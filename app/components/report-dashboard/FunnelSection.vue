@@ -5,13 +5,23 @@
  * UTM/Spend numbers beside it, the 8 funnel tiles `rd-tile-<key>` (each with a delta vs `previousFunnel`;
  * `lowerIsBetter` on CPM / CPC / Cost/*) and the funnel bar `rd-funnel` (impressions → clicks → conversions →
  * registers → depositors, each step's % of the previous one, `—` when the previous is 0).
+ *
+ * FEAT-084 — spend and the cost metrics are THB (the API sums `spendThb`): the spend figures print `฿ …` with the
+ * raw `THB x + USD y` breakdown (+ the yellow `+n ?` of `spendUnconverted`) under them, the cost metrics `฿ 0.42`,
+ * the spend tile caption is the THB wording of `fx` (no more "ไม่แปลงค่า"). Slot `hero-extra` = one more item
+ * of the hero list (the page puts the balance tile there).
  */
+import type { FxReportBlock } from '#shared/types/fx'
 import type { DashboardFunnel } from '#shared/types/report-dashboard'
 
 const props = defineProps<{
   funnel: DashboardFunnel
   previous: DashboardFunnel | null
+  /** FEAT-084 — response-level `fx` (absent on an older API → "ทุกยอดเป็น THB") */
+  fx?: FxReportBlock | null
 }>()
+
+const spendCaption = computed(() => fxReportCaption(props.fx))
 
 function ratiosOf(f: DashboardFunnel | null) {
   if (!f) return null
@@ -71,13 +81,20 @@ const sharedNote = computed(() => {
         :help="REPORT_HELP['rd-tile-depBudget']"
         class="bg-default"
       />
-      <dl class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <dl class="grid grid-cols-2 gap-3" :class="$slots['hero-extra'] ? 'lg:grid-cols-5' : 'lg:grid-cols-4'">
         <div class="flex min-w-0 flex-col">
           <dt class="text-xs text-muted">
             Spend
           </dt>
-          <dd class="truncate text-lg font-semibold tabular-nums" data-testid="rd-hero-spend">
-            {{ formatDecimal(m.spend) }}
+          <dd class="min-w-0 text-lg font-semibold">
+            <MoneyCell
+              data-testid="rd-hero-spend"
+              total
+              align="start"
+              :thb="m.spend"
+              :by-currency="funnel.spendByCurrency ?? {}"
+              :unconverted="funnel.spendUnconverted ?? null"
+            />
           </dd>
         </div>
         <div class="flex min-w-0 flex-col">
@@ -104,6 +121,7 @@ const sharedNote = computed(() => {
             {{ formatInt(funnel.utm.depositors) }}
           </dd>
         </div>
+        <slot name="hero-extra" />
       </dl>
     </div>
 
@@ -113,11 +131,13 @@ const sharedNote = computed(() => {
         label="Spend"
         :value="m.spend"
         :previous="pm?.spend ?? null"
-        format="dec"
-        caption="สกุลเงินของบัญชี ไม่แปลงค่า"
+        format="thb"
+        :caption="spendCaption"
         child-ids
         :help="REPORT_HELP['rd-tile-spend']"
-      />
+      >
+        <MoneySubLine :by-currency="funnel.spendByCurrency" :unconverted="funnel.spendUnconverted ?? null" />
+      </ReportsMetricTile>
       <ReportsMetricTile
         testid="rd-tile-impressions"
         label="Impressions"
@@ -131,6 +151,7 @@ const sharedNote = computed(() => {
           label="CPM"
           :value="m.cpm"
           :previous="pm?.cpm ?? null"
+          format="thb"
           lower-is-better
         />
       </ReportsMetricTile>
@@ -155,6 +176,7 @@ const sharedNote = computed(() => {
             label="CPC"
             :value="m.cpc"
             :previous="pm?.cpc ?? null"
+            format="thb"
             lower-is-better
           />
         </span>
@@ -173,6 +195,7 @@ const sharedNote = computed(() => {
             label="Cost/Conv"
             :value="m.conversionCost"
             :previous="pm?.conversionCost ?? null"
+            format="thb"
             lower-is-better
           />
           <ReportDashboardSubMetric
@@ -197,6 +220,7 @@ const sharedNote = computed(() => {
           label="Cost/Reg"
           :value="r.costPerRegister"
           :previous="p?.costPerRegister ?? null"
+          format="thb"
           lower-is-better
         />
       </ReportsMetricTile>
@@ -214,6 +238,7 @@ const sharedNote = computed(() => {
             label="Cost/Dep"
             :value="r.costPerDeposit"
             :previous="p?.costPerDeposit ?? null"
+            format="thb"
             lower-is-better
           />
           <ReportDashboardSubMetric
