@@ -33,6 +33,7 @@ import type { AdvertiserStatus } from './advertisers'
 import type { SessionStatus } from './tiktok-accounts'
 import type { AdGroupBudget, AdGroupConfig } from './ad-group-templates'
 import type { AdConfig } from './ad-templates'
+import type { AdGroupGuardEffective, AdGroupGuardLayerBody, BuildAdGroupGuard, OrderAdGroupGuard } from './ad-group-guard'
 
 /** Why a TikTok account cannot be launched right now (api-contract §4, evaluated in this order). */
 export type UnavailableReason
@@ -53,6 +54,11 @@ export interface LaunchAdvertiser {
   bcOrder: number | null
   /** `status === 'active' && missingSince === null` — only these can be picked */
   selectable: boolean
+  /**
+   * FEAT-086 (api-contract §5, appended) — the account + workspace layer of the ad group guard resolved with this
+   * advertiser's currency. Optional for the reader (an older API reads as "no rule").
+   */
+  adGroupGuard?: AdGroupGuardEffective
 }
 
 /** One TikTok account of `GET /launch/targets` (available accounts first, then label/loginEmail). */
@@ -133,6 +139,8 @@ export interface CreateOrderBody {
   publishMode: PublishMode
   /** FEAT-066 — omit the key unless true (API default is `false`; `draft` + `true` is a 400) */
   pauseAfterPublish?: boolean
+  /** FEAT-086 (§6.1) — omitted for `inherit` and for every draft (`draft` + key = 400) */
+  adGroupGuard?: AdGroupGuardLayerBody
   targets: CreateOrderTarget[]
 }
 
@@ -167,6 +175,8 @@ export interface OrderView {
   updatedAt: string
   /** FEAT-066 — immutable, copied from the create body */
   pauseAfterPublish: boolean
+  /** FEAT-086 (§6.2, key 17) — the order's own layer; older rows `{ inherit, null }`; optional for the reader */
+  adGroupGuard?: OrderAdGroupGuard
 }
 
 /**
@@ -268,6 +278,11 @@ export interface BuildView {
   pauseAfterPublish: boolean
   /** FEAT-066 — `null` unless `pauseAfterPublish`; reset to `null` on every retry */
   pause: BuildPauseView | null
+  /**
+   * FEAT-086 (§6.3, key 23) — snapshot of the ad group guard taken at create, kept by retries; `null` for builds
+   * created before the feature (and `undefined` from an older API — same meaning).
+   */
+  adGroupGuard?: BuildAdGroupGuard | null
 }
 
 /** `POST /campaign-orders` 201 body. */

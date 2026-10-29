@@ -89,6 +89,7 @@ import type { HumanTaskKind } from './human-tasks'
 import type { ProxyLastCheck } from './proxies'
 import type { PrefixRef } from './prefixes'
 import type { TopupChannel, TopupView } from './topups'
+import type { AccountAdGroupGuard, AdGroupGuardEffective, AdGroupGuardLayerBody } from './ad-group-guard'
 
 export type SessionStatus = 'unknown' | 'loggedIn' | 'loggedOut' | 'needsHuman' | 'disabled'
 
@@ -349,6 +350,13 @@ export interface TikTokAccount {
   createdBy: string
   createdAt: string
   updatedAt: string
+  /**
+   * FEAT-086 (api-contract §4.2, appended) — the account's own ad group guard layer. Optional for the reader: an
+   * API/stub that predates the feature reads as `inherit` (`accountAdGroupGuard()`, `app/utils/ad-group-guard.ts`).
+   */
+  adGroupGuard?: AccountAdGroupGuard
+  /** FEAT-086 — the rule that applies to this account today (account → workspace[currency]), `source` = layer */
+  adGroupGuardEffective?: AdGroupGuardEffective
 }
 
 /** FEAT-071 — job types that keep a failure screenshot */
@@ -914,6 +922,11 @@ export interface PatchAccountBody {
    * FEAT-076 (§5.2) — the 7th key: sent only when the Edit modal's Prefix select changed; `null` detaches.
    */
   prefixId?: string | null
+  /**
+   * FEAT-086 (§4.1) — the whole ad group guard block, sent only when `{ mode, rule }` changed; `inherit`/`off`
+   * carry no `rule`. 409 `currencyUnknown` for `custom` on an account whose currency is not known.
+   */
+  adGroupGuard?: AdGroupGuardLayerBody
 }
 
 /** FEAT-063 — `PUT`/`DELETE /tiktok-accounts/:id/favorite` 200 body (`id` echoed back as a string). */
