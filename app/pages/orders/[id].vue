@@ -1167,7 +1167,7 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
               <h2 class="text-sm font-semibold text-highlighted">
                 กฎปิด ad group
               </h2>
-              <div class="grid gap-2 lg:grid-cols-2">
+              <div class="grid items-start gap-2 lg:grid-cols-2">
                 <AdGroupGuardBuildCard
                   v-for="entry in guardBuilds"
                   :key="entry.build.id"

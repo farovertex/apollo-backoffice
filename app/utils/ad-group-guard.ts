@@ -43,16 +43,10 @@ export const AGG_COMBINE_LABEL: Record<AdGroupGuardCombine, string> = {
   and: 'ทั้งสองเงื่อนไข'
 }
 
-const NUMBER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
-/** metrics are shown whole (spec §4 example `ใช้จ่าย 1,620 THB · CPM 231`) */
-const WHOLE = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
+/** `en-US` grouping, up to 3 decimals — the same output as `Number.prototype.toLocaleString('en-US')` */
+const NUMBER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 })
 
-function formatWhole(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
-  return WHOLE.format(value)
-}
-
-/** `1500` → `1,500`, `231.14` → `231.14` — fixed grouping, never locale-dependent */
+/** `1500` → `1,500`, `1620.5` → `1,620.5` — fixed grouping, never locale-dependent */
 export function formatAggNumber(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   return NUMBER.format(value)
@@ -204,9 +198,9 @@ export function formatAggDate(iso: string | null | undefined): string {
 /** spec §4 — `ใช้จ่าย 1,620 THB · CPM 231 · conv 12 · ณ 29 ต.ค. 14:05` */
 export function formatAdGroupGuardMetrics(metrics: AdGroupGuardMetrics, currency: string | null): string {
   const parts = [
-    `ใช้จ่าย ${formatWhole(metrics.spend)} ${currency || AGG_ACCOUNT_CURRENCY}`,
-    `CPM ${formatWhole(metrics.cpm)}`,
-    `conv ${formatWhole(metrics.conversions)}`
+    `ใช้จ่าย ${formatAggNumber(metrics.spend)} ${currency || AGG_ACCOUNT_CURRENCY}`,
+    `CPM ${formatAggNumber(metrics.cpm)}`,
+    `conv ${formatAggNumber(metrics.conversions)}`
   ]
   const at = formatAggDate(metrics.asOf)
   if (at) parts.push(`ณ ${at}`)

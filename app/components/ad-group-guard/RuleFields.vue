@@ -25,7 +25,8 @@ const props = withDefaults(defineProps<{
   serverErrors?: AdGroupGuardDraftErrors | null
 }>(), { disabled: false, showErrors: false, serverErrors: null })
 
-const emit = defineEmits<{ valid: [valid: boolean] }>()
+/** `edited` — the user typed / picked something (the parent drops its stale `serverErrors` then) */
+const emit = defineEmits<{ valid: [valid: boolean], edited: [] }>()
 
 const draft = defineModel<AdGroupGuardRuleDraft>({ required: true })
 
@@ -53,10 +54,12 @@ const ruleError = computed(() => {
 function update(key: 'minSpend' | 'maxCpm' | 'minConversions', value: string | number) {
   touched[key] = true
   draft.value = { ...draft.value, [key]: String(value ?? '') }
+  emit('edited')
 }
 
 function setCombine(value: AdGroupGuardCombine) {
   draft.value = { ...draft.value, combine: value }
+  emit('edited')
 }
 
 const combineItems: { value: AdGroupGuardCombine, label: string }[] = [
@@ -68,7 +71,7 @@ const combineItems: { value: AdGroupGuardCombine, label: string }[] = [
 <template>
   <div class="flex flex-col gap-3">
     <div class="grid gap-3 sm:grid-cols-3">
-      <UFormField label="ใช้จ่ายถึง (เริ่มตัดสิน)" :error="errorOf('minSpend')">
+      <UFormField label="ใช้จ่ายถึง" :error="errorOf('minSpend')">
         <UInput
           :model-value="draft.minSpend"
           type="text"
@@ -85,7 +88,7 @@ const combineItems: { value: AdGroupGuardCombine, label: string }[] = [
           </template>
         </UInput>
       </UFormField>
-      <UFormField label="CPM เกิน" hint="เว้นว่าง = ไม่ใช้" :error="errorOf('maxCpm')">
+      <UFormField label="CPM เกิน" :error="errorOf('maxCpm')">
         <UInput
           :model-value="draft.maxCpm"
           type="text"
@@ -102,7 +105,7 @@ const combineItems: { value: AdGroupGuardCombine, label: string }[] = [
           </template>
         </UInput>
       </UFormField>
-      <UFormField label="conversions น้อยกว่า" hint="เว้นว่าง = ไม่ใช้" :error="errorOf('minConversions')">
+      <UFormField label="conversions ต่ำกว่า" :error="errorOf('minConversions')">
         <UInput
           :model-value="draft.minConversions"
           type="text"
@@ -116,6 +119,10 @@ const combineItems: { value: AdGroupGuardCombine, label: string }[] = [
         />
       </UFormField>
     </div>
+
+    <p class="text-xs text-muted">
+      เริ่มตัดสินเมื่อใช้จ่ายถึงยอดนี้ · เว้น CPM หรือ conversions ว่าง = ไม่ใช้เงื่อนไขนั้น (ต้องมีอย่างน้อยหนึ่ง)
+    </p>
 
     <div v-if="both" class="flex flex-col gap-1">
       <span class="text-xs text-muted">ปิดเมื่อ</span>

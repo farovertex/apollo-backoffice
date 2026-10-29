@@ -560,7 +560,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   <UModal
     v-model:open="open"
     :title="`Edit account ${account?.label ?? account?.loginEmail ?? ''}`"
-    description="The label, login email, both passwords, the recovery email and the auto top-up rule can be changed here."
+    description="The label, login email, both passwords, the recovery email, the auto top-up rule and the ad group guard can be changed here."
     :dismissible="!submitting"
     :ui="{ content: 'max-w-lg' }"
     :content="modalContent"
@@ -868,6 +868,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             :disabled="submitting"
             :show-errors="guardShowErrors"
             :server-errors="guardServerErrors"
+            @edited="guardServerErrors = {}"
           />
         </div>
 

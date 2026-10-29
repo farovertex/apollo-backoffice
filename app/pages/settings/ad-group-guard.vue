@@ -452,6 +452,7 @@ onMounted(() => {
             :disabled="controlsDisabled"
             :show-errors="showErrors"
             :server-errors="row.serverErrors"
+            @edited="row.serverErrors = {}"
           />
           <p
             v-if="parseAdGroupGuardDraft(row.draft).rule"
