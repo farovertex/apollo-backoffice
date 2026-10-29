@@ -26,22 +26,40 @@ export const POST_INFO_STATUS_BADGE: Record<AdTemplatePostInfoStatus, StatusBadg
   verifying: { label: 'กำลังตรวจ…', color: 'info' },
   verified: { label: 'ตรวจแล้ว', color: 'success' },
   invalid: { label: 'รหัสไม่ถูกต้อง', color: 'error' },
-  failed: { label: 'ตรวจไม่ได้', color: 'warning' }
+  failed: { label: 'ตรวจไม่ได้', color: 'warning' },
+  deleted: { label: 'โพสต์ถูกลบ', color: 'error' }
 }
 
 /** no `postInfo` at all — the template was never checked (also: an API without the key) */
 export const POST_INFO_UNVERIFIED_BADGE: StatusBadge = { label: 'ยังไม่ได้ตรวจ', color: 'neutral' }
 
+/**
+ * FEAT-079 — TikTok codes meaning "the post behind this Spark code no longer exists" (single lookup 50100,
+ * ad-page batch dialog 900015). Rows stored as `invalid` with one of these before the API learnt `deleted`
+ * are treated the same (AC-9, no migration).
+ */
+export const TIKTOK_POST_DELETED_CODES: readonly number[] = [50100, 900015]
+
+/** the post was deleted: status `deleted`, or a legacy `invalid` row carrying a deleted-code */
+export function isPostDeleted(postInfo: PostInfoLike): boolean {
+  if (!postInfo) return false
+  if (postInfo.status === 'deleted') return true
+  const code = postInfo.error?.code
+  return postInfo.status === 'invalid' && typeof code === 'number' && TIKTOK_POST_DELETED_CODES.includes(code)
+}
+
 /** the chip of a row / card / section, including the absent case; an unknown status keeps its own text */
 export function postInfoBadge(postInfo: PostInfoLike): StatusBadge {
   const status = postInfo?.status
   if (!status) return POST_INFO_UNVERIFIED_BADGE
+  if (isPostDeleted(postInfo)) return POST_INFO_STATUS_BADGE.deleted
   return POST_INFO_STATUS_BADGE[status]
     ?? ({ label: status, color: 'neutral' as StatusColor } satisfies StatusBadge)
 }
 
 /** `data-status` of the chip — the status, or `none` while the template was never checked */
 export function postInfoStatusAttr(postInfo: PostInfoLike): string {
+  if (isPostDeleted(postInfo)) return 'deleted'
   return postInfo?.status ?? 'none'
 }
 
@@ -61,7 +79,7 @@ export function isPostInfoVerified(postInfo: PostInfoLike): boolean {
  */
 export function needsPostInfoWarning(postInfo: PostInfoLike): boolean {
   const status = postInfo?.status
-  return !status || status === 'invalid' || status === 'failed'
+  return !status || status === 'invalid' || status === 'failed' || status === 'deleted'
 }
 
 /** a cover row exists ⇔ `GET /ad-templates/:id/cover` answers 200 — the only case the BO may request it */
@@ -106,6 +124,7 @@ function tiktokReason(error: AdTemplatePostInfoError): string {
  */
 export function postInfoReason(postInfo: PostInfoLike): string | null {
   const status = postInfo?.status
+  if (isPostDeleted(postInfo)) return postInfo?.error?.msg?.trim() || 'TikTok ลบโพสต์นี้แล้ว'
   if (status !== 'invalid' && status !== 'failed') return null
   const error = postInfo?.error ?? null
   if (status === 'invalid') return error ? tiktokReason(error) : 'TikTok ไม่รับรหัสนี้'
