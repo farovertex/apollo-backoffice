@@ -4,7 +4,9 @@
  * The page opens it after `POST /backend/tiktok-accounts/:id/login` answered 202 or 409. While open it polls
  * `GET /backend/tiktok-accounts/:id` every 2 s (first poll immediately) and derives one of five states, exposed as
  * `data-state` on the dialog element (`ta-login-modal`):
- *   running  — a job is waiting/active (or a 202 was just received): spinner + step text (`ta-login-step`)
+ *   running  — a job is pending/waiting/active (or a 202 was just received): spinner + step text (`ta-login-step`,
+ *              `data-status` = the job's status). FEAT-085: `pending` → "รอคิว ลำดับที่ n · <reason>" (the
+ *              dispatcher has not released it), `waiting` → "กำลังจะเริ่ม", `active` → the usual login steps
  *   otp      — `sessionStatus === 'needsHuman'` + open otp task: one `GET /backend/human-tasks/:id` → screenshot,
  *              instructions, countdown from `expiresAt`, code input → `POST /backend/human-tasks/:id/resolve`
  *              (202 → running · 410 → expired · 409 → re-poll · other → `ta-otp-error`)
@@ -110,7 +112,9 @@ const state = computed<LoginState>(() => {
   if (a.sessionStatus === 'loggedIn' && !loginRunning) return 'success'
   if (expired.value) return 'expired'
   if (forceRunning.value) return 'running'
-  if (a.sessionStatus === 'needsHuman' && a.openHumanTask?.kind === 'otp') return 'otp'
+  // FEAT-085 (api-contract §6): login has no human task any more — the API never writes `needsHuman` and answers
+  // 409 `notSupported` to a resolve of a login OTP task, so a legacy `needsHuman` row is a plain error ("Try again"
+  // re-POSTs the login). The OTP panel below stays only until the round-C cleanup removes it.
   // no login job running and not logged in: `loggedOut` + `lastLoginError` (spec), or any other status left behind
   if (!loginRunning) return 'error'
   return 'running'
@@ -142,8 +146,15 @@ const STEP_TEXT: Partial<Record<JobStep, string>> = {
 const stepText = computed<string>(() => {
   const job = account.value?.runningJob
   if (!job || job.type !== 'login') return 'Starting…'
-  const base = job.step ? (STEP_TEXT[job.step] ?? job.step) : job.status === 'waiting' ? 'Queued…' : 'Starting…'
+  // FEAT-085 — pending / waiting: the queue state replaces the step (a not-yet-claimed job has no step)
+  const queued = job.status === 'active' ? null : jobQueueText(job)
+  const base = queued ?? (job.step ? (STEP_TEXT[job.step] ?? job.step) : 'Starting…')
   return job.trigger === 'retry' ? `Retrying (2/2)… ${base}` : base
+})
+/** FEAT-085 — `data-status` of the step line: the followed login job's status, `''` before the first poll */
+const stepStatus = computed<string>(() => {
+  const job = account.value?.runningJob
+  return job && job.type === 'login' ? job.status : ''
 })
 
 const errorText = computed(() => loginErrorText(account.value?.lastLoginError))
@@ -301,8 +312,8 @@ async function restartLogin() {
     backToRunning()
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
-    if (err.statusCode === 409) {
-      // a job / task already exists for this account → just follow it
+    if (err.statusCode === 409 && err.data?.reason === 'duplicate') {
+      // FEAT-085 — an open login of this account normally comes back as 202 `reused`; a `duplicate` 409 is followed the same way
       followedJobId.value = err.data?.jobType === 'discover' ? null : (err.data?.jobId ?? null)
       backToRunning()
     } else {
@@ -382,7 +393,7 @@ onUnmounted(() => {
         <div v-if="state === 'running'" class="flex items-center gap-3" data-testid="ta-login-running">
           <UIcon name="i-lucide-loader-circle" class="size-6 shrink-0 animate-spin text-primary" />
           <div class="min-w-0">
-            <p class="text-sm font-medium text-highlighted" data-testid="ta-login-step">
+            <p class="text-sm font-medium text-highlighted" data-testid="ta-login-step" :data-status="stepStatus">
               {{ stepText }}
             </p>
             <p v-if="loginWorkerInstance" class="text-xs text-muted" data-testid="ta-login-worker">

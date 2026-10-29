@@ -113,7 +113,8 @@ export type JobStep
  * `afterLogin` = discover job enqueued automatically by a login success (FEAT-005).
  * `scheduler` = login job enqueued by the first-login scan (FEAT-023 §6), never by a click.
  */
-export type JobTrigger = 'manual' | 'retry' | 'human' | 'afterLogin' | 'scheduler'
+export type JobTrigger
+  = 'manual' | 'retry' | 'human' | 'afterLogin' | 'afterDiscover' | 'afterPublish' | 'scheduler' | 'scheduled'
 
 /**
  * FEAT-023 — why the automatic first login gave up (`tiktokAccounts.firstLoginFail`); null while it may still run
@@ -225,15 +226,45 @@ export interface OpenHumanTask {
  * `login` / `discover` keeps working, it just has to name the other types instead of guessing.
  */
 export type JobType
-  = 'sessionCheck' | 'login' | 'discover' | 'build' | 'kpiFetch' | 'statusCheck' | 'topup' | 'provider'
+  = 'login' | 'discover' | 'build' | 'kpiFetch' | 'topup' | 'provider'
     | 'utmFetch' | 'postInfoWarmup' | 'optToggle' | 'budget' | 'campaignDelete' | 'bcSubCreate'
     | 'bcAdvCreate' | 'bcTtLink'
 
-/** Job of the account that is `waiting` or `active`, as embedded in the account view. */
-export interface RunningJob {
+/**
+ * FEAT-085 (api-contract §1) — job status of an open job. `pending` = in the browser profile's waiting list (the
+ * dispatcher has not released it yet) · `waiting` = released, about to be claimed by a worker · `active` = running.
+ */
+export type OpenJobStatus = 'pending' | 'waiting' | 'active'
+
+/** FEAT-085 — 0 = manual/human · 1 = chained (afterLogin, afterDiscover, afterPublish, retry) · 2 = scheduled */
+export type JobPriority = 0 | 1 | 2
+
+/** FEAT-085 (api-contract §5.1) — dispatcher class, derived from the type by the API */
+export type JobClass = 'exclusive' | 'heavy' | 'light' | 'none'
+
+/**
+ * FEAT-085 — why the head of the profile's pending list is not released: `profile` = another job holds the
+ * profile · `exclusive` = a login (exclusive job) runs or waits ahead · `seat` = the node has no free seat ·
+ * `otherNode` = the profile is open/assigned on another node. `null` unless `status === 'pending'`.
+ */
+export type JobWaitingFor = 'profile' | 'exclusive' | 'seat' | 'otherNode'
+
+/**
+ * FEAT-085 (api-contract §1) — the queue fields every job view carries. `queuePosition` = number of `pending`
+ * rows of the same profile ahead of this one (0 = head, shown as "ลำดับที่ 1"); `null` unless pending.
+ */
+export interface JobQueueFields {
+  priority: JobPriority
+  class: JobClass
+  queuePosition: number | null
+  waitingFor: JobWaitingFor | null
+}
+
+/** Job of the account that is `pending`, `waiting` or `active`, as embedded in the account view. */
+export interface RunningJob extends JobQueueFields {
   id: string
   type: JobType
-  status: 'waiting' | 'active'
+  status: OpenJobStatus
   step: JobStep | null
   trigger: JobTrigger
   startedAt: string | null
@@ -487,7 +518,7 @@ export type BcSubCurrency = 'THB' | 'USD'
  * Human texts: `app/utils/bc-sub-create.ts` (`bcSubCreateReasonText`).
  */
 export type BcSubCreateReason
-  = 'noOrgId' | 'noProfile' | 'inactive' | 'running' | 'needsHuman' | 'exhausted' | 'nameTaken'
+  = 'noOrgId' | 'noProfile' | 'inactive' | 'duplicate' | 'exhausted' | 'nameTaken'
 
 /**
  * TASK-bc-sub-create — `GET /tiktok-accounts/:id/bc-sub-create/suggest` 200 body. `name` is `<bcOrgName> NNN`
@@ -537,7 +568,7 @@ export interface BcSubCreateResult {
 }
 
 /** TASK-bc-sub-create — status of the `bcSubCreate` job (`jobs.status`); the BO polls until a terminal one. */
-export type BcSubCreateJobStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
+export type BcSubCreateJobStatus = 'pending' | 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
 
 /**
  * TASK-bc-sub-create — one `bcSubCreate` job as `GET …/bc-sub-create/latest` returns it. `lastLog` is the
@@ -570,7 +601,7 @@ export interface BcSubCreateLatestResponse {
  * and `exhausted` means `001`…`999` of this org's name are all used. Human texts: `app/utils/bc-adv-create.ts`.
  */
 export type BcAdvConflictReason
-  = 'noOrg' | 'orgMissing' | 'noOrgName' | 'noProfile' | 'inactive' | 'running' | 'needsHuman' | 'exhausted' | 'nameTaken'
+  = 'noOrg' | 'orgMissing' | 'noOrgName' | 'noProfile' | 'inactive' | 'duplicate' | 'exhausted' | 'nameTaken'
 
 /**
  * TASK-bc-adv-create — `GET /tiktok-accounts/:id/organizations/:orgId/bc-adv-create/suggest` 200 body. `name` is
@@ -625,7 +656,7 @@ export interface BcAdvCreateResult {
 }
 
 /** TASK-bc-adv-create — status of the `bcAdvCreate` job (`jobs.status`); the BO polls until a terminal one. */
-export type BcAdvCreateJobStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
+export type BcAdvCreateJobStatus = 'pending' | 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
 
 /**
  * TASK-bc-adv-create — one `bcAdvCreate` job as `GET …/organizations/:orgId/bc-adv-create/latest` returns it
@@ -656,11 +687,11 @@ export interface BcAdvCreateLatestResponse {
  * TASK-bc-tt-link — why "เพิ่มบัญชี TikTok" (issue a QR under one Business Center org) cannot be ordered right
  * now. Same shape as `BcAdvConflictReason` and the same exception: `noOrg` is a **404** `{ error: 'ไม่พบ org' }`
  * on the POST and on `GET …/tiktok-accounts`, never a 409 `reason`, so the key only carries the 404's fallback
- * text. Checked in this order by the API's `preflight()`: `orgMissing` → `noProfile` → `inactive` → `running` →
- * `needsHuman`. Human texts: `app/utils/bc-tt-link.ts` (copied from the API's `BC_TT_LINK_CONFLICT`).
+ * text. Checked in this order by the API's `preflight()`: `orgMissing` → `noProfile` → `inactive` → `duplicate`
+ * (FEAT-085: `running` / `needsHuman` are gone). Human texts: `app/utils/bc-tt-link.ts` (copied from the API's `BC_TT_LINK_CONFLICT`).
  */
 export type BcTtLinkConflictReason
-  = 'noOrg' | 'orgMissing' | 'noProfile' | 'inactive' | 'running' | 'needsHuman'
+  = 'noOrg' | 'orgMissing' | 'noProfile' | 'inactive' | 'duplicate'
 
 /** TASK-bc-tt-link — 202 body of `POST …/organizations/:orgId/bc-tt-link` (no request body at all). */
 export interface BcTtLinkAccepted {
@@ -691,7 +722,7 @@ export interface BcTtLinkResult {
 }
 
 /** TASK-bc-tt-link — status of the `bcTtLink` job (`jobs.status`); the BO polls until a terminal one. */
-export type BcTtLinkJobStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
+export type BcTtLinkJobStatus = 'pending' | 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
 
 /**
  * TASK-bc-tt-link — the latest `bcTtLink` job **of one org** as `GET …/bc-tt-link/latest` returns it (any
@@ -854,20 +885,67 @@ export interface BatchAccountsResponse {
   rows: BatchRowResult[]
 }
 
-/** `POST /tiktok-accounts/:id/login` 202 body. */
+/**
+ * `POST /tiktok-accounts/:id/login` 202 body. FEAT-085 — `reused: true` = a `pending`/`waiting` login (or discover
+ * of the same scope) of this account already existed and its id came back instead of a new row.
+ */
 export interface LoginJobResponse {
   jobId: string
+  reused?: boolean
 }
 
 /**
- * `POST /tiktok-accounts/:id/login` and `…/discover` 409 body: a job is already waiting/active (`jobId`, and since
- * FEAT-005 its `jobType`) or a human task is open (`humanTaskId`).
+ * FEAT-085 (api-contract §3) — the complete set of 409 `reason` codes after the dispatcher (busy codes such as
+ * `jobRunning` / `buildInProgress` / `running` / `needsHuman` / `fetching` / `pending` are gone).
+ */
+export type JobConflictReason
+  = 'duplicate' | 'inactive' | 'accountDeleted' | 'banned' | 'notLoggedIn' | 'profileProvisioning'
+    | 'notDiscovered' | 'noBcOrg' | 'roundOpen' | 'invalidState' | 'notCancellable' | 'deleting'
+
+/**
+ * FEAT-085 (api-contract §3) — 409 `duplicate`: a job for the same target is already pending/waiting/active.
+ * `queuePosition` is null unless that job is `pending`.
+ */
+export interface DuplicateConflictBody {
+  error: string
+  reason: 'duplicate'
+  jobId: string
+  status: OpenJobStatus
+  queuePosition: number | null
+}
+
+/**
+ * `POST /tiktok-accounts/:id/login` and `…/discover` 409 body. FEAT-085: no busy 409 any more (a pending/waiting
+ * job is answered with 202 `reused`), only `inactive` / `accountDeleted` / `profileProvisioning`. `jobId` /
+ * `humanTaskId` are kept optional for an API that has not been upgraded yet.
  */
 export interface LoginConflictBody {
   error: string
+  reason?: 'inactive' | 'accountDeleted' | 'profileProvisioning' | 'duplicate'
   jobId?: string
   jobType?: 'login' | 'discover'
   humanTaskId?: string
+}
+
+/** FEAT-085 (api-contract §4) — `POST /jobs/:id/cancel` 200 body. */
+export interface CancelJobResponse {
+  job: JobQueueFields & {
+    id: string
+    type: JobType
+    status: 'cancelled'
+    error: string | null
+    tiktokAccountId: string | null
+    browserProfileId: string | null
+    createdAt: string
+    finishedAt: string | null
+  }
+}
+
+/** FEAT-085 — 409 of `POST /jobs/:id/cancel`: the job is active or finished. */
+export interface CancelJobConflict {
+  error: string
+  reason: 'notCancellable'
+  status: string
 }
 
 /**
@@ -927,10 +1005,10 @@ export interface FavoriteToggleResponse {
  * `DELETE /tiktok-accounts/:id` lists it. **Every** job type, `kpiFetch` included (unlike `runningJob` of the
  * account view, which hides kpi): the delete cancels all of them.
  */
-export interface PendingAccountJob {
+export interface PendingAccountJob extends JobQueueFields {
   id: string
   type: JobType
-  status: 'waiting' | 'active'
+  status: OpenJobStatus
   step: JobStep | null
   createdAt: string
 }

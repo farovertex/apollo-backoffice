@@ -18,6 +18,7 @@
  */
 import type { ThbBlock } from './fx'
 import type { BannedAd } from './report-banned'
+import type { OpenJobStatus } from './tiktok-accounts'
 import type { KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
 
 /** API level enum (contract §1 — `ad` is TikTok's `creative`). */
@@ -353,22 +354,34 @@ export interface DeleteAccepted {
   deletePending: DeletePendingView
 }
 
-/** Why a delete was refused, in the API's own order. */
-export type DeleteConflictReason = 'deletePending' | 'optPending' | 'banned' | 'notLoggedIn' | 'buildInProgress'
+/**
+ * Why a delete was refused. FEAT-085 (api-contract §2.2/§3): `deletePending` / `optPending` / `buildInProgress`
+ * are gone — a delete or switch job of the same campaign answers `duplicate` (with that job's id / position).
+ */
+export type DeleteConflictReason = 'duplicate' | 'banned' | 'notLoggedIn'
 
-/** `POST /ads-monitor/delete-campaign` 409 body — `error` is the Thai sentence shown in the toast. */
+/**
+ * `POST /ads-monitor/delete-campaign` 409 body — `error` is the Thai sentence shown in the toast. `jobId` /
+ * `status` / `queuePosition` only on `duplicate` (queuePosition null unless that job is `pending`).
+ */
 export interface DeleteConflict {
   error: string
   reason: DeleteConflictReason
+  jobId?: string
+  status?: OpenJobStatus
+  queuePosition?: number | null
 }
 
-/** Why a toggle was refused (contract §4 step 3). */
-export type ToggleConflictReason = 'pending' | 'banned' | 'notLoggedIn' | 'buildInProgress'
+/** Why a toggle was refused. FEAT-085: `pending` / `buildInProgress` are gone, `duplicate` is new. */
+export type ToggleConflictReason = 'duplicate' | 'banned' | 'notLoggedIn'
 
-/** `POST /ads-monitor/toggle` 409 body — `error` is the Thai sentence shown in the toast. */
+/** `POST /ads-monitor/toggle` 409 body — `error` is the Thai sentence shown in the toast (extra keys on `duplicate`). */
 export interface ToggleConflict {
   error: string
   reason: ToggleConflictReason
+  jobId?: string
+  status?: OpenJobStatus
+  queuePosition?: number | null
 }
 
 /**
@@ -420,11 +433,14 @@ export interface SetBudgetUnchanged {
   budget: AdvertiserBudgetView
 }
 
-/** Why a budget set was refused, in the API's own order (contract §2 step 4). */
-export type BudgetConflictReason = 'pending' | 'banned' | 'notLoggedIn' | 'buildInProgress' | 'notDiscovered'
+/** Why a budget set was refused. FEAT-085: `pending` / `buildInProgress` are gone, `duplicate` is new. */
+export type BudgetConflictReason = 'duplicate' | 'banned' | 'notLoggedIn' | 'notDiscovered'
 
 /** `POST /advertisers/:advertiserId/budget` 409 body — `error` is the Thai sentence shown in the toast. */
 export interface BudgetConflict {
   error: string
   reason: BudgetConflictReason
+  jobId?: string
+  status?: OpenJobStatus
+  queuePosition?: number | null
 }

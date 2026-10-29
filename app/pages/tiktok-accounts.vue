@@ -499,9 +499,17 @@ async function onLogin(account: TikTokAccount) {
     openLoginModal(account, started?.jobId ?? null)
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
-    if (err.statusCode === 409) {
-      // a job or human task already exists for this account → follow it in the modal (body: jobId / humanTaskId)
+    if (err.statusCode === 409 && err.data?.reason === 'duplicate') {
+      // FEAT-085 — an open login normally comes back as 202 `reused` (followed above); a `duplicate` 409 is followed too
       openLoginModal(account, err.data?.jobType === 'discover' ? null : (err.data?.jobId ?? null))
+    } else if (err.statusCode === 409) {
+      // FEAT-085 — the only other 409s are gates (`inactive` / `accountDeleted` / `profileProvisioning`)
+      toast.add({
+        title: 'Could not start the login',
+        description: err.data?.error ?? 'Unexpected error',
+        color: 'warning'
+      })
+      void refresh()
     } else {
       toast.add({
         title: 'Could not start the login',
@@ -997,11 +1005,10 @@ function runningJobQueueHint(type: JobType): string {
 
 /**
  * TASK-sync-queue-wait — Sync no longer greys out while a job runs (the API queues a click behind it instead of
- * answering 409); `runningJob` is now purely informational, shown as the `ta-job-running` badge. The button is
- * disabled only for reasons the API will still refuse outright: an open OTP task or a disabled account.
+ * answering 409); `runningJob` is purely informational, shown as the `ta-job-running` badge. FEAT-085: the only
+ * reason left is a disabled account (no human task exists any more, so `needsHuman` no longer blocks).
  */
 function syncBlockedReason(account: TikTokAccount): string | null {
-  if (account.sessionStatus === 'needsHuman') return 'Needs OTP — finish the login first'
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -1033,11 +1040,13 @@ async function onSync(account: TikTokAccount, bcOrgId: string | null = null) {
     startDiscoverPoll(account.id)
   } catch (e) {
     const err = e as FetchError<Partial<LoginConflictBody>>
-    if (err.statusCode === 409) {
-      // TASK-sync-queue-wait: 409 now means only an open human task (a waiting/active job dedupes into a 200
-      // instead of 409ing) → follow the account until the task is resolved and any job finishes
-      toast.add({ title: 'Already running', description: err.data?.error ?? label, color: 'info' })
+    if (err.statusCode === 409 && err.data?.reason === 'duplicate') {
+      // FEAT-085 — an open discover of the same scope normally comes back as 202 `reused`; follow it either way
       startDiscoverPoll(account.id)
+    } else if (err.statusCode === 409) {
+      // FEAT-085 — only gates are left (`inactive` / `accountDeleted` / `profileProvisioning`)
+      toast.add({ title: 'Could not start the sync', description: err.data?.error ?? label, color: 'warning' })
+      void refresh()
     } else {
       toast.add({
         title: 'Could not start the sync',
@@ -1165,15 +1174,13 @@ function setSubCreateFailed(id: string, text: string | null) {
 }
 
 /**
- * Why the row action is disabled (the tooltip text), `null` = enabled. The brief's rule is "a `bcOrgId` and no
- * running job"; `isActive` is checked too because the API answers 409 `inactive` for a disabled account, and
- * the running job is named by `runningJobReason()` (the sub-create job of another tab says so, anything else
- * gets the generic sentence instead of the wrong one).
+ * Why the row action is disabled (the tooltip text), `null` = enabled: a sub-create this page is already
+ * following (the same target → the API would answer `duplicate`), no `bcOrgId`, or a disabled account.
+ * FEAT-085: another job of the account never disables it any more — the new job simply queues behind it.
  */
 function subCreateBlockedReason(account: TikTokAccount): string | null {
   if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
   if (!account.bcOrgId) return 'Sync first'
-  if (account.runningJob) return runningJobReason(account.runningJob.type)
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -1235,7 +1242,7 @@ async function pollSubCreate(id: string, jobId: string, label: string) {
       setSubCreatePending(id, false)
       return
     }
-    if (job.status === 'waiting' || job.status === 'active') return
+    if (job.status === 'pending' || job.status === 'waiting' || job.status === 'active') return
     stopSubCreatePoll(id)
     setSubCreatePending(id, false)
     if (job.status === 'completed') {
@@ -1371,22 +1378,11 @@ function advCreateFailedFor(accountId: string): Record<string, string> {
 
 /**
  * Why every "สร้างบัญชีโฆษณา" button of this account is disabled (the tooltip text), `null` = enabled. The
- * per-org part (this org's own job still running, or a missing org, which has no button at all) is decided
- * inside `OrganizationRows`. A `bcSubCreate` job the page is following is named explicitly because the account
- * snapshot may not carry it as `runningJob` yet.
+ * per-org part (this org's own job still followed, or a missing org, which has no button at all) is decided
+ * inside `OrganizationRows`. FEAT-085: a job of the account (another org's create / QR job, a sub-create, a
+ * sync, a login, …) no longer disables it — the API queues the new job behind it; only a disabled account does.
  */
 function advCreateBlockedReason(account: TikTokAccount): string | null {
-  if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
-  // one create job per login: while this account has one running, every org of it would get a 409 `running`
-  if (advCreatePendingOrgs(account.id).length) return 'กำลังสร้างบัญชีโฆษณาอยู่'
-  // TASK-bc-tt-link — a QR job of this login is one job too (`running` for both buttons), and the account
-  // snapshot may not carry it as `runningJob` yet
-  if (ttLinkPendingOrgs(account.id).length) return 'กำลังออก QR เพิ่มบัญชี TikTok อยู่'
-  if (account.runningJob) {
-    if (account.runningJob.type === 'discover') return 'Sync in progress'
-    if (account.runningJob.type === 'login') return 'Login in progress'
-    return 'Job in progress'
-  }
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -1447,7 +1443,7 @@ async function pollAdvCreate(accountId: string, orgId: string, jobId: string, la
       setAdvCreatePending(key, false)
       return
     }
-    if (job.status === 'waiting' || job.status === 'active') return
+    if (job.status === 'pending' || job.status === 'waiting' || job.status === 'active') return
     stopAdvCreatePoll(key)
     setAdvCreatePending(key, false)
     if (job.status === 'completed') {
@@ -1563,7 +1559,7 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
     // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
     let latest = await api<BcTtLinkLatestResponse>(`${base}/latest`, { retry: 0 })
     const job = latest.job
-    const reusable = !!job && (job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
+    const reusable = !!job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
     if (!reusable) {
       // retry: 0 — exactly one POST per click (ofetch would otherwise queue a second job on 5xx)
       const res = await api<BcTtLinkAccepted>(base, { method: 'POST', retry: 0 })
@@ -1573,7 +1569,7 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
       // the new job has no state yet: the modal starts at "กำลังเปิด Business Center…" and polls from there
       latest = { job: null, linked: [] }
       void refresh()
-    } else if (job && (job.status === 'waiting' || job.status === 'active')) {
+    } else if (job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active')) {
       setTtLinkPending(advKey(account.id, org.orgId), true)
     }
     ttLinkAccount.value = account

@@ -15,8 +15,8 @@ export const BC_TT_LINK_REASON_TEXT: Record<BcTtLinkConflictReason, string> = {
   orgMissing: 'org นี้ไม่อยู่ใน Business Center แล้ว',
   noProfile: 'บัญชีนี้ยังไม่มีโปรไฟล์ที่พร้อมใช้',
   inactive: 'account ถูกปิดใช้งาน',
-  running: 'มี job กำลังทำงานอยู่',
-  needsHuman: 'มี human task รออยู่'
+  // FEAT-085 — a bcTtLink job of this org is already pending/waiting/active (busy codes `running`/`needsHuman` are gone)
+  duplicate: 'มีงานนี้รออยู่แล้ว'
 }
 
 /** Thai sentence of a reason; an unknown code falls back to itself, `null` to a generic sentence. */

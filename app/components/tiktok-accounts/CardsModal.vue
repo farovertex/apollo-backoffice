@@ -91,7 +91,7 @@ const accountName = computed(() => props.account?.bcOrgName || props.account?.la
 const hasBc = computed(() => !!props.account?.bcOrgId)
 
 function isOpenStatus(status: string | null | undefined): boolean {
-  return status === 'waiting' || status === 'active'
+  return status === 'pending' || status === 'waiting' || status === 'active'
 }
 const jobOpen = computed(() => isOpenStatus(job.value?.status))
 /** every TikTok action + Sync is disabled while a job is open, without a BC org and while a POST is in flight */
@@ -234,6 +234,12 @@ function ttBrand(card: { brand: string | null, brandCode?: string | null }): str
 }
 
 function jobRunningText(j: CardManageJobView): string {
+  // FEAT-085 — a job the dispatcher has not released yet waits behind another job of the same profile
+  if (j.status === 'pending') {
+    if (j.action === 'setPrimary') return `รอคิว · ตั้งบัตรหลัก ${cardMask(j.last4)}`
+    if (j.action === 'remove') return `รอคิว · ลบ ${cardMask(j.last4)}`
+    return 'รอคิว · ซิงค์'
+  }
   if (j.action === 'setPrimary') return `กำลังตั้งบัตรหลัก ${cardMask(j.last4)}…`
   if (j.action === 'remove') return `กำลังลบ ${cardMask(j.last4)}…`
   return 'กำลังซิงค์…'

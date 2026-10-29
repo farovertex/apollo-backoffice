@@ -10,8 +10,8 @@ export const BC_SUB_CREATE_REASON_TEXT: Record<BcSubCreateReason, string> = {
   noOrgId: 'กด Sync ก่อน — ยังไม่รู้จัก Business Center ของบัญชีนี้',
   noProfile: 'บัญชีนี้ยังไม่ได้ผูกโปรไฟล์เบราว์เซอร์',
   inactive: 'บัญชีถูกปิดใช้งาน',
-  running: 'บัญชีมี job กำลังรัน',
-  needsHuman: 'มีงานที่รอคนทำอยู่ (เช่น OTP) — ทำให้เสร็จก่อน',
+  // FEAT-085 — a bcSubCreate job of this account is already pending/waiting/active (`running`/`needsHuman` are gone)
+  duplicate: 'มีงานนี้รออยู่แล้ว',
   exhausted: 'เลขลำดับ 001–999 ถูกใช้ครบแล้ว',
   nameTaken: 'มีชื่อนี้แล้ว'
 }
