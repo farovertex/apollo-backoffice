@@ -226,8 +226,11 @@ import type {
   BcTtLinkAccepted,
   BcTtLinkConflictBody,
   BcTtLinkLatestResponse,
+  CancelJobConflict,
+  CancelJobResponse,
   DiscoverOrgBody,
   JobType,
+  RunningJob,
   LoginConflictBody,
   LoginJobResponse,
   OrganizationsResponse,
@@ -616,7 +619,7 @@ function toggleSelectAll(on: boolean) {
 const syncStarting = ref<string | null>(null)
 // one poll loop per (kind, account id) — a balance reload must not cancel a sync that is being followed;
 // `done` decides on each snapshot whether the job it follows has finished
-type PollKind = 'discover' | 'balance'
+type PollKind = 'discover' | 'balance' | 'queue'
 interface AccountPoll {
   accountId: string
   timer: ReturnType<typeof setInterval>
@@ -700,6 +703,70 @@ function startDiscoverPoll(id: string) {
  * pressed Sync first), each tick is the existing single `GET /tiktok-accounts/:id`, the finished poll does the
  * one `refresh()` + toast it always did, and `onUnmounted` still clears it.
  */
+/**
+ * FEAT-085 — a row whose `runningJob` is `pending` / `waiting` is followed (one `GET /tiktok-accounts/:id` per
+ * 2 s, the same loop as a sync) until the dispatcher released it and a worker claimed it (`active`) or it is gone,
+ * so "รอคิว ลำดับที่ n" counts down and turns into the running badge without a manual Refresh.
+ */
+function isQueued(job: RunningJob | null | undefined): boolean {
+  return job?.status === 'pending' || job?.status === 'waiting'
+}
+function startQueuePoll(id: string) {
+  startPoll('queue', id, next => !isQueued(next.runningJob), (next) => {
+    if (next.runningJob?.type === 'discover') startDiscoverPoll(next.id)
+  })
+}
+watch(data, () => {
+  for (const account of data.value?.accounts ?? []) {
+    if (isQueued(account.runningJob)) startQueuePoll(account.id)
+  }
+})
+
+/** one `GET /tiktok-accounts/:id` merged into the row (after a cancel / a duplicate), then follow it if still queued */
+async function rereadAccount(id: string) {
+  try {
+    // retry: 0 — one request per action
+    const next = await api<TikTokAccount>(`/tiktok-accounts/${encodeURIComponent(id)}`, { retry: 0 })
+    polledById.value = new Map(polledById.value).set(id, next)
+    if (isQueued(next.runningJob)) startQueuePoll(id)
+  } catch {
+    await refresh()
+  }
+}
+
+// ── FEAT-085 — cancel a pending job from the badge ───────────────────────────────────────────────────────────────────
+const cancelJobOpen = ref(false)
+const cancelJobTarget = ref<{ account: TikTokAccount, job: RunningJob } | null>(null)
+const cancelJobPosting = ref(false)
+const cancelJobModalContent = { 'data-testid': 'ta-job-cancel-modal' } as Record<string, string>
+
+function askCancelJob(account: TikTokAccount, job: RunningJob) {
+  cancelJobTarget.value = { account, job }
+  cancelJobOpen.value = true
+}
+
+async function runCancelJob() {
+  const target = cancelJobTarget.value
+  if (!target || cancelJobPosting.value) return
+  cancelJobPosting.value = true
+  try {
+    // retry: 0 — exactly one POST per click
+    await api<CancelJobResponse>(`/jobs/${encodeURIComponent(target.job.id)}/cancel`, { method: 'POST', retry: 0 })
+    toast.add({ title: 'ยกเลิกแล้ว', description: target.account.label ?? target.account.loginEmail, color: 'success' })
+  } catch (e) {
+    const err = e as FetchError<Partial<CancelJobConflict>>
+    toast.add({
+      title: 'ยกเลิกไม่ได้',
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: err.statusCode === 409 ? 'warning' : 'error'
+    })
+  } finally {
+    cancelJobPosting.value = false
+    cancelJobOpen.value = false
+    await rereadAccount(target.account.id)
+  }
+}
+
 async function refreshAndFollowDiscovers() {
   await refresh()
   for (const account of data.value?.accounts ?? []) {
@@ -919,10 +986,11 @@ async function onReloadBalance(account: TikTokAccount) {
   } catch (e) {
     setBalanceLoading(account.id, false)
     const err = e as FetchError<Partial<ApiErrorBody>>
+    // FEAT-085 — a 409 is a gate (`inactive` / `noBcOrg`), never "busy": an open balance job comes back as 202 `reused`
     toast.add({
       title: 'Could not reload the balance',
       description: err.data?.error ?? err.message ?? 'Unexpected error',
-      color: 'error'
+      color: err.statusCode === 409 ? 'warning' : 'error'
     })
   }
 }
@@ -993,14 +1061,25 @@ function runningJobReason(type: JobType): string {
 }
 
 /**
- * TASK-sync-queue-wait — text of the `ta-job-running` badge next to Sync/Login while `runningJob` exists. The
- * API now queues a sync/login click behind whatever already runs instead of 409ing, so `discover`/`login` keep
- * exactly their old wording (a second click just catches up to the same job) and every other type says the
- * click will wait its turn rather than fail.
+ * TASK-sync-queue-wait — tooltip of the `ta-job-running` badge next to Sync/Login while `runningJob` exists.
+ * FEAT-085: every click queues behind whatever already runs (the dispatcher releases jobs per profile), so an
+ * active job says new clicks will wait; a queued job names its type and why it waits.
  */
-function runningJobQueueHint(type: JobType): string {
-  if (type === 'discover' || type === 'login') return runningJobReason(type)
-  return `${runningJobReason(type)} · Sync/Login will queue behind it`
+function runningJobQueueHint(job: RunningJob): string {
+  const reason = runningJobReason(job.type)
+  if (job.status === 'pending') {
+    const why = waitingForText(job.waitingFor)
+    return why ? `${reason} · ${why}` : reason
+  }
+  if (job.status === 'waiting') return `${reason} · ${JOB_WAITING_LABEL}`
+  return `${reason} · new jobs will queue behind it`
+}
+
+/** FEAT-085 — the badge's own text: "รอคิว ลำดับที่ n" / "กำลังจะเริ่ม" / the running reason */
+function runningJobBadgeText(job: RunningJob): string {
+  if (job.status === 'pending') return queueLabel(job.queuePosition)
+  if (job.status === 'waiting') return JOB_WAITING_LABEL
+  return runningJobReason(job.type)
 }
 
 /**
@@ -2350,18 +2429,42 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
       // TASK-sync-queue-wait: Sync/Login never grey out for `runningJob` any more (the API queues a click
       // behind it instead of 409ing) — this badge is what used to be the grey button's tooltip, now shown
       // unconditionally so the row still says a job runs without blocking the buttons.
-      const jobReasonText = job ? runningJobReason(job.type) : null
-      const jobQueueHint = job ? runningJobQueueHint(job.type) : null
-      const jobType = job?.type ?? ''
-      const jobBadge = jobReasonText
-        ? h(UTooltip, { text: jobQueueHint ?? jobReasonText }, () => h('span', {
-            'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted',
-            'data-testid': 'ta-job-running',
-            'data-type': jobType
-          }, [
-            h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' }),
-            jobReasonText
-          ]))
+      // FEAT-085: pending → "รอคิว ลำดับที่ n" + the `waitingFor` reason as sub-text and a cancel button,
+      // waiting → "กำลังจะเริ่ม", active → the running reason with a spinner (as before)
+      const jobBadge = job
+        ? h('span', { class: 'inline-flex items-center gap-0.5' }, [
+            h(UTooltip, { text: runningJobQueueHint(job) }, () => h('span', {
+              'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted',
+              'data-testid': 'ta-job-running',
+              'data-type': job.type,
+              'data-status': job.status,
+              'data-queue-position': job.queuePosition ?? '',
+              'data-waiting-for': job.waitingFor ?? ''
+            }, [
+              job.status === 'active'
+                ? h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' })
+                : h(UIcon, { name: job.status === 'pending' ? 'i-lucide-clock' : 'i-lucide-hourglass', class: 'size-3.5 shrink-0 text-warning' }),
+              h('span', { class: 'flex flex-col leading-tight' }, [
+                h('span', runningJobBadgeText(job)),
+                job.status === 'pending' && job.waitingFor
+                  ? h('span', { 'class': 'text-[10px] text-dimmed', 'data-testid': 'ta-job-waiting-for' }, waitingForText(job.waitingFor) ?? '')
+                  : null
+              ])
+            ])),
+            // `POST /jobs/:id/cancel` is GOD / Admin (contract §4) — the same roles as the cards item
+            job.status === 'pending' && canManageCards.value
+              ? h(UTooltip, { text: 'ยกเลิกงานที่รอคิว' }, () => h(UButton, {
+                  'icon': 'i-lucide-x',
+                  'color': 'neutral',
+                  'variant': 'ghost',
+                  'size': 'xs',
+                  'aria-label': 'ยกเลิกงานที่รอคิว',
+                  'data-testid': 'ta-job-cancel',
+                  'data-job-id': job.id,
+                  'onClick': () => askCancelJob(row.original, job)
+                }))
+              : null
+          ])
         : null
       const wide = wideActions.value
       return h('div', { class: 'flex items-center justify-end gap-1 whitespace-nowrap' }, [
@@ -2724,6 +2827,42 @@ const showTable = computed(() => !error.value && !isEmpty.value)
         :account="deleteTarget"
         @deleted="onAccountDeleted"
       />
+      <!-- FEAT-085 — cancel a job that still waits in the profile's queue (`pending` only) -->
+      <UModal
+        v-model:open="cancelJobOpen"
+        title="ยกเลิกงานที่รอคิว?"
+        :description="cancelJobTarget ? `${cancelJobTarget.account.label ?? cancelJobTarget.account.loginEmail} · ${runningJobBadgeText(cancelJobTarget.job)}` : ''"
+        :dismissible="!cancelJobPosting"
+        :ui="{ content: 'max-w-md' }"
+        :content="cancelJobModalContent"
+      >
+        <template #body>
+          <div class="flex flex-col gap-4">
+            <p class="text-sm text-muted">
+              งาน {{ cancelJobTarget ? runningJobReason(cancelJobTarget.job.type) : '' }} ยังไม่ได้เริ่ม — ยกเลิกแล้วจะถูกลบออกจากคิว
+              และงานถัดไปของโปรไฟล์นี้จะได้เริ่มแทน
+            </p>
+            <div class="flex flex-wrap justify-end gap-2">
+              <UButton
+                label="ไม่ยกเลิก"
+                color="neutral"
+                variant="subtle"
+                :disabled="cancelJobPosting"
+                data-testid="ta-job-cancel-dismiss"
+                @click="cancelJobOpen = false"
+              />
+              <UButton
+                label="ยกเลิกงาน"
+                icon="i-lucide-x"
+                color="error"
+                :loading="cancelJobPosting"
+                data-testid="ta-job-cancel-confirm"
+                @click="runCancelJob"
+              />
+            </div>
+          </div>
+        </template>
+      </UModal>
       <TiktokAccountsLoginModal
         v-model:open="loginOpen"
         :account-id="loginTarget?.id ?? null"

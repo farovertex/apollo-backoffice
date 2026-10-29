@@ -154,6 +154,7 @@ async function onFetchNow(build: OrderReportBuild) {
     fetchingAdvertiserId.value = null
     return
   }
+  // FEAT-085 — `duplicate`: the account's kpi job already exists → re-read and follow it like our own
   await load(true)
   startWatching()
 }

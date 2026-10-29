@@ -220,6 +220,12 @@ function onLeaseExpired() {
 async function onRecheck(topup: TopupView) {
   const updated = await recheckTopup(topup)
   if (updated && tab.value === 'history') void loadHistory()
+  // FEAT-085 — 409 `duplicate`: a check job of this round already exists → re-read what the page shows
+  if (!updated && staleId.value === topup.id) {
+    staleId.value = null
+    if (tab.value === 'history') void loadHistory()
+    else void refreshActive()
+  }
 }
 
 async function onRelease(topup: TopupView) {

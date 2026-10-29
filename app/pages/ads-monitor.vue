@@ -68,6 +68,7 @@ import type {
   ToggleTarget
 } from '#shared/types/ads-monitor'
 import type { ApiErrorBody } from '#shared/types/auth'
+import type { MaybeDuplicateBody } from '~/utils/job-queue'
 import type { ReportRange } from '#shared/types/reports'
 import type { AccountsResponse, TikTokAccount } from '#shared/types/tiktok-accounts'
 
@@ -375,6 +376,19 @@ function showCovers(row: MonitorRow) {
   coversOpen.value = true
 }
 
+/**
+ * FEAT-085 — the 409 toast of the three row actions: `duplicate` (a switch / delete / budget job of the same
+ * target is already pending, waiting or running) → "มีงานนี้รออยู่แล้ว (ลำดับที่ n)"; every other reason
+ * (`banned` / `notLoggedIn` / `notDiscovered`) → "ทำไม่ได้" with the API's own sentence. The caller re-reads.
+ */
+function conflictToast(body: MaybeDuplicateBody | undefined, message: string) {
+  if (isDuplicate(body)) {
+    toast.add({ title: duplicateText(body?.queuePosition), description: message, icon: 'i-lucide-clock', color: 'warning' })
+    return
+  }
+  toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+}
+
 // ── toggle ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
  * One POST per press, no confirm dialog (brief §0.4). 202 → the row renders `am-switch-pending` from the
@@ -392,10 +406,10 @@ async function toggle(row: MonitorRow, target: ToggleTarget) {
     })
     overrides.value = { ...overrides.value, [key]: { optPending: res.optPending, optError: null } }
   } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
+    const err = e as FetchError<Partial<ApiErrorBody & MaybeDuplicateBody>>
     const message = err.data?.error ?? err.message ?? 'เปลี่ยนสวิตช์ไม่สำเร็จ'
     if ((err.response?.status ?? err.statusCode) === 409) {
-      toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+      conflictToast(err.data, message)
       await load()
     } else {
       toast.add({ title: 'เปลี่ยนสวิตช์ไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
@@ -436,11 +450,11 @@ async function confirmDelete(row: MonitorRow) {
     overrides.value = { ...overrides.value, [key]: { deletePending: res.deletePending, deleteError: null } }
     deleteOpen.value = false
   } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
+    const err = e as FetchError<Partial<ApiErrorBody & MaybeDuplicateBody>>
     const message = err.data?.error ?? err.message ?? 'ลบแคมเปญไม่สำเร็จ'
     deleteOpen.value = false
     if ((err.response?.status ?? err.statusCode) === 409) {
-      toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+      conflictToast(err.data, message)
       await load()
     } else {
       toast.add({ title: 'ลบแคมเปญไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
@@ -493,11 +507,11 @@ async function confirmBudget(row: MonitorRow, body: SetBudgetBody) {
       }
     }
   } catch (e) {
-    const err = e as FetchError<Partial<ApiErrorBody>>
+    const err = e as FetchError<Partial<ApiErrorBody & MaybeDuplicateBody>>
     const message = err.data?.error ?? err.message ?? 'ตั้งงบไม่สำเร็จ'
     if ((err.response?.status ?? err.statusCode) === 409) {
       budgetOpen.value = false
-      toast.add({ title: 'ทำไม่ได้', description: message, icon: 'i-lucide-triangle-alert', color: 'warning' })
+      conflictToast(err.data, message)
       await load()
     } else {
       toast.add({ title: 'ตั้งงบไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
