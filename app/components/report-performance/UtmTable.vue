@@ -32,7 +32,7 @@ const NUM_COLS: NumCol[] = [
   { key: 'costDep', label: 'Cost/Dep', fmt: 'thb2' },
   { key: 'avgDep', label: 'Avg Dep', fmt: 'dec' },
   { key: 'depReg', label: 'Dep/Reg', fmt: 'pct' },
-  { key: 'depBudget', label: 'Dep/Budget', fmt: 'dec' }
+  { key: 'depBudget', label: 'Dep/Budget', fmt: 'pct' }
 ]
 
 type Values = Record<Exclude<Col, 'utm'>, number | null>

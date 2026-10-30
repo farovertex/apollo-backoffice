@@ -119,7 +119,7 @@ const HEADERS: { label: string, key?: string }[] = [
             {{ formatDecimal(row.utm.depositAmount) }}
           </td>
           <td class="px-3 py-2 text-right font-semibold tabular-nums" data-testid="rd-workspace-depBudget">
-            {{ formatDecimal(depBudget(row.utm.depositAmount, row.metrics.spend)) }}
+            {{ formatPercent(depBudget(row.utm.depositAmount, row.metrics.spend)) }}
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(row.now.accounts) }}
@@ -177,7 +177,7 @@ const HEADERS: { label: string, key?: string }[] = [
             {{ formatDecimal(funnel.utm.depositAmount) }}
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(depBudget(funnel.utm.depositAmount, funnel.metrics.spend)) }}
+            {{ formatPercent(depBudget(funnel.utm.depositAmount, funnel.metrics.spend)) }}
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(now.accounts) }}

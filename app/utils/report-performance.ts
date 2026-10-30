@@ -3,8 +3,9 @@
  *
  * - `perfStateBadge()` — the one badge map of `PerfAccountState` (both pages' account tables).
  * - The five value ratios, computed **in the BO** from the API's own sums (to-the-mars `utmMetrics`):
- *   Cost/Reg, Cost/Dep, Avg deposit, Dep/Reg % (`ftdConversionPct`) and Dep/Budget as a **ratio** (not the
- *   ×100 `depPerBudgetPct` variant of `/reports/utm`). Every divisor that is 0 / null / not finite → `null` → `—`.
+ *   Cost/Reg, Cost/Dep, Avg deposit, Dep/Reg % (`ftdConversionPct`) and Dep/Budget % (`depPerBudgetPct`, the
+ *   same ×100 percent as `/reports/utm` — TASK-dep-budget-pct 2026-10-30, before that a plain ratio printed
+ *   with 2 decimals). Every divisor that is 0 / null / not finite → `null` → `—`.
  * - Funnel step % (dashboard): `next / prev × 100`, `null` when `prev` is 0.
  * - Small shared pieces of the two pages: URL parsing of `workspaceId`, Thai date of a row, the account name.
  */
@@ -44,7 +45,7 @@ export interface PerfRatios {
   averageDeposit: number | null
   /** percent points */
   depRegPct: number | null
-  /** plain ratio, printed with 2 decimals */
+  /** percent points (`depositAmount / spend × 100`), printed with `formatPercent` */
   depPerBudget: number | null
 }
 
@@ -57,7 +58,7 @@ export function perfRatios(input: PerfRatioInput | null | undefined): PerfRatios
     costPerDeposit: ratio(input.spend, input.depositors),
     averageDeposit: ratio(input.depositAmount, input.depositors),
     depRegPct: ftdConversionPct(input.depositors, input.registers),
-    depPerBudget: ratio(input.depositAmount, input.spend)
+    depPerBudget: depPerBudgetPct(input.depositAmount, input.spend)
   }
 }
 

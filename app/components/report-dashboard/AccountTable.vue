@@ -148,7 +148,7 @@ const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.
             {{ formatDecimal(row.utm.depositAmount) }}
           </td>
           <td class="px-3 py-2 text-right font-semibold tabular-nums" data-testid="rd-account-depBudget">
-            {{ formatDecimal(depBudget(row)) }}
+            {{ formatPercent(depBudget(row)) }}
           </td>
           <td class="px-3 py-2">
             <ReportPerformanceStateBadge :state="row.state" testid="rd-account-state" />

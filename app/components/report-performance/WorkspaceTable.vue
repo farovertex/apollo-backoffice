@@ -31,7 +31,7 @@ const NUM_COLS: NumCol[] = [
   { key: 'costDep', label: 'Cost/Dep', fmt: 'thb2' },
   { key: 'avgDep', label: 'Avg Dep', fmt: 'dec' },
   { key: 'depReg', label: 'Dep/Reg', fmt: 'pct' },
-  { key: 'depBudget', label: 'Dep/Budget', fmt: 'dec' },
+  { key: 'depBudget', label: 'Dep/Budget', fmt: 'pct' },
   { key: 'bans', label: 'New bans', fmt: 'int', tone: 'text-error' },
   { key: 'runs', label: 'Runs', fmt: 'int' },
   { key: 'accounts', label: 'Accounts', fmt: 'int' },

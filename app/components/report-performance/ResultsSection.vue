@@ -161,8 +161,8 @@ const sharedNote = computed(() => {
         label="Dep / Budget"
         :value="ratios.depPerBudget"
         :previous="prevRatios?.depPerBudget ?? null"
-        format="dec"
-        caption="ยอดฝาก ÷ spend"
+        format="pct"
+        caption="ยอดฝาก ÷ spend × 100"
         child-ids
         :help="REPORT_HELP['rf-tile-depBudget']"
         class="col-span-2 lg:col-span-1"

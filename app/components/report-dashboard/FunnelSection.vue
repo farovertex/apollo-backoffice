@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * FEAT-069 — sections 1 + 2 of `/reports/dashboard` (spec "UI behaviour → /reports/dashboard" 1–2):
- * the **Dep/Budget** hero (`rd-hero` / `rd-tile-depBudget`, depositAmount ÷ spend, 2 decimals) with the four
+ * the **Dep/Budget** hero (`rd-hero` / `rd-tile-depBudget`, depositAmount ÷ spend × 100 as a percent — TASK-dep-budget-pct,
+ * before 2026-10-30 a 2-decimal ratio) with the four
  * UTM/Spend numbers beside it, the 8 funnel tiles `rd-tile-<key>` (each with a delta vs `previousFunnel`;
  * `lowerIsBetter` on CPM / CPC / Cost/*) and the funnel bar `rd-funnel` (impressions → clicks → conversions →
  * registers → depositors, each step's % of the previous one, `—` when the previous is 0).
@@ -75,8 +76,8 @@ const sharedNote = computed(() => {
         label="Dep / Budget"
         :value="r.depPerBudget"
         :previous="p?.depPerBudget ?? null"
-        format="dec"
-        caption="ยอดฝาก ÷ spend"
+        format="pct"
+        caption="ยอดฝาก ÷ spend × 100"
         child-ids
         :help="REPORT_HELP['rd-tile-depBudget']"
         class="bg-default"
