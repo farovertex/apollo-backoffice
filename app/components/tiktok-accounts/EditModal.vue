@@ -52,11 +52,12 @@
  * `ta-edit-auto`: mode radio `ta-edit-guard-mode` (`-inherit` / `-custom` / `-off`) seeded from `row.adGroupGuard`
  * (`accountAdGroupGuard()`, a row without the key = inherit); `inherit` shows `ta-edit-guard-inherited` (the
  * workspace rule from `row.adGroupGuardEffective` when its source is `workspace`, else why there is none);
- * `custom` shows `AdGroupGuardRuleFields` (`ta-edit-guard-*`) in the account currency and is **disabled** while
+ * `custom` shows `AdGroupGuardRuleBuilder` (`ta-edit-guard-rule-*`, FEAT-087) in the account currency and is **disabled** while
  * the currency is unknown (`ta-edit-guard-currency-unknown`, the API would answer 409). The block is sent whole
  * under `adGroupGuard` only when `{ mode, rule }` differs from the row (`inherit`/`off` without `rule`), inside the
- * same single diff PATCH; 400/409 land in `ta-edit-error` like the auto top-up block (a 400 path
- * `adGroupGuard.rule.<key>` is also shown under that input).
+ * same single diff PATCH (FEAT-087: "differs" = `sameAdGroupGuardRule`, deep equality of the normalized trees);
+ * 400/409 land in `ta-edit-error` like the auto top-up block, and a 400 path `adGroupGuard.rule.<sub>` is also
+ * handed to the builder (`items.0.value` → under that row, `adGroupGuard.rule` → its rule-level error).
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -66,7 +67,7 @@ import type { PaymentCardView, PaymentCardsResponse } from '#shared/types/paymen
 import type { PatchAccountAutoTopupConfig, PatchAccountBody, TikTokAccount } from '#shared/types/tiktok-accounts'
 import type { AccountBalanceResponse, TopupChannel } from '#shared/types/topups'
 import type { AdGroupGuardMode, AdGroupGuardRule } from '#shared/types/ad-group-guard'
-import type { AdGroupGuardDraftErrors, AdGroupGuardRuleDraft } from '~/utils/ad-group-guard'
+import type { AdGroupGuardDraft, AdGroupGuardDraftErrors } from '~/utils/ad-group-guard'
 
 const props = defineProps<{
   account: TikTokAccount | null
@@ -139,7 +140,7 @@ interface FormState {
   prefixId: string
   /** FEAT-086 — the account's ad group guard layer */
   guardMode: AdGroupGuardMode
-  guardDraft: AdGroupGuardRuleDraft
+  guardDraft: AdGroupGuardDraft
 }
 
 function numberText(value: number | null): string {
@@ -276,12 +277,8 @@ const schema = z.object({
   autoAmount: z.string(),
   prefixId: z.string(),
   guardMode: z.enum(['inherit', 'custom', 'off']),
-  guardDraft: z.object({
-    minSpend: z.string(),
-    maxCpm: z.string(),
-    minConversions: z.string(),
-    combine: z.enum(['or', 'and'])
-  })
+  // FEAT-087 — the builder's tree; checked by `parseAdGroupGuardDraft()` below (the builder shows the per-row messages)
+  guardDraft: z.custom<AdGroupGuardDraft>(value => typeof value === 'object' && value !== null)
 }).superRefine((data, ctx) => {
   // ── FEAT-086 · the ad group guard block (contract §1.1/§4.1) — only a custom rule has numbers to check ──
   if (data.guardMode === 'custom' && guardChanged.value) {
@@ -290,7 +287,7 @@ const schema = z.object({
     } else {
       const parsed = parseAdGroupGuardDraft(data.guardDraft)
       if (!parsed.rule) {
-        ctx.addIssue({ code: 'custom', path: ['guardDraft'], message: Object.values(parsed.errors).join(' · ') })
+        ctx.addIssue({ code: 'custom', path: ['guardDraft'], message: [...new Set(Object.values(parsed.errors))].join(' · ') })
       }
     }
   }
@@ -338,7 +335,7 @@ const showEmailPassword = ref(false)
 const showPassword = ref(false)
 const submitting = ref(false)
 const submitError = ref<{ title: string, description?: string } | null>(null)
-/** FEAT-086 — RuleFields shows every client message once a submit was refused; API 400 issues per input */
+/** FEAT-086/087 — the builder shows every client message once a submit was refused; API 400 issues per sub-path */
 const guardShowErrors = ref(false)
 const guardServerErrors = ref<AdGroupGuardDraftErrors>({})
 
@@ -475,14 +472,13 @@ async function onReadBalance() {
 function errorState(e: unknown): { title: string, description?: string } {
   const err = e as FetchError<Partial<ApiErrorBody>>
   const issues = err.data?.issues?.map(i => i.message).filter(Boolean)
-  // FEAT-086 — a 400 on the guard block also goes under its input
+  // FEAT-087 — a 400 on the rule goes to the builder keyed by the sub-path (`adGroupGuard.rule.items.0.value` →
+  // `items.0.value`, `adGroupGuard.rule` → `''` = the rule-level line); other `adGroupGuard.*` issues stay in the alert
   const guardIssues: AdGroupGuardDraftErrors = {}
   for (const issue of err.data?.issues ?? []) {
     const path = String(issue.path ?? '')
-    if (!path.startsWith('adGroupGuard')) continue
-    const key = path.split('.')[2]
-    if (key === 'minSpend' || key === 'maxCpm' || key === 'minConversions') guardIssues[key] = issue.message
-    else guardIssues.rule = issue.message
+    if (path !== 'adGroupGuard.rule' && !path.startsWith('adGroupGuard.rule.')) continue
+    guardIssues[path.slice('adGroupGuard.rule'.length).replace(/^\./, '')] = issue.message
   }
   guardServerErrors.value = guardIssues
   return {
@@ -860,11 +856,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <p v-else-if="state.guardMode === 'off'" class="text-sm text-muted" data-testid="ta-edit-guard-off">
             บัญชีนี้ไม่ใช้กฎปิด ad group (order ยังตั้งทับได้)
           </p>
-          <AdGroupGuardRuleFields
+          <AdGroupGuardRuleBuilder
             v-else
             v-model="state.guardDraft"
-            testid="ta-edit-guard"
-            :currency="currency"
+            testid="ta-edit-guard-rule"
+            :currency="guardCurrency"
             :disabled="submitting"
             :show-errors="guardShowErrors"
             :server-errors="guardServerErrors"

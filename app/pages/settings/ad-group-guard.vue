@@ -8,12 +8,15 @@
  *    plain hint `st-agg-master-readonly` instead of the card.
  *  - **Workspace rules** (`st-agg-workspace-card`): `GET /workspaces` once per mount / Retry feeds the selector
  *    `st-agg-workspace` (GOD: all, Admin: own + shared). The rows are the selected workspace's `adGroupGuard` map,
- *    one `st-agg-row[data-currency]` per currency (switch, `RuleFields`, remove). Save `st-agg-save` sends **one**
+ *    one `st-agg-row[data-currency]` per currency (switch, `RuleBuilder` `st-agg-rule`, remove). Save `st-agg-save` sends **one**
  *    `PATCH /workspaces/:id/ad-group-guard` with every changed / added currency and `null` for the removed ones;
  *    the 200 body (the workspace view) replaces the row and re-seeds the draft. A workspace the caller does not own
  *    (Admin, `ownerAdminId !== me`, A9) is read-only: every control is disabled and `st-agg-readonly` says why.
- *  - 400 issues are mapped back to their row (`THB.rule.minSpend` → that input, `THB.rule` → the row's rule line,
- *    anything else → `st-agg-save-error`); 403/404 → `st-agg-save-error` with the API's text.
+ *  - 400 issues are mapped back to their row: FEAT-087 `THB.rule.items.1.items.0.value` → the builder's
+ *    `serverErrors` keyed by the sub-path (`items.1.items.0.value`, shown under that row), `THB.rule` → the
+ *    builder's rule-level error, anything else → `st-agg-save-error`; 403/404 → `st-agg-save-error`.
+ *  - FEAT-087: a new currency row starts with the default draft (`and`, one `spend ≥ ''`); Save is disabled while a
+ *    changed row's rule is invalid (AC-10).
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
@@ -23,7 +26,7 @@ import type {
   WorkspaceAdGroupGuardBody
 } from '#shared/types/ad-group-guard'
 import type { WorkspaceView, WorkspacesResponse } from '#shared/types/workspaces'
-import type { AdGroupGuardDraftErrors, AdGroupGuardRuleDraft } from '~/utils/ad-group-guard'
+import type { AdGroupGuardDraft, AdGroupGuardDraftErrors } from '~/utils/ad-group-guard'
 
 definePageMeta({ middleware: 'prefixes-access' })
 
@@ -133,7 +136,7 @@ async function loadWorkspaces() {
 interface RowDraft {
   currency: string
   enabled: boolean
-  draft: AdGroupGuardRuleDraft
+  draft: AdGroupGuardDraft
   /** added in this session, not saved yet */
   isNew: boolean
   serverErrors: AdGroupGuardDraftErrors
@@ -219,16 +222,17 @@ watch(addOpen, (open) => {
 function applyIssues(issues: NonNullable<ApiErrorBody['issues']>): string[] {
   const rest: string[] = []
   for (const issue of issues) {
-    const [currency, first, key] = String(issue.path ?? '').split('.')
+    const path = String(issue.path ?? '')
+    const [currency, first] = path.split('.')
     const row = rows.value.find(r => r.currency === currency)
     if (!row) {
-      rest.push(issue.path ? `${issue.path}: ${issue.message}` : issue.message)
+      rest.push(path ? `${path}: ${issue.message}` : issue.message)
       continue
     }
-    if (first === 'rule' && (key === 'minSpend' || key === 'maxCpm' || key === 'minConversions')) {
-      row.serverErrors = { ...row.serverErrors, [key]: issue.message }
-    } else if (first === 'rule' || first === undefined) {
-      row.serverErrors = { ...row.serverErrors, rule: issue.message }
+    if (first === 'rule' || first === undefined) {
+      // FEAT-087 — `THB.rule.items.1.items.0.value` → `items.1.items.0.value`; `THB.rule` / `THB` → the rule itself
+      const sub = first === 'rule' ? path.slice(`${currency}.rule`.length).replace(/^\./, '') : ''
+      row.serverErrors = { ...row.serverErrors, [sub]: issue.message }
     } else {
       rest.push(`${currency}: ${issue.message}`)
     }
@@ -445,9 +449,9 @@ onMounted(() => {
               @click="removeRow(row)"
             />
           </div>
-          <AdGroupGuardRuleFields
+          <AdGroupGuardRuleBuilder
             v-model="row.draft"
-            testid="st-agg"
+            testid="st-agg-rule"
             :currency="row.currency"
             :disabled="controlsDisabled"
             :show-errors="showErrors"
@@ -530,7 +534,7 @@ onMounted(() => {
             type="submit"
             label="Save"
             icon="i-lucide-save"
-            :disabled="!dirty || readonly"
+            :disabled="!dirty || readonly || invalid"
             :loading="saving"
             data-testid="st-agg-save"
           />

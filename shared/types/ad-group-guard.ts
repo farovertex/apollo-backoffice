@@ -1,25 +1,40 @@
 /**
  * FEAT-086 — ad group guard (api-contract.md v1 §1 shared shapes, §2 settings, §3 workspace map, §6.3 build
  * snapshot). One rule shape for every layer: the workspace (per currency), the TikTok account, the order. After a
- * build is published the kpi worker pauses each of its **ad groups** whose lifetime spend reached `minSpend` and
- * whose lifetime CPM and/or conversions are bad according to the rule.
+ * build is published the kpi worker pauses each of its **ad groups** whose lifetime metrics satisfy the rule.
+ * FEAT-087 — the rule is an expression tree (metric catalog · operators · and/or · nested groups).
  *
  * Every number is in the account / advertiser currency (no FX).
  */
 
-/** §1.1 — the rule. `maxCpm` and `minConversions` are never both `null` (API 400 path `<prefix>`). */
-export interface AdGroupGuardRule {
-  /** gate: lifetime spend ≥ minSpend before any decision · finite `> 0` */
-  minSpend: number
-  /** pause when lifetime CPM `>` maxCpm · finite `> 0`, or `null` = condition unused */
-  maxCpm: number | null
-  /** pause when lifetime conversions `<` minConversions · integer `≥ 1`, or `null` = unused */
-  minConversions: number | null
-  /** how the two conditions join (only meaningful when both are set); optional in requests, always in views */
-  combine: AdGroupGuardCombine
+/** FEAT-087 §1.1 — the metric catalog keys (display order = `AGG_METRICS` in `app/utils/ad-group-guard.ts`) */
+export type AdGroupGuardMetricKey
+  = | 'spend' | 'cpm' | 'conversions' | 'conversionCost' | 'cpc' | 'ctr' | 'impressions' | 'clicks'
+
+/** FEAT-087 §1.1 — operators; `between` is inclusive `value ≤ v ≤ value2` */
+export type AdGroupGuardOp = 'gt' | 'gte' | 'lt' | 'lte' | 'between'
+
+/** FEAT-087 §1.1 — how the items of a group join (required in requests) */
+export type AdGroupGuardCombine = 'or' | 'and'
+
+/** FEAT-087 §1.1 — one condition; `value2` present ⇔ `op === 'between'` (and then `value2 > value`) */
+export interface AdGroupGuardCondition {
+  metric: AdGroupGuardMetricKey
+  op: AdGroupGuardOp
+  value: number
+  value2?: number
 }
 
-export type AdGroupGuardCombine = 'or' | 'and'
+/** FEAT-087 §1.1 — a group (`items.length ≥ 1`, nested ≤ 4 levels, ≤ 20 conditions in the whole tree) */
+export interface AdGroupGuardGroup {
+  combine: AdGroupGuardCombine
+  items: AdGroupGuardNode[]
+}
+
+export type AdGroupGuardNode = AdGroupGuardCondition | AdGroupGuardGroup
+
+/** FEAT-087 §1.1 — the rule is an expression tree whose root is a group */
+export type AdGroupGuardRule = AdGroupGuardGroup
 
 /** §1.3 — layer mode of the account and the order */
 export type AdGroupGuardMode = 'inherit' | 'custom' | 'off'
@@ -86,12 +101,16 @@ export type BuildAdGroupGuardState = 'off' | 'watching' | 'done'
 /** §6.3 — per ad group state */
 export type BuildAdGroupGuardGroupState = 'watching' | 'queued' | 'paused' | 'failed'
 
-/** §6.3 — the lifetime numbers the hook decided on (account currency) */
+/** FEAT-087 §6.3 — the lifetime numbers the hook decided on (account currency), 9 keys; rates `null` when the divisor is 0 */
 export interface AdGroupGuardMetrics {
-  spend: number
-  impressions: number
+  spend: number | null
+  impressions: number | null
+  clicks: number | null
   cpm: number | null
-  conversions: number
+  cpc: number | null
+  ctr: number | null
+  conversions: number | null
+  conversionCost: number | null
   /** ISO — `now` of the kpi round that decided */
   asOf: string
 }
@@ -109,6 +128,8 @@ export interface BuildAdGroupGuardGroup {
   reason: string | null
   /** `null` while `watching` */
   metrics: AdGroupGuardMetrics | null
+  /** FEAT-087 — paths of the conditions that were true at decision time (`'0'`, `'1.0'`); `null` while `watching` */
+  hits: string[] | null
 }
 
 /** §6.3 — the **snapshot** taken at order create (never re-resolved, kept by a retry); `null` for older builds */
