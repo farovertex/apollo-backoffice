@@ -34,6 +34,14 @@
  * v1.4 (`tiktok` absent) falls back to `monitorStatusLabel()` for line 1 and renders no second line, i.e. to
  * exactly the pre-v1.4 cell. Because the appeal wording now lives in line 2, `AdsMonitorAppealBadge` only keeps
  * the two transient states (`pending` / `error`) — nothing is shown twice.
+ *
+ * FEAT-082 v1.5 §8.5 (human: "the switch already shows on/off") — line 3 `am-status-reasons` is the API's
+ * `status.tiktok.reasons` (translated, de-duplicated, `*_disable`-free, never equal to line 2); `[]` ⇒ the line
+ * is absent. A pre-v1.5 row falls back to `monitorStatusReasonTexts()`, the status-cell variant that applies the
+ * same two omissions (`*_disable` + untranslatable codes), so "ปิดสวิตช์ · creative_offline_audit" can no longer
+ * appear beside the switch column and a raw TikTok code never reaches the screen — it stays in the `title`
+ * tooltip, which is unchanged. The shared `monitorReasonTexts()` keeps its old behaviour for the dashboard
+ * blocks, which have no switch column of their own.
  */
 import type { MonitorReviewSummary, MonitorStatus } from '#shared/types/ads-monitor'
 
@@ -60,12 +68,22 @@ const deletedAtText = computed(() => formatDayMonthClock(props.deletedAt))
 const label = computed(() => props.status.tiktok?.primary || monitorStatusLabel(props.status.key, props.status.primary))
 const dot = computed(() => monitorStatusDot(props.status.key, props.status.primary))
 const textClass = computed(() => monitorStatusText(props.status.key))
-const reasons = computed(() => monitorReasonTexts(props.status.reasons))
 const title = computed(() => monitorStatusTitle(props.status))
 
 /** v1.4 line 2 — `null`/absent ⇒ no second line at all */
 const secondary = computed(() => props.status.tiktok?.secondary || null)
 const secondaryClass = computed(() => monitorToneText(props.status.tiktok?.tone))
+
+/**
+ * v1.5 §8.5 — the third line. When the API sent `tiktok`, its `reasons` are the truth (already de-duplicated,
+ * `*_disable`-free and never repeating the second line); the BO only falls back to its own translation for a
+ * row that predates v1.5, and that fallback now drops `*_disable` + untranslatable codes too (a raw TikTok
+ * code never reaches the screen) and never repeats the second line either.
+ */
+const reasons = computed(() => {
+  const list = props.status.tiktok?.reasons ?? monitorStatusReasonTexts(props.status.reasons)
+  return list.filter(text => text !== '' && text !== secondary.value)
+})
 
 const review = computed(() => props.review ?? null)
 /** contract §6 — the button exists only under this exact condition (unchanged by v1.4) */
