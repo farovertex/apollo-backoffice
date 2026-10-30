@@ -342,17 +342,21 @@ export function parseAdGroupGuardDraft(draft: AdGroupGuardDraft):
     const integer = def?.kind === 'integer'
     if (!def) errors[pathJoin(path, 'metric')] = AGG_MESSAGES.metric
     if (!AGG_OP_BY_KEY[c.op]) errors[pathJoin(path, 'op')] = AGG_MESSAGES.op
+    // contract v1.1 §10 — message precedence: not a finite number ≥ 0 first, then the integer rule
     const value = toNumber(c.value)
-    const valueOk = value !== null && !Number.isNaN(value) && value >= 0 && (!integer || Number.isInteger(value))
-    if (!valueOk) errors[pathJoin(path, 'value')] = integer ? AGG_MESSAGES.valueInt : AGG_MESSAGES.value
+    const valueNum = value !== null && !Number.isNaN(value) && value >= 0
+    if (!valueNum) errors[pathJoin(path, 'value')] = AGG_MESSAGES.value
+    else if (integer && !Number.isInteger(value)) errors[pathJoin(path, 'value')] = AGG_MESSAGES.valueInt
     const out: AdGroupGuardCondition = { metric: c.metric, op: c.op, value: value ?? 0 }
     if (c.op === 'between') {
+      // §10: missing / not a number → value2 message; else integer rule; else `≤ value`
       const value2 = toNumber(c.value2)
-      const isNum = value2 !== null && !Number.isNaN(value2)
-      if (!isNum || value2 < 0 || (valueOk && value2 <= (value as number))) {
+      if (value2 === null || Number.isNaN(value2) || value2 < 0) {
         errors[pathJoin(path, 'value2')] = AGG_MESSAGES.value2
       } else if (integer && !Number.isInteger(value2)) {
         errors[pathJoin(path, 'value2')] = AGG_MESSAGES.value2Int
+      } else if (valueNum && value2 <= (value as number)) {
+        errors[pathJoin(path, 'value2')] = AGG_MESSAGES.value2
       }
       out.value2 = value2 ?? 0
     }

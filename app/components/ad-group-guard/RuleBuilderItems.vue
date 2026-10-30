@@ -33,13 +33,22 @@ function unit(metric: AdGroupGuardMetricKey): string {
   return adGroupGuardUnitLabel(metric, ctx.currency.value)
 }
 
+/** `สกุลของบัญชี` (no / mixed currency) does not fit the default trailing padding — widen the input and its padding */
+function longUnit(metric: AdGroupGuardMetricKey): boolean {
+  return unit(metric).length > 4
+}
+
+function valueUi(metric: AdGroupGuardMetricKey) {
+  return longUnit(metric) ? { base: 'pe-20' } : undefined
+}
+
 function inputMode(metric: AdGroupGuardMetricKey): 'numeric' | 'decimal' {
   return AGG_METRIC_BY_KEY[metric]?.kind === 'integer' ? 'numeric' : 'decimal'
 }
 </script>
 
 <template>
-  <div class="@container flex min-w-0 flex-col gap-2">
+  <div class="flex min-w-0 flex-col gap-2">
     <template v-for="(item, i) in group.items" :key="item.uid">
       <!-- ── condition row ─────────────────────────────────────────────────────────── -->
       <div
@@ -69,13 +78,13 @@ function inputMode(metric: AdGroupGuardMetricKey): 'numeric' | 'decimal' {
             @click="ctx.toggleCombine(indexes)"
           />
         </div>
-        <div class="flex min-w-0 flex-1 flex-col gap-1">
+        <div class="@container flex min-w-0 flex-1 flex-col gap-1">
           <div class="flex min-w-0 flex-wrap items-center gap-2">
             <USelect
               :model-value="item.metric"
               :items="metricItems"
               aria-label="ตัวแปร"
-              class="w-full @xl:w-52"
+              class="w-full @sm:w-32 @md:w-40 @lg:w-52"
               :disabled="ctx.disabled.value"
               :data-testid="`${p}-metric`"
               @update:model-value="ctx.setMetric(at(i), $event as AdGroupGuardMetricKey)"
@@ -84,7 +93,7 @@ function inputMode(metric: AdGroupGuardMetricKey): 'numeric' | 'decimal' {
               :model-value="item.op"
               :items="opItems"
               aria-label="เงื่อนไข"
-              class="w-32 shrink-0"
+              class="w-full shrink-0 @min-[13.5rem]:w-30 @lg:w-32"
               :disabled="ctx.disabled.value"
               :data-testid="`${p}-op`"
               @update:model-value="ctx.setOp(at(i), $event as AdGroupGuardOp)"
@@ -96,7 +105,9 @@ function inputMode(metric: AdGroupGuardMetricKey): 'numeric' | 'decimal' {
               autocomplete="off"
               placeholder="0"
               aria-label="ค่า"
-              class="min-w-20 flex-1 basis-24 @xl:max-w-40"
+              class="flex-1"
+              :class="longUnit(item.metric) ? 'min-w-36 basis-36 @sm:max-w-52' : 'min-w-16 basis-16 @sm:max-w-40'"
+              :ui="valueUi(item.metric)"
               :disabled="ctx.disabled.value"
               :data-testid="`${p}-value`"
               @update:model-value="ctx.setValue(at(i), 'value', $event)"
@@ -105,8 +116,12 @@ function inputMode(metric: AdGroupGuardMetricKey): 'numeric' | 'decimal' {
                 <span class="text-xs text-muted" :data-testid="`${p}-unit`">{{ unit(item.metric) }}</span>
               </template>
             </UInput>
-            <template v-if="item.op === 'between'">
-              <span class="text-sm text-muted">ถึง</span>
+            <div
+              v-if="item.op === 'between'"
+              class="flex min-w-0 flex-1 items-center gap-2"
+              :class="longUnit(item.metric) ? 'basis-44 @sm:max-w-60' : 'basis-32 @sm:max-w-48'"
+            >
+              <span class="shrink-0 text-sm text-muted">ถึง</span>
               <UInput
                 :model-value="item.value2"
                 type="text"
@@ -114,7 +129,9 @@ function inputMode(metric: AdGroupGuardMetricKey): 'numeric' | 'decimal' {
                 autocomplete="off"
                 placeholder="0"
                 aria-label="ค่าที่สอง"
-                class="min-w-20 flex-1 basis-24 @xl:max-w-40"
+                class="flex-1"
+                :class="longUnit(item.metric) ? 'min-w-36' : 'min-w-16'"
+                :ui="valueUi(item.metric)"
                 :disabled="ctx.disabled.value"
                 :data-testid="`${p}-value2`"
                 @update:model-value="ctx.setValue(at(i), 'value2', $event)"
@@ -123,7 +140,7 @@ function inputMode(metric: AdGroupGuardMetricKey): 'numeric' | 'decimal' {
                   <span class="text-xs text-muted" :data-testid="`${p}-unit2`">{{ unit(item.metric) }}</span>
                 </template>
               </UInput>
-            </template>
+            </div>
             <UButton
               icon="i-lucide-x"
               color="neutral"

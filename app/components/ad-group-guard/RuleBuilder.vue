@@ -155,7 +155,7 @@ const json = computed(() => JSON.stringify(parsed.value.rule ?? adGroupGuardDraf
 </script>
 
 <template>
-  <div class="@container flex min-w-0 flex-col gap-3" :data-testid="`${testid}-builder`">
+  <div class="flex min-w-0 flex-col gap-3" :data-testid="`${testid}-builder`">
     <AdGroupGuardRuleBuilderItems :group="draft" :indexes="[]" :depth="1" />
 
     <div class="flex flex-wrap gap-2 pl-16">
