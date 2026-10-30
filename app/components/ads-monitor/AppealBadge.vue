@@ -8,7 +8,13 @@
  * (the last job failed) → the API's own `appeal`. State `none` renders **nothing at all** (the element is
  * absent, contract §6), which is also what a row without a `review` gets.
  *
- * The `error` state carries `appealError.reason` as its tooltip + `title`; the others carry the state text.
+ * FEAT-082 v1.4 §8.3 (TASK-am-tiktok-wording) — the badge now keeps **only the two transient job states**
+ * `pending` and `error`: since v1.4 the appeal *result* ("กำลังอุทธรณ์" / "การอุทธรณ์ผ่านการอนุมัติ" /
+ * "การอุทธรณ์ไม่ผ่านการอนุมัติ") is the status cell's second line, computed by the API, so showing it here as
+ * well would say the same thing twice. `appealing` / `approved` / `rejected` / `unknown` therefore render
+ * nothing, exactly like `none`.
+ *
+ * The `error` state carries `appealError.reason` as its tooltip + `title`; `pending` carries its own text.
  */
 import type { MonitorReviewSummary } from '#shared/types/ads-monitor'
 
@@ -18,6 +24,8 @@ const props = defineProps<{
 }>()
 
 const state = computed(() => appealBadgeState(props.review))
+/** v1.4 — only the two states the status cell's second line cannot show (they are about *our* job, not TikTok) */
+const visible = computed(() => state.value === 'pending' || state.value === 'error')
 const label = computed(() => APPEAL_BADGE_TEXT[state.value])
 const color = computed(() => APPEAL_BADGE_COLOR[state.value])
 const icon = computed(() => APPEAL_BADGE_ICON[state.value])
@@ -26,7 +34,7 @@ const tooltip = computed(() => (state.value === 'error' ? props.review?.appealEr
 </script>
 
 <template>
-  <UTooltip v-if="state !== 'none'" :text="tooltip">
+  <UTooltip v-if="visible" :text="tooltip">
     <UBadge
       :color="color"
       variant="subtle"
