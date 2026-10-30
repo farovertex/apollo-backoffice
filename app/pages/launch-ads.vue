@@ -117,7 +117,7 @@
  * custom → the order's rule (formatted with the selection's single currency, else "สกุลของบัญชี" +
  * `la-adgroup-guard-currency-warn`), off → "ไม่ใช้กฎ…", inherit → from the selected advertisers' `adGroupGuard`
  * blocks of `GET /launch/targets` (all the same → that rule + its layer · none → "ไม่มีกฎปิด ad group" · else
- * `mixed` with the counts). `la-adgroup-guard-edit` opens `la-adgroup-guard-popover` (mode radio + RuleFields,
+ * `mixed` with the counts). `la-adgroup-guard-edit` opens `la-adgroup-guard-popover` (mode radio + FEAT-087 RuleBuilder `la-adgroup-guard-rule`,
  * apply disabled while invalid). `body()` adds `adGroupGuard` only when publishing with a mode other than inherit;
  * the confirm modal gets the same text as `adGroupGuardText` (null when nothing would be guarded).
  * The page has no draft/publish state of its own (the mode is the button pressed), so the line is always shown and
@@ -147,7 +147,7 @@ import type {
   PublishMode
 } from '#shared/types/campaign-orders'
 import type { AdGroupGuardMode, AdGroupGuardRule, AdGroupGuardSource } from '#shared/types/ad-group-guard'
-import type { AdGroupGuardRuleDraft } from '~/utils/ad-group-guard'
+import type { AdGroupGuardDraft } from '~/utils/ad-group-guard'
 
 useSeoMeta({ title: 'Launch ads' })
 
@@ -732,7 +732,7 @@ const guardConfirmText = computed(() => (guardSummary.value.applies ? guardSumma
 // popover draft (applied to the page state only by "ใช้")
 const guardPopoverOpen = ref(false)
 const guardDraftMode = ref<AdGroupGuardMode>('inherit')
-const guardDraft = ref<AdGroupGuardRuleDraft>(emptyAdGroupGuardDraft())
+const guardDraft = ref<AdGroupGuardDraft>(emptyAdGroupGuardDraft())
 const guardDraftValid = ref(false)
 const guardCanApply = computed(() => guardDraftMode.value !== 'custom' || guardDraftValid.value)
 
@@ -2514,7 +2514,7 @@ onUnmounted(() => {
                       data-testid="la-adgroup-guard-edit"
                     />
                     <template #content>
-                      <div class="flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-3 p-3" data-testid="la-adgroup-guard-popover">
+                      <div class="flex max-h-[min(36rem,calc(100vh-6rem))] w-[min(40rem,calc(100vw-2rem))] flex-col gap-3 overflow-y-auto p-3" data-testid="la-adgroup-guard-popover">
                         <p class="text-sm font-semibold text-highlighted">
                           กฎปิด ad group ของ order นี้
                         </p>
@@ -2538,10 +2538,10 @@ onUnmounted(() => {
                             @click="guardDraftMode = mode"
                           />
                         </div>
-                        <AdGroupGuardRuleFields
+                        <AdGroupGuardRuleBuilder
                           v-if="guardDraftMode === 'custom'"
                           v-model="guardDraft"
-                          testid="la-adgroup-guard"
+                          testid="la-adgroup-guard-rule"
                           :currency="guardCurrencies.length === 1 ? guardCurrencies[0]! : null"
                           @valid="guardDraftValid = $event"
                         />

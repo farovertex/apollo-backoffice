@@ -1,19 +1,27 @@
 /**
- * FEAT-086 — ad group guard helpers shared by `/settings/ad-group-guard`, the account Edit modal, the Launch ads
- * summary and the order page (spec "UI behaviour" §1–§4, api-contract v1 §1).
+ * FEAT-086 / FEAT-087 — ad group guard helpers shared by `/settings/ad-group-guard`, the account Edit modal, the
+ * Launch ads summary and the order page (FEAT-087 spec "UI behaviour" §1–§5, api-contract v1 §1).
  *
- * - `formatAdGroupGuardRule(rule, currency)` — the one human sentence of a rule (four shapes, spec §1):
- *   `ใช้จ่าย ≥ 1,500 THB และ (CPM > 200 หรือ conversions < 60)` · `… และ (CPM > 200 และ conversions < 60)` ·
- *   `… และ CPM > 200` · `… และ conversions < 60`; `currency` null → `สกุลของบัญชี`.
- * - `AdGroupGuardRuleDraft` + `parseAdGroupGuardDraft()` — the text inputs of `RuleFields.vue` and the client
- *   validation that mirrors contract §1.1 with the API's own messages (the API's 400 stays the authority).
+ * FEAT-087: the rule is an expression tree (`{ combine, items }`, items = conditions `{ metric, op, value, value2? }`
+ * or nested groups). This file holds the BO copy of the metric catalog (A5 — must stay identical to the API's
+ * `AD_GROUP_GUARD_METRICS`), the operators, the API's 400 messages verbatim, the **draft** tree the
+ * `RuleBuilder.vue` form edits (strings), `parseAdGroupGuardDraft()` (client mirror of contract §1.1, the API's 400
+ * stays the authority) and the formatters (`formatAdGroupGuardRule` = the one sentence QA asserts verbatim).
+ *
+ * Paths: `data-path` of rows/groups = dot-joined indexes from the root (`'0'`, `'1.0'`) — the same as the API's
+ * `hits`. Error keys = the zod sub-path below the rule prefix (`items.1.items.0.value`; `''` = the rule itself).
  */
 import type {
   AccountAdGroupGuard,
   AdGroupGuardCombine,
+  AdGroupGuardCondition,
   AdGroupGuardEffective,
+  AdGroupGuardGroup,
+  AdGroupGuardMetricKey,
   AdGroupGuardMetrics,
   AdGroupGuardMode,
+  AdGroupGuardNode,
+  AdGroupGuardOp,
   AdGroupGuardRule,
   AdGroupGuardSource,
   BuildAdGroupGuardGroupState,
@@ -24,13 +32,72 @@ import type { TikTokAccount } from '#shared/types/tiktok-accounts'
 /** shown instead of a currency code when it is unknown or the selection mixes currencies */
 export const AGG_ACCOUNT_CURRENCY = 'สกุลของบัญชี'
 
-/** contract §1.1 — the API's 400 texts, copied verbatim */
+// ── catalog (contract §1.1 — array order = display order) ─────────────────────────────────────────────────────────────
+export type AdGroupGuardUnit = 'currency' | 'count' | 'percent'
+export type AdGroupGuardKind = 'decimal' | 'integer'
+
+export interface AdGroupGuardMetricDef {
+  key: AdGroupGuardMetricKey
+  label: string
+  unit: AdGroupGuardUnit
+  kind: AdGroupGuardKind
+}
+
+/** adding a metric = one row here (and one in the API catalog) — no form change */
+export const AGG_METRICS: readonly AdGroupGuardMetricDef[] = [
+  { key: 'spend', label: 'ใช้จ่าย', unit: 'currency', kind: 'decimal' },
+  { key: 'cpm', label: 'CPM', unit: 'currency', kind: 'decimal' },
+  { key: 'conversions', label: 'ผลลัพธ์', unit: 'count', kind: 'integer' },
+  { key: 'conversionCost', label: 'ต้นทุนต่อผลลัพธ์', unit: 'currency', kind: 'decimal' },
+  { key: 'cpc', label: 'CPC', unit: 'currency', kind: 'decimal' },
+  { key: 'ctr', label: 'CTR', unit: 'percent', kind: 'decimal' },
+  { key: 'impressions', label: 'การแสดงผล', unit: 'count', kind: 'integer' },
+  { key: 'clicks', label: 'คลิก', unit: 'count', kind: 'integer' }
+]
+
+export const AGG_METRIC_BY_KEY = Object.fromEntries(AGG_METRICS.map(m => [m.key, m])) as Record<AdGroupGuardMetricKey, AdGroupGuardMetricDef>
+
+export interface AdGroupGuardOpDef {
+  key: AdGroupGuardOp
+  symbol: string
+  label: string
+}
+
+/** contract §1.1 operators; `label` = what the op select shows */
+export const AGG_OPS: readonly AdGroupGuardOpDef[] = [
+  { key: 'gt', symbol: '>', label: '> มากกว่า' },
+  { key: 'gte', symbol: '≥', label: '≥ ตั้งแต่' },
+  { key: 'lt', symbol: '<', label: '< น้อยกว่า' },
+  { key: 'lte', symbol: '≤', label: '≤ ไม่เกิน' },
+  { key: 'between', symbol: 'ระหว่าง', label: 'ระหว่าง' }
+]
+
+export const AGG_OP_BY_KEY = Object.fromEntries(AGG_OPS.map(o => [o.key, o])) as Record<AdGroupGuardOp, AdGroupGuardOpDef>
+
+/** contract §1.1 — the API's 400 texts, copied verbatim, + the builder's own rule-level lines (spec §1) */
 export const AGG_MESSAGES = {
-  minSpend: 'minSpend ต้องเป็นตัวเลขมากกว่า 0',
-  maxCpm: 'maxCpm ต้องเป็นตัวเลขมากกว่า 0 หรือ null',
-  minConversions: 'minConversions ต้องเป็นจำนวนเต็มตั้งแต่ 1 หรือ null',
-  needOne: 'ต้องตั้ง maxCpm หรือ minConversions อย่างน้อยหนึ่งค่า'
+  group: 'rule ต้องเป็น { combine, items }',
+  combine: 'combine ต้องเป็น or หรือ and',
+  items: 'ต้องมีอย่างน้อยหนึ่งเงื่อนไข',
+  item: 'เงื่อนไขต้องเป็น { metric, op, value } หรือกลุ่ม { combine, items }',
+  metric: 'metric ต้องเป็น spend, cpm, conversions, conversionCost, cpc, ctr, impressions หรือ clicks',
+  op: 'op ต้องเป็น gt, gte, lt, lte หรือ between',
+  value: 'value ต้องเป็นตัวเลขตั้งแต่ 0',
+  valueInt: 'value ต้องเป็นจำนวนเต็มตั้งแต่ 0',
+  value2: 'value2 ต้องเป็นตัวเลขมากกว่า value',
+  value2Int: 'value2 ต้องเป็นจำนวนเต็มมากกว่า value',
+  value2Only: 'value2 ใช้ได้เฉพาะ op between',
+  depth: 'กลุ่มซ้อนได้ไม่เกิน 4 ชั้น',
+  size: 'เงื่อนไขรวมต้องไม่เกิน 20',
+  /** builder only (spec §1) */
+  incomplete: 'ใส่ตัวเลขให้ครบทุกเงื่อนไข (ระหว่าง: ค่าหลังต้องมากกว่าค่าหน้า)',
+  groupEmpty: 'วงเล็บต้องมีอย่างน้อยหนึ่งเงื่อนไข',
+  spendWarn: 'ยังไม่มีเงื่อนไขใช้จ่าย — กลุ่มใหม่มักมี CPM สูงช่วงแรก'
 } as const
+
+/** contract §1.1 guard rails (A6) */
+export const AGG_MAX_DEPTH = 4
+export const AGG_MAX_CONDITIONS = 20
 
 export const AGG_MODE_LABEL: Record<AdGroupGuardMode, string> = {
   inherit: 'ใช้กฎของ workspace',
@@ -38,13 +105,16 @@ export const AGG_MODE_LABEL: Record<AdGroupGuardMode, string> = {
   off: 'ไม่ใช้กฎ'
 }
 
+/** the connector pill texts */
 export const AGG_COMBINE_LABEL: Record<AdGroupGuardCombine, string> = {
-  or: 'เข้าเงื่อนไขใดเงื่อนไขหนึ่ง',
-  and: 'ทั้งสองเงื่อนไข'
+  and: 'และ',
+  or: 'หรือ'
 }
 
 /** `en-US` grouping, up to 3 decimals — the same output as `Number.prototype.toLocaleString('en-US')` */
 const NUMBER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 })
+/** metrics line (≤ 2 decimals, as the API's log line) */
+const NUMBER2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
 
 /** `1500` → `1,500`, `1620.5` → `1,620.5` — fixed grouping, never locale-dependent */
 export function formatAggNumber(value: number | null | undefined): string {
@@ -52,91 +122,263 @@ export function formatAggNumber(value: number | null | undefined): string {
   return NUMBER.format(value)
 }
 
-/** spec §1 — the four human shapes of a rule */
-export function formatAdGroupGuardRule(rule: AdGroupGuardRule, currency: string | null): string {
-  const gate = `ใช้จ่าย ≥ ${formatAggNumber(rule.minSpend)} ${currency || AGG_ACCOUNT_CURRENCY}`
-  const cpm = rule.maxCpm !== null ? `CPM > ${formatAggNumber(rule.maxCpm)}` : null
-  const conv = rule.minConversions !== null ? `conversions < ${formatAggNumber(rule.minConversions)}` : null
-  if (cpm && conv) {
-    const join = rule.combine === 'and' ? 'และ' : 'หรือ'
-    return `${gate} และ (${cpm} ${join} ${conv})`
-  }
-  return `${gate} และ ${cpm ?? conv ?? '—'}`
+function unitText(unit: AdGroupGuardUnit, currency: string | null): string {
+  if (unit === 'currency') return ` ${currency || AGG_ACCOUNT_CURRENCY}`
+  if (unit === 'percent') return '%'
+  return ''
 }
 
-/** two rules say the same thing (a missing `combine` reads as `or`, contract §1.1 default) */
+/** the unit suffix of a metric's input: currency code / `สกุลของบัญชี`, `%`, or `''` */
+export function adGroupGuardUnitLabel(metric: AdGroupGuardMetricKey, currency: string | null): string {
+  return unitText(AGG_METRIC_BY_KEY[metric]?.unit ?? 'count', currency).trim()
+}
+
+export function isAdGroupGuardGroup(node: AdGroupGuardNode): node is AdGroupGuardGroup {
+  return Array.isArray((node as AdGroupGuardGroup).items)
+}
+
+// ── sentence (contract §1.4) ──────────────────────────────────────────────────────────────────────────────────────────
+/** a rule whose numbers may be missing (`null` → `…`) — the draft as the sentence sees it */
+interface LooseCondition { metric: AdGroupGuardMetricKey, op: AdGroupGuardOp, value: number | null, value2?: number | null }
+interface LooseGroup { combine: AdGroupGuardCombine, items: (LooseCondition | LooseGroup)[] }
+
+function fmtN(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? '…' : NUMBER.format(value)
+}
+
+function formatLooseCondition(c: LooseCondition, currency: string | null): string {
+  const def = AGG_METRIC_BY_KEY[c.metric]
+  const label = def?.label ?? c.metric
+  const unit = unitText(def?.unit ?? 'count', currency)
+  if (c.op === 'between') return `${label} ระหว่าง ${fmtN(c.value)}–${fmtN(c.value2)}${unit}`
+  return `${label} ${AGG_OP_BY_KEY[c.op]?.symbol ?? c.op} ${fmtN(c.value)}${unit}`
+}
+
+function formatLooseGroup(g: LooseGroup, currency: string | null, nested: boolean): string {
+  if (!g.items.length) return nested ? '( … )' : '…'
+  const sep = g.combine === 'and' ? ' และ ' : ' หรือ '
+  const text = g.items
+    .map(item => ('items' in item ? formatLooseGroup(item, currency, true) : formatLooseCondition(item, currency)))
+    .join(sep)
+  return nested ? `(${text})` : text
+}
+
+/** `ใช้จ่าย ≥ 1,500 THB และ (CPM > 200 THB หรือ ผลลัพธ์ < 60)` — `currency` null → `สกุลของบัญชี` */
+export function formatAdGroupGuardRule(rule: AdGroupGuardRule, currency: string | null): string {
+  return formatLooseGroup(rule, currency, false)
+}
+
+/** one condition: `CPM > 200 THB` · `ใช้จ่าย ระหว่าง 1,000–3,000 THB` */
+export function formatAdGroupGuardCondition(condition: AdGroupGuardCondition, currency: string | null): string {
+  return formatLooseCondition(condition, currency)
+}
+
+/** the metrics a rule uses, catalog order, each once */
+export function ruleMetrics(rule: AdGroupGuardRule | null | undefined): AdGroupGuardMetricKey[] {
+  const used = new Set<AdGroupGuardMetricKey>()
+  const walk = (g: AdGroupGuardGroup) => {
+    for (const item of g.items) {
+      if (isAdGroupGuardGroup(item)) walk(item)
+      else used.add(item.metric)
+    }
+  }
+  if (rule) walk(rule)
+  return AGG_METRICS.map(m => m.key).filter(k => used.has(k))
+}
+
+/** the normalized view of a tree (contract §1.1 "View"): fixed key order, `value2` only with `between` */
+function normalizeNode(node: AdGroupGuardNode): AdGroupGuardNode {
+  if (isAdGroupGuardGroup(node)) return { combine: node.combine, items: node.items.map(normalizeNode) }
+  const c: AdGroupGuardCondition = { metric: node.metric, op: node.op, value: node.value }
+  if (node.op === 'between') c.value2 = node.value2
+  return c
+}
+
+export function normalizeAdGroupGuardRule(rule: AdGroupGuardRule): AdGroupGuardRule {
+  return normalizeNode(rule) as AdGroupGuardRule
+}
+
+/** deep equality of the normalized trees (item order matters, as the API keeps it) */
 export function sameAdGroupGuardRule(a: AdGroupGuardRule | null | undefined, b: AdGroupGuardRule | null | undefined): boolean {
   if (!a || !b) return !a && !b
-  const combine = (r: AdGroupGuardRule) => (r.maxCpm !== null && r.minConversions !== null ? (r.combine ?? 'or') : 'or')
-  return a.minSpend === b.minSpend
-    && a.maxCpm === b.maxCpm
-    && a.minConversions === b.minConversions
-    && combine(a) === combine(b)
+  return JSON.stringify(normalizeAdGroupGuardRule(a)) === JSON.stringify(normalizeAdGroupGuardRule(b))
 }
 
-// ── draft (text inputs) ───────────────────────────────────────────────────────────────────────────────────────────────
-export interface AdGroupGuardRuleDraft {
-  minSpend: string
-  maxCpm: string
-  minConversions: string
+// ── draft (the builder's tree of strings) ─────────────────────────────────────────────────────────────────────────────
+export interface AdGroupGuardConditionDraft {
+  kind: 'condition'
+  /** client-only stable id for `v-for` / touched state — never sent */
+  uid: string
+  metric: AdGroupGuardMetricKey
+  op: AdGroupGuardOp
+  value: string
+  value2: string
+}
+
+export interface AdGroupGuardGroupDraft {
+  kind: 'group'
+  uid: string
   combine: AdGroupGuardCombine
+  items: AdGroupGuardNodeDraft[]
 }
 
-export type AdGroupGuardDraftErrors = Partial<Record<'minSpend' | 'maxCpm' | 'minConversions' | 'rule', string>>
+export type AdGroupGuardNodeDraft = AdGroupGuardConditionDraft | AdGroupGuardGroupDraft
+/** the builder's v-model — the root is a group */
+export type AdGroupGuardDraft = AdGroupGuardGroupDraft
+/** spec §1 name of the same thing */
+export type AdGroupGuardRuleDraft = AdGroupGuardDraft
+/** keyed by the zod sub-path below the rule prefix (`items.1.items.0.value`); `''` = the rule itself */
+export type AdGroupGuardDraftErrors = Record<string, string>
 
-export function emptyAdGroupGuardDraft(): AdGroupGuardRuleDraft {
-  return { minSpend: '', maxCpm: '', minConversions: '', combine: 'or' }
+let draftSeq = 0
+function nextUid(): string {
+  draftSeq += 1
+  return `agg${draftSeq}`
 }
 
-export function adGroupGuardDraftOf(rule: AdGroupGuardRule | null | undefined): AdGroupGuardRuleDraft {
-  if (!rule) return emptyAdGroupGuardDraft()
-  return {
-    minSpend: String(rule.minSpend),
-    maxCpm: rule.maxCpm === null ? '' : String(rule.maxCpm),
-    minConversions: rule.minConversions === null ? '' : String(rule.minConversions),
-    combine: rule.combine ?? 'or'
+/** spec §1 — a new condition is `cpm > ''` */
+export function newAdGroupGuardCondition(metric: AdGroupGuardMetricKey = 'cpm', op: AdGroupGuardOp = 'gt'): AdGroupGuardConditionDraft {
+  return { kind: 'condition', uid: nextUid(), metric, op, value: '', value2: '' }
+}
+
+/** spec §1 — a new group is `or` with one new condition */
+export function newAdGroupGuardGroup(): AdGroupGuardGroupDraft {
+  return { kind: 'group', uid: nextUid(), combine: 'or', items: [newAdGroupGuardCondition()] }
+}
+
+/** spec §2 — `and` + one `spend ≥ ''` condition */
+export function emptyAdGroupGuardDraft(): AdGroupGuardDraft {
+  return { kind: 'group', uid: nextUid(), combine: 'and', items: [newAdGroupGuardCondition('spend', 'gte')] }
+}
+
+function draftNodeOf(node: AdGroupGuardNode): AdGroupGuardNodeDraft {
+  if (isAdGroupGuardGroup(node)) {
+    return { kind: 'group', uid: nextUid(), combine: node.combine, items: node.items.map(draftNodeOf) }
   }
+  return {
+    kind: 'condition',
+    uid: nextUid(),
+    metric: node.metric,
+    op: node.op,
+    value: String(node.value),
+    value2: node.op === 'between' && typeof node.value2 === 'number' ? String(node.value2) : ''
+  }
+}
+
+/** a stored rule → the builder's draft; no rule (or an unreadable one) → the default draft */
+export function adGroupGuardDraftOf(rule: AdGroupGuardRule | null | undefined): AdGroupGuardDraft {
+  if (!rule || !Array.isArray(rule.items)) return emptyAdGroupGuardDraft()
+  return draftNodeOf(rule) as AdGroupGuardDraft
+}
+
+/** a deep copy (fresh object graph, same uids) — the builder edits copies and assigns them back */
+export function cloneAdGroupGuardDraft(draft: AdGroupGuardDraft): AdGroupGuardDraft {
+  return JSON.parse(JSON.stringify(draft)) as AdGroupGuardDraft
 }
 
 /** `''` → null, a finite number (commas allowed) → the number, anything else → NaN */
 function toNumber(text: string): number | null {
-  const trimmed = text.replace(/,/g, '').trim()
+  const trimmed = String(text ?? '').replace(/,/g, '').trim()
   if (trimmed === '') return null
   const value = Number(trimmed)
   return Number.isFinite(value) ? value : Number.NaN
 }
 
-/** both optional conditions are typed — the combine radio is shown only then (spec §1, A4) */
-export function adGroupGuardDraftHasBoth(draft: AdGroupGuardRuleDraft): boolean {
-  return draft.maxCpm.trim() !== '' && draft.minConversions.trim() !== ''
+/** `[1, 0]` → `items.1.items.0` (zod sub-path below the rule prefix) */
+export function aggSubPath(indexes: readonly number[]): string {
+  return indexes.map(i => `items.${i}`).join('.')
+}
+
+/** `[1, 0]` → `1.0` (`data-path`, same as the API's `hits`) */
+export function aggDataPath(indexes: readonly number[]): string {
+  return indexes.join('.')
+}
+
+function pathJoin(prefix: string, part: string): string {
+  return prefix ? `${prefix}.${part}` : part
+}
+
+function countConditions(g: AdGroupGuardGroupDraft): number {
+  return g.items.reduce((n, item) => n + (item.kind === 'group' ? countConditions(item) : 1), 0)
+}
+
+/** the draft as the sentence / JSON preview sees it: invalid numbers → `null` */
+function looseOf(g: AdGroupGuardGroupDraft): LooseGroup {
+  return {
+    combine: g.combine,
+    items: g.items.map((item): LooseCondition | LooseGroup => {
+      if (item.kind === 'group') return looseOf(item)
+      const value = toNumber(item.value)
+      const c: LooseCondition = { metric: item.metric, op: item.op, value: value === null || Number.isNaN(value) ? null : value }
+      if (item.op === 'between') {
+        const value2 = toNumber(item.value2)
+        c.value2 = value2 === null || Number.isNaN(value2) ? null : value2
+      }
+      return c
+    })
+  }
+}
+
+/** the live sentence of a (possibly invalid) draft — invalid numbers render as `…` */
+export function formatAdGroupGuardDraft(draft: AdGroupGuardDraft, currency: string | null): string {
+  return formatLooseGroup(looseOf(draft), currency, false)
+}
+
+/** the body the builder would send (invalid numbers as `null`) — the `ดู JSON` preview while invalid */
+export function adGroupGuardDraftPreview(draft: AdGroupGuardDraft): unknown {
+  return looseOf(draft)
 }
 
 /**
- * contract §1.1 on the client: `rule` when valid (always with an explicit `combine`, `'or'` unless both conditions
- * are set — A4), else the per-field messages. An untouched (all empty) draft is invalid too.
+ * contract §1.1 on the client, with the API's messages verbatim: `{ rule }` when valid, else the errors keyed by
+ * zod sub-path (`items.1.items.0.value`; `items` = root empty; `''` = more than 20 conditions).
  */
-export function parseAdGroupGuardDraft(draft: AdGroupGuardRuleDraft):
+export function parseAdGroupGuardDraft(draft: AdGroupGuardDraft):
   { rule: AdGroupGuardRule, errors: null } | { rule: null, errors: AdGroupGuardDraftErrors } {
   const errors: AdGroupGuardDraftErrors = {}
-  const minSpend = toNumber(draft.minSpend)
-  const maxCpm = toNumber(draft.maxCpm)
-  const minConversions = toNumber(draft.minConversions)
-  if (minSpend === null || Number.isNaN(minSpend) || minSpend <= 0) errors.minSpend = AGG_MESSAGES.minSpend
-  if (maxCpm !== null && (Number.isNaN(maxCpm) || maxCpm <= 0)) errors.maxCpm = AGG_MESSAGES.maxCpm
-  if (minConversions !== null && (Number.isNaN(minConversions) || !Number.isInteger(minConversions) || minConversions < 1)) {
-    errors.minConversions = AGG_MESSAGES.minConversions
+
+  const condition = (c: AdGroupGuardConditionDraft, path: string): AdGroupGuardCondition => {
+    const def = AGG_METRIC_BY_KEY[c.metric]
+    const integer = def?.kind === 'integer'
+    if (!def) errors[pathJoin(path, 'metric')] = AGG_MESSAGES.metric
+    if (!AGG_OP_BY_KEY[c.op]) errors[pathJoin(path, 'op')] = AGG_MESSAGES.op
+    const value = toNumber(c.value)
+    const valueOk = value !== null && !Number.isNaN(value) && value >= 0 && (!integer || Number.isInteger(value))
+    if (!valueOk) errors[pathJoin(path, 'value')] = integer ? AGG_MESSAGES.valueInt : AGG_MESSAGES.value
+    const out: AdGroupGuardCondition = { metric: c.metric, op: c.op, value: value ?? 0 }
+    if (c.op === 'between') {
+      const value2 = toNumber(c.value2)
+      const isNum = value2 !== null && !Number.isNaN(value2)
+      if (!isNum || value2 < 0 || (valueOk && value2 <= (value as number))) {
+        errors[pathJoin(path, 'value2')] = AGG_MESSAGES.value2
+      } else if (integer && !Number.isInteger(value2)) {
+        errors[pathJoin(path, 'value2')] = AGG_MESSAGES.value2Int
+      }
+      out.value2 = value2 ?? 0
+    }
+    return out
   }
-  if (maxCpm === null && minConversions === null) errors.rule = AGG_MESSAGES.needOne
-  if (Object.keys(errors).length > 0) return { rule: null, errors }
-  return {
-    rule: {
-      minSpend: minSpend as number,
-      maxCpm,
-      minConversions,
-      combine: maxCpm !== null && minConversions !== null ? draft.combine : 'or'
-    },
-    errors: null
+
+  const group = (g: AdGroupGuardGroupDraft, path: string, depth: number): AdGroupGuardGroup => {
+    if (depth > AGG_MAX_DEPTH) errors[path] = AGG_MESSAGES.depth
+    if (!g.items.length) errors[pathJoin(path, 'items')] = AGG_MESSAGES.items
+    return {
+      combine: g.combine,
+      items: g.items.map((item, i) => (item.kind === 'group'
+        ? group(item, pathJoin(path, `items.${i}`), depth + 1)
+        : condition(item, pathJoin(path, `items.${i}`))))
+    }
   }
+
+  const rule = group(draft, '', 1)
+  if (countConditions(draft) > AGG_MAX_CONDITIONS) errors[''] = errors[''] ?? AGG_MESSAGES.size
+  if (Object.keys(errors).length) return { rule: null, errors }
+  return { rule: normalizeAdGroupGuardRule(rule), errors: null }
+}
+
+/** the draft has a condition on `spend` somewhere (spec §1 — warning only) */
+export function adGroupGuardDraftUsesSpend(draft: AdGroupGuardGroupDraft): boolean {
+  return draft.items.some(item => (item.kind === 'group' ? adGroupGuardDraftUsesSpend(item) : item.metric === 'spend'))
 }
 
 // ── account layer ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -195,16 +437,54 @@ export function formatAggDate(iso: string | null | undefined): string {
   return `${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** spec §4 — `ใช้จ่าย 1,620 THB · CPM 231 · conv 12 · ณ 29 ต.ค. 14:05` */
-export function formatAdGroupGuardMetrics(metrics: AdGroupGuardMetrics, currency: string | null): string {
-  const parts = [
-    `ใช้จ่าย ${formatAggNumber(metrics.spend)} ${currency || AGG_ACCOUNT_CURRENCY}`,
-    `CPM ${formatAggNumber(metrics.cpm)}`,
-    `conv ${formatAggNumber(metrics.conversions)}`
-  ]
+/**
+ * spec §5 — the metrics the rule uses (catalog order) as `<label> <n><unit>`, a null rate as `<label> —`, then
+ * ` · ณ <date>`: `ใช้จ่าย 1,620 THB · CPM 231.03 THB · ผลลัพธ์ 12 · ณ 29 ต.ค. 14:05`
+ */
+export function formatAdGroupGuardMetrics(metrics: AdGroupGuardMetrics, rule: AdGroupGuardRule | null, currency: string | null): string {
+  const parts = ruleMetrics(rule).map((metric) => {
+    const def = AGG_METRIC_BY_KEY[metric]
+    const value = metrics[metric]
+    if (value === null || value === undefined || !Number.isFinite(value)) return `${def.label} —`
+    return `${def.label} ${NUMBER2.format(value)}${unitText(def.unit, currency)}`
+  })
   const at = formatAggDate(metrics.asOf)
   if (at) parts.push(`ณ ${at}`)
   return parts.join(' · ')
+}
+
+/** compare `'1.0'` / `'10'` by numeric segments */
+function comparePaths(a: string, b: string): number {
+  const x = a.split('.').map(Number)
+  const y = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? -1) - (y[i] ?? -1)
+    if (d) return d
+  }
+  return 0
+}
+
+/** the condition at a `hits` path (`'1.0'`), or null when the path is not a condition of the rule */
+function conditionAt(rule: AdGroupGuardRule, path: string): AdGroupGuardCondition | null {
+  let node: AdGroupGuardNode = rule
+  for (const part of path.split('.')) {
+    if (!isAdGroupGuardGroup(node)) return null
+    const next: AdGroupGuardNode | undefined = node.items[Number(part)]
+    if (!next) return null
+    node = next
+  }
+  return isAdGroupGuardGroup(node) ? null : node
+}
+
+/** spec §5 — `เข้าเงื่อนไข: ใช้จ่าย ≥ 1,500 THB · CPM > 200 THB` (path order, no parentheses); `null` = no line */
+export function formatAdGroupGuardHits(rule: AdGroupGuardRule | null, hits: string[] | null | undefined, currency: string | null): string | null {
+  if (!rule || !hits?.length) return null
+  const parts = [...hits]
+    .sort(comparePaths)
+    .map(path => conditionAt(rule, path))
+    .filter((c): c is AdGroupGuardCondition => c !== null)
+    .map(c => formatLooseCondition(c, currency))
+  return parts.length ? `เข้าเงื่อนไข: ${parts.join(' · ')}` : null
 }
 
 /** group name, fallback `…<last 4 of id>` */

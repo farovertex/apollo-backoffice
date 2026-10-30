@@ -8,6 +8,9 @@
  * the snapshot's currency) · `od-adgroup-guard-source[data-source]`. One `od-guard-adgroup[data-state]` per
  * `adGroups[]` entry with the metrics (`od-guard-adgroup-metrics`, queued/paused) or the reason
  * (`od-guard-adgroup-reason`, failed); `od-guard-adgroup-empty` while watching with no group yet.
+ * FEAT-087 (spec §5, AC-14): the rule line is the v2 sentence; `od-guard-adgroup-metrics` lists only the metrics the
+ * rule uses (catalog order, null rate `—`) + ` · ณ <date>`; `od-guard-adgroup-hits` (`เข้าเงื่อนไข: …`) is rendered
+ * iff `hits` is a non-empty array — one condition sentence per hit path, path order, no parentheses.
  */
 import type { BuildAdGroupGuard } from '#shared/types/ad-group-guard'
 import type { BuildView } from '#shared/types/campaign-orders'
@@ -86,7 +89,14 @@ const title = computed(() => {
           class="w-full text-xs text-muted tabular-nums sm:w-auto"
           data-testid="od-guard-adgroup-metrics"
         >
-          {{ formatAdGroupGuardMetrics(group.metrics, guard.currency) }}
+          {{ formatAdGroupGuardMetrics(group.metrics, guard.rule, guard.currency) }}
+        </span>
+        <span
+          v-if="formatAdGroupGuardHits(guard.rule, group.hits, guard.currency)"
+          class="w-full text-xs break-words text-muted"
+          data-testid="od-guard-adgroup-hits"
+        >
+          {{ formatAdGroupGuardHits(guard.rule, group.hits, guard.currency) }}
         </span>
         <span
           v-if="group.state === 'failed'"
