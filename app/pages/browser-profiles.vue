@@ -67,6 +67,10 @@ const UTooltip = resolveComponent('UTooltip')
 const api = useApi()
 const toast = useToast()
 
+// FEAT-088 §7/AC-7 — the `lightSlots` pencil of the provider-nodes block is GOD only; Admin/Payment see the values
+const { admin } = useAuth()
+const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
+
 // `server: false`: the request must be issued by the browser (one visible XHR per load, stubbable by QA with
 // page.route) and never block SSR on a slow / down AdsPower.
 const { data, status, error, refresh } = useLazyAsyncData(
@@ -383,6 +387,21 @@ function nodeTooltip(node: ProviderNodeView): string {
       return `${inst.id} · ${ago}`
     })
     .join(' · ')
+}
+
+// FEAT-088 §1/§7/AC-7 — "แท็บเบา" fact under each node chip: the stored override (or "ใช้ env") plus the value
+// the dispatcher actually uses right now (`effectiveLightSlots`, which already folds in the env default)
+function lightSlotsText(node: ProviderNodeView): string {
+  const override = node.lightSlots === null ? 'ใช้ env' : String(node.lightSlots)
+  return `${override} (มีผล ${node.effectiveLightSlots})`
+}
+
+const lightSlotsTarget = ref<ProviderNodeView | null>(null)
+const lightSlotsModalOpen = ref(false)
+
+function askLightSlots(node: ProviderNodeView) {
+  lightSlotsTarget.value = node
+  lightSlotsModalOpen.value = true
 }
 
 /** `POST /backend/browser-profiles/sync` — exactly one request per click, then the poll takes over */
@@ -1088,11 +1107,13 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
               :title="syncedAt ?? 'Never synced'"
               data-testid="bp-synced"
             >Synced {{ syncedAt ? syncedAgo : '—' }}</span>
-            <!-- FEAT-031: node chips (per-instance heartbeat) — secondary info, hidden while loading/error -->
+            <!-- FEAT-031: node chips (per-instance heartbeat) — secondary info, hidden while loading/error.
+                 FEAT-088 §1/§7/AC-7: each chip also shows แท็บเบา / คนเปิดเองได้ and, for a GOD, a pencil to
+                 edit lightSlots (bp-node-light-slots-edit) -->
             <span
               data-testid="bp-nodes"
               :data-state="nodesState"
-              class="inline-flex flex-wrap items-center gap-x-3 gap-y-1"
+              class="inline-flex flex-wrap items-start gap-x-4 gap-y-2"
             >
               <span
                 v-for="node in nodes"
@@ -1102,9 +1123,36 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
                 :data-alive="node.alive ? 'true' : 'false'"
                 :data-alive-instances="node.aliveInstances"
                 :data-instances="node.instanceCount"
-                :class="node.alive ? 'text-success' : 'text-error'"
-                :title="nodeTooltip(node)"
-              >{{ node.name }} · {{ node.aliveInstances }}/{{ node.instanceCount }} workers</span>
+                class="flex flex-col gap-0.5"
+              >
+                <span
+                  :class="node.alive ? 'text-success' : 'text-error'"
+                  :title="nodeTooltip(node)"
+                >{{ node.name }} · {{ node.aliveInstances }}/{{ node.instanceCount }} workers</span>
+                <span class="flex flex-wrap items-center gap-1 text-xs text-muted">
+                  <span
+                    data-testid="bp-node-light-slots"
+                    :data-node-id="node.id"
+                  >แท็บเบา: {{ lightSlotsText(node) }}</span>
+                  <UButton
+                    v-if="isGod"
+                    icon="i-lucide-pencil"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    square
+                    aria-label="แก้ไขแท็บเบา"
+                    data-testid="bp-node-light-slots-edit"
+                    :data-node-id="node.id"
+                    @click="askLightSlots(node)"
+                  />
+                </span>
+                <span
+                  data-testid="bp-node-human-opens"
+                  :data-node-id="node.id"
+                  class="text-xs text-muted"
+                >คนเปิดเองได้: {{ node.humanOpensAllowed ? 'ใช่' : 'ไม่' }}</span>
+              </span>
             </span>
             <!-- FEAT-024: state of the sync job + the node's last sync error, next to / under Synced -->
             <span
@@ -1215,6 +1263,12 @@ const showTable = computed(() => !errorState.value && !isEmpty.value && !isNoMat
         :profile="proxyTarget"
         @requested="onProxyRequested"
         @refresh="refresh()"
+      />
+      <!-- FEAT-088 §7/AC-7: GOD-only lightSlots editor of the provider-nodes block -->
+      <BrowserProfilesNodeLightSlotsModal
+        v-model:open="lightSlotsModalOpen"
+        :node="lightSlotsTarget"
+        @saved="loadNodes()"
       />
     </template>
   </UDashboardPanel>
