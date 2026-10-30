@@ -274,8 +274,13 @@ export function monitorStatusText(key: MonitorStatusKey): string {
 }
 
 /**
- * The one reason map (spec "Status cell"). A code mapped to `''` is **omitted** from the secondary line
- * (the `*_delivery_ok` codes repeat what the label already says); an unknown code is shown raw.
+ * The one reason map (spec "Status cell"). A code mapped to `''` is **omitted** from the line (the
+ * `*_delivery_ok` codes repeat what the label already says); an unknown code is shown raw by
+ * `monitorReasonTexts()` and dropped by `monitorStatusReasonTexts()` (FEAT-082 v1.5 §8.5).
+ *
+ * FEAT-082 v1.5 added the review/punish vocabulary TikTok really sends (v1.3 finding): `*_offline_audit`
+ * (rejected by review), `*_audit` / `*_reaudit` (still under review), `advertiser_punish`. Those translations
+ * benefit every caller — before this they were printed as raw codes on the dashboard blocks too.
  */
 export const MONITOR_REASON_TEXT: Record<string, string> = {
   campaign_offline_budget: 'งบแคมเปญหมด',
@@ -283,12 +288,28 @@ export const MONITOR_REASON_TEXT: Record<string, string> = {
   creative_disable: 'ปิดสวิตช์',
   ad_disable: 'ปิดสวิตช์',
   campaign_disable: 'ปิดสวิตช์',
+  // v1.3 real data: a creative rejected by review reports `*_offline_audit`, one still queued `*_audit`
+  creative_offline_audit: 'ปัญหาในการตรวจสอบ',
+  ad_offline_audit: 'ปัญหาในการตรวจสอบ',
+  creative_audit: 'กำลังตรวจสอบ',
+  ad_audit: 'กำลังตรวจสอบ',
+  creative_reaudit: 'กำลังตรวจสอบ',
+  ad_reaudit: 'กำลังตรวจสอบ',
+  advertiser_punish: 'บัญชีถูกระงับ',
   campaign_delivery_ok: '',
   ad_delivery_ok: '',
   creative_delivery_ok: ''
 }
 
-/** Translated, de-duplicated, omission-aware reason list for the secondary line of `am-status`. */
+/**
+ * FEAT-082 v1.5 §8.5 — codes the **Ads monitor status cell** never shows, because its own row already says
+ * so: the switch column shows on/off, so "ปิดสวิตช์" next to it mixed two different meanings (the human's
+ * report). Other surfaces (the dashboard's "not delivering" / "rejected" lists, which have no switch column)
+ * keep printing it through `monitorReasonTexts()`.
+ */
+const MONITOR_REASON_HIDDEN_IN_STATUS = new Set(['creative_disable', 'ad_disable', 'campaign_disable'])
+
+/** Translated, de-duplicated, omission-aware reason list; an unmapped code is kept raw (dashboard blocks). */
 export function monitorReasonTexts(reasons: string[] | null | undefined): string[] {
   const out: string[] = []
   for (const raw of reasons ?? []) {
@@ -296,6 +317,25 @@ export function monitorReasonTexts(reasons: string[] | null | undefined): string
     const mapped = MONITOR_REASON_TEXT[raw.toLowerCase()]
     if (mapped === '') continue
     const text = mapped ?? raw
+    if (!out.includes(text)) out.push(text)
+  }
+  return out
+}
+
+/**
+ * FEAT-082 v1.5 §8.5 — the status cell's third line for a row whose API predates `status.tiktok.reasons`
+ * (with it, the API's own list is used as is). Same translation map, two extra omissions: the `*_disable`
+ * codes (the switch column says that) and **any code without a translation** — a raw TikTok code never
+ * reaches the screen, it stays in the `title` tooltip (`monitorStatusTitle()`), which is unchanged.
+ */
+export function monitorStatusReasonTexts(reasons: string[] | null | undefined): string[] {
+  const out: string[] = []
+  for (const raw of reasons ?? []) {
+    if (typeof raw !== 'string' || raw === '') continue
+    const code = raw.toLowerCase()
+    if (MONITOR_REASON_HIDDEN_IN_STATUS.has(code)) continue
+    const text = MONITOR_REASON_TEXT[code]
+    if (!text) continue
     if (!out.includes(text)) out.push(text)
   }
   return out

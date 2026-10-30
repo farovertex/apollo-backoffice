@@ -65,6 +65,13 @@ export interface MonitorStatusTikTok {
   secondary: string | null
   /** ok = green · info = blue · warn = amber · error = red · neutral = grey */
   tone: 'ok' | 'warn' | 'error' | 'info' | 'neutral'
+  /**
+   * v1.5 §8.5 — the **third** line: translated, de-duplicated reasons, already cleaned by the API
+   * (`*_disable` dropped — the switch column says that; `*_delivery_ok` dropped; untranslatable codes dropped;
+   * an entry equal to `secondary` dropped). `[]` ⇒ no third line. Optional here for the same reason as
+   * `tiktok` itself: a row from an API that predates v1.5 falls back to the BO's own `monitorReasonTexts()`.
+   */
+  reasons?: string[]
 }
 
 export interface MonitorStatus {
