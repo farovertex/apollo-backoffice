@@ -5,7 +5,7 @@
  * does for the status keys (`app/utils/reports.ts`). Auto-imported by Nuxt, so components use the functions
  * without an import.
  */
-import type { AppealableReason, AppealState, MonitorReviewSummary } from '#shared/types/ads-monitor'
+import type { AppealableReason, AppealState, MonitorReviewSummary, MonitorStatusTikTok } from '#shared/types/ads-monitor'
 
 /**
  * The badge state of a row / drawer. It is the API's `AppealState` plus the two states the *job* adds:
@@ -95,6 +95,21 @@ export function appealableReasonText(reason: AppealableReason | null | undefined
   if (reason !== 'notAppealable') return base
   const state = appeal && appeal !== 'none' ? APPEAL_BADGE_TEXT[appeal] : ''
   return state ? `${base} (สถานะ: ${state})` : base
+}
+
+/**
+ * FEAT-082 v1.4 §8.1/§8.3 — text colour of the status cell's **second** line, from the API's `tone`
+ * (ok = green · info = blue · warn = amber · error = red · neutral = grey). The dot of the first line keeps
+ * following `key` (`monitorStatusDot()`), so nothing about the existing colour rules changes.
+ */
+export function monitorToneText(tone: MonitorStatusTikTok['tone'] | null | undefined): string {
+  switch (tone) {
+    case 'ok': return 'text-success'
+    case 'info': return 'text-info'
+    case 'warn': return 'text-warning'
+    case 'error': return 'text-error'
+    default: return 'text-muted'
+  }
 }
 
 /** `29/10 14:05` — `dd/MM HH:mm` in the browser's timezone (spec: the `lastAppeal` line). `—` for null. */

@@ -77,7 +77,16 @@ const issues = computed(() => review.value?.issues ?? [])
 const isEmpty = computed(() => !pending.value && !errorText.value && detail.value !== null && review.value === null)
 
 const status = computed(() => detail.value?.status ?? props.row?.status ?? null)
-const statusLabel = computed(() => (status.value ? monitorStatusLabel(status.value.key, status.value.primary) : REPORT_DASH))
+/**
+ * FEAT-082 v1.4 §8.1/§8.3 — the header says what the row's status cell says: the API's TikTok wording when it
+ * is there (`status.tiktok`), the BO's own label as the pre-v1.4 fallback. The second line follows the same
+ * `tone` colouring as the cell.
+ */
+const statusLabel = computed(() => (status.value
+  ? status.value.tiktok?.primary || monitorStatusLabel(status.value.key, status.value.primary)
+  : REPORT_DASH))
+const statusSecondary = computed(() => status.value?.tiktok?.secondary || null)
+const statusSecondaryClass = computed(() => monitorToneText(status.value?.tiktok?.tone))
 const statusDot = computed(() => (status.value ? monitorStatusDot(status.value.key, status.value.primary) : 'bg-muted'))
 const statusText = computed(() => (status.value ? monitorStatusText(status.value.key) : 'text-default'))
 
@@ -442,6 +451,12 @@ const frameModalContent = { 'data-testid': 'am-review-frame-modal' } as ModalPro
               <span v-else class="size-2 shrink-0 rounded-full" :class="statusDot" />
               <span :class="statusText">{{ statusLabel }}</span>
             </span>
+            <span
+              v-if="statusSecondary"
+              class="text-sm break-words"
+              :class="statusSecondaryClass"
+              data-testid="am-review-status-secondary"
+            >{{ statusSecondary }}</span>
             <span v-if="review" class="text-sm text-muted" data-testid="am-review-summary">{{ summaryText }}</span>
           </div>
 

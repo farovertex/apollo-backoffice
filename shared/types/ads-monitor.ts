@@ -53,6 +53,20 @@ export type ToggleTarget = 'on' | 'off'
 /** `opt` of one level: 0 = on · 1 = off · null = unknown. */
 export type OptValue = 0 | 1 | null
 
+/**
+ * FEAT-082 v1.4 §8.1 (TASK-am-tiktok-wording) — the status the way TikTok's Ads Manager words it: a main line
+ * and an optional second line, computed by the API (`tiktokWording()`), never re-derived by the BO. `tone` is a
+ * colour hint for the **second** line only (the dot keeps following `key`).
+ */
+export interface MonitorStatusTikTok {
+  /** Thai main line, e.g. "ใช้งานอยู่" · "ไม่ได้นำเสนอ" · "เผยแพร่บางส่วน" */
+  primary: string
+  /** Thai second line, e.g. "ปัญหาในการตรวจสอบ" · "การอุทธรณ์ผ่านการอนุมัติ"; `null` = no second line */
+  secondary: string | null
+  /** ok = green · info = blue · warn = amber · error = red · neutral = grey */
+  tone: 'ok' | 'warn' | 'error' | 'info' | 'neutral'
+}
+
 export interface MonitorStatus {
   key: MonitorStatusKey
   /** raw `<prefix>_primary_status` — shown in the tooltip only */
@@ -61,6 +75,12 @@ export interface MonitorStatus {
   detail: string
   /** raw `<prefix>_status_list`, translated by the BO's one reason map */
   reasons: string[]
+  /**
+   * FEAT-082 v1.4 §8.1 — always sent by the API on all three tabs. **Optional here on purpose**: a row from an
+   * older API or a stub without it falls back to `monitorStatusLabel(key, primary)` for the main line and
+   * renders no second line (`AdsMonitorStatusCell`), exactly like before v1.4.
+   */
+  tiktok?: MonitorStatusTikTok
 }
 
 /** View of `ads.optPending` (contract §3.1 — `target` exposed as `on`/`off`). */
