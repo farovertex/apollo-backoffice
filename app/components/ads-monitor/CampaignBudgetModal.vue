@@ -42,9 +42,11 @@ const currentAmount = computed(() => props.row?.budget?.amount ?? null)
 
 const modalContent = { 'data-testid': 'am-cbudget-modal' } as ModalProps['content']
 
+/** `last4()` already supplies its own leading "…" — a literal one here would double it up (the exact bug
+ * `BudgetModal.vue` found and fixed; same fix here). */
 const title = computed(() => {
   const name = props.row?.name || props.row?.id || ''
-  return name ? `${name} (…${last4(props.row!.id)})` : ''
+  return name ? `${name} (${last4(props.row!.id)})` : ''
 })
 
 /** reset the form to the prefilled amount every time the modal opens (possibly on a different row) */
