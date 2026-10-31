@@ -28,12 +28,27 @@
  * boolean` and `pause: BuildPauseView | null` as the last two keys (after `previousJobIds`). `pause` tracks the
  * build worker → kpi after-run hook → optToggle worker state machine `waitingKpi → queued → done | failed`; the
  * BO only renders it (`app/pages/orders/[id].vue`), no new request.
+ *
+ * TASK-orders-post-guard — `OrderView` gains `post` (key 18) and `adGroupGuardSummary` (key 19), both optional
+ * for the reader (an older API / the QA mock without the keys renders the orders list exactly like today, no
+ * new request from either page). `post` is the **current** ad template's post (cover + caption/owner), read by
+ * the `/orders` list row the same way the detail page already reads it for its own ad template; the cover bytes
+ * still come from the existing `GET /ad-templates/:id/cover`. `adGroupGuardSummary` rolls up the FEAT-086/087
+ * guard snapshot of every build of the order (`null` for an order that predates FEAT-086) — `app/utils/
+ * campaign-orders.ts` (`orderGuardCell`) turns it into the one cell `app/pages/orders/index.vue` renders.
  */
 import type { AdvertiserStatus } from './advertisers'
 import type { SessionStatus } from './tiktok-accounts'
 import type { AdGroupBudget, AdGroupConfig } from './ad-group-templates'
 import type { AdConfig } from './ad-templates'
-import type { AdGroupGuardEffective, AdGroupGuardLayerBody, BuildAdGroupGuard, OrderAdGroupGuard } from './ad-group-guard'
+import type {
+  AdGroupGuardEffective,
+  AdGroupGuardLayerBody,
+  AdGroupGuardRule,
+  AdGroupGuardSource,
+  BuildAdGroupGuard,
+  OrderAdGroupGuard
+} from './ad-group-guard'
 
 /**
  * Why a TikTok account cannot be launched right now (api-contract §4, evaluated in this order). FEAT-085: a
@@ -186,6 +201,48 @@ export interface OrderView {
   pauseAfterPublish: boolean
   /** FEAT-086 (§6.2, key 17) — the order's own layer; older rows `{ inherit, null }`; optional for the reader */
   adGroupGuard?: OrderAdGroupGuard
+  /** TASK-orders-post-guard (key 18) — the current ad template's post; `null` when there is none to show */
+  post?: OrderPostView | null
+  /** TASK-orders-post-guard (key 19) — guard activity across the order's builds; `null` before FEAT-086 */
+  adGroupGuardSummary?: OrderAdGroupGuardSummary | null
+}
+
+/**
+ * TASK-orders-post-guard — the order's **current** ad template post (`adTemplates.postInfo` of
+ * `campaignOrders.adTemplateId`, not the FEAT-089 `adPost` snapshot): `null` when the template row is gone, has
+ * no `postInfo`, or `postInfo.status !== 'verified'`. `coverOk` mirrors `hasPostCover()` — the cover is only
+ * ever requested (`GET /ad-templates/:id/cover`) while it is true.
+ */
+export interface OrderPostView {
+  /** cache key for the cover request (BUG-061) */
+  checkedAt: string | null
+  coverOk: boolean
+  /** `itemType` 0 → true, 1 → false, unknown → null (FEAT-089 `orderAdPostOf` rule) */
+  isVideo: boolean | null
+  caption: string | null
+  ownerName: string | null
+}
+
+/**
+ * TASK-orders-post-guard — ad group guard activity rolled up over every build of the order that carries a
+ * FEAT-086 snapshot (`BuildView.adGroupGuard`); `null` ⇔ none does (the order predates FEAT-086). A draft order
+ * (guard always `off`) still has one `rules[]` entry per build, `{ rule: null, source: 'none' }` — the BO
+ * (`orderGuardCell`) renders that as "—".
+ */
+export interface OrderAdGroupGuardSummary {
+  /** number of builds counted here (i.e. with a non-null `adGroupGuard` snapshot) */
+  builds: number
+  /** distinct (rule, source, currency) combos — rule-bearing entries first, then by `builds` desc, then source */
+  rules: {
+    rule: AdGroupGuardRule | null
+    source: AdGroupGuardSource
+    currency: string | null
+    builds: number
+  }[]
+  /** per build, from `adGroupGuard.state` */
+  states: { off: number, watching: number, done: number }
+  /** summed over every build's `adGroups[]` */
+  adGroups: { watching: number, queued: number, paused: number, failed: number }
 }
 
 /**

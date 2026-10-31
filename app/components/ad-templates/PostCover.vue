@@ -14,6 +14,10 @@
  * composable's `retry()` (drops the cache entry, refetches the endpoint once); a second `@error` on the new
  * `src` is treated as a hard failure (`data-state="error"`, title "โหลดรูปปกไม่ได้") instead of retrying again.
  * The guard resets on template id / `checkedAt` change, never on the retry's own src churn.
+ *
+ * TASK-orders-post-guard — `video` overlays a small play icon on the cover (same idea as
+ * `report-posts/Cover.vue`'s own overlay), only while a real image is shown; default `false` so every existing
+ * caller renders unchanged.
  */
 const props = withDefaults(defineProps<{
   templateId: string | null | undefined
@@ -24,11 +28,14 @@ const props = withDefaults(defineProps<{
   /** FEAT-062 — `preview` (112×200, 9:16, ≈1.4× `card`) is the Summary/Review preview of `/launch-ads` */
   size?: 'thumb' | 'row' | 'card' | 'preview'
   testid?: string
+  /** TASK-orders-post-guard — `itemType === 0` of the bound post */
+  video?: boolean
 }>(), {
   checkedAt: null,
   ok: false,
   size: 'thumb',
-  testid: 'adt-post-cover'
+  testid: 'adt-post-cover',
+  video: false
 })
 
 const { src, loading, error, retry } = useCoverImage(
@@ -69,7 +76,7 @@ const state = computed(() => {
 
 <template>
   <div
-    class="flex shrink-0 items-center justify-center overflow-hidden rounded bg-elevated"
+    class="relative flex shrink-0 items-center justify-center overflow-hidden rounded bg-elevated"
     :class="BOX_CLASS[size]"
     :data-state="state"
     :data-testid="`${testid}-box`"
@@ -90,6 +97,13 @@ const state = computed(() => {
       class="text-dimmed"
       :class="[ICON_CLASS[size], loading ? 'animate-spin' : '']"
       :title="imgError ?? error ?? undefined"
+    />
+    <UIcon
+      v-if="src && !imgError && video"
+      name="i-lucide-play"
+      class="absolute text-white drop-shadow"
+      :class="ICON_CLASS[size]"
+      :data-testid="`${testid}-video`"
     />
   </div>
 </template>
