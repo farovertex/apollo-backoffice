@@ -11,6 +11,12 @@
  * endpoint) and is hidden while only one is known; picking one is a server-side filter (`workspaceId`).
  * A 403 (a Payment-only admin that typed the URL) renders `ord-forbidden` with the API text, no redirect.
  * The table is plain markup so every `<tr>` can carry `data-id` / `data-status`; a click opens the detail.
+ *
+ * TASK-orders-post-guard — two more columns, both read straight off the row's `OrderView` (`post`,
+ * `adGroupGuardSummary`), no new request: **Post** is the current ad template's cover (`AdTemplatesPostCover`,
+ * the same `GET /ad-templates/:id/cover` the detail page already uses); **กฎปิด ad group** is the
+ * `orderGuardCell()` summary of every build's FEAT-086/087 guard snapshot (rule text + source badge of the
+ * leading rule, "+N กฎ" for the rest, and the `adGroups[]` counts line).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -167,6 +173,12 @@ function timeAgo(iso: string): string {
 /** last 6 characters of the id — enough to tell two orders with the same name apart */
 function shortId(id: string): string {
   return id.length > 6 ? `…${id.slice(-6)}` : id
+}
+
+// one `orderGuardCell()` per row per load, not per template read
+const guardCells = computed(() => new Map(items.value.map(order => [order.id, orderGuardCell(order.adGroupGuardSummary)])))
+function guardCellOf(order: OrderView) {
+  return guardCells.value.get(order.id) ?? orderGuardCell(order.adGroupGuardSummary)
 }
 
 function openOrder(order: OrderView) {
@@ -343,6 +355,9 @@ function openOrder(order: OrderView) {
                   Order
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  Post
+                </th>
+                <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Status
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
@@ -358,6 +373,9 @@ function openOrder(order: OrderView) {
                   Mode
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
+                  กฎปิด ad group
+                </th>
+                <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   Workspace
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
@@ -370,7 +388,7 @@ function openOrder(order: OrderView) {
             </thead>
             <tbody :class="pending ? 'opacity-60' : ''">
               <tr v-if="pending && items.length === 0" data-testid="ord-loading">
-                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="9">
+                <td class="border-b border-default px-3 py-6 text-center text-muted" colspan="11">
                   Loading orders…
                 </td>
               </tr>
@@ -395,6 +413,18 @@ function openOrder(order: OrderView) {
                       {{ order.name }}
                     </NuxtLink>
                     <span class="text-xs text-muted">{{ shortId(order.id) }}</span>
+                  </div>
+                </td>
+                <td class="border-b border-default px-3 py-2">
+                  <div :title="order.post?.caption || order.post?.ownerName || undefined">
+                    <AdTemplatesPostCover
+                      size="row"
+                      testid="ord-post-cover"
+                      :template-id="order.adTemplate?.id"
+                      :checked-at="order.post?.checkedAt"
+                      :ok="order.post?.coverOk === true"
+                      :video="order.post?.isVideo === true"
+                    />
                   </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
@@ -446,6 +476,49 @@ function openOrder(order: OrderView) {
                   >
                     {{ order.publishMode === 'publish' ? 'Publish' : 'Draft' }}
                   </UBadge>
+                </td>
+                <td
+                  class="border-b border-default px-3 py-2"
+                  data-testid="ord-guard"
+                  :data-state="guardCellOf(order).state"
+                >
+                  <span v-if="guardCellOf(order).state === 'none'" class="text-muted">—</span>
+                  <div v-else class="flex flex-col gap-0.5">
+                    <div class="flex max-w-56 items-center gap-1.5">
+                      <span
+                        class="truncate"
+                        :class="guardCellOf(order).ruleMuted ? 'text-muted' : 'text-highlighted'"
+                        :title="guardCellOf(order).ruleText ?? undefined"
+                        data-testid="ord-guard-rule"
+                      >
+                        {{ guardCellOf(order).ruleText }}
+                      </span>
+                      <UBadge
+                        v-if="guardCellOf(order).sourceBadge"
+                        color="neutral"
+                        variant="subtle"
+                        class="whitespace-nowrap"
+                        data-testid="ord-guard-source"
+                      >
+                        {{ guardCellOf(order).sourceBadge }}
+                      </UBadge>
+                      <span
+                        v-if="guardCellOf(order).moreCount > 0"
+                        class="text-xs whitespace-nowrap text-muted"
+                        :title="guardCellOf(order).moreTitle ?? undefined"
+                        data-testid="ord-guard-more"
+                      >
+                        +{{ guardCellOf(order).moreCount }} กฎ
+                      </span>
+                    </div>
+                    <span
+                      v-if="guardCellOf(order).countsText"
+                      class="text-xs text-muted"
+                      data-testid="ord-guard-counts"
+                    >
+                      {{ guardCellOf(order).countsText }}
+                    </span>
+                  </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <UBadge
