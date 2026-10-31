@@ -1,9 +1,15 @@
 <script setup lang="ts">
 /**
- * FEAT-069 — tab "แยกตาม workspace" (`rf-table-workspace`, GOD only): one row per workspace with the results,
+ * FEAT-069 — tab "แยกตามคน" (`rf-table-workspace`, GOD only): one row per workspace with the results,
  * the five ratios, the range's bans / runs and the "now" counters. Header click sorts client-side
  * (`rf-workspace-sort-<col>`, `aria-sort`); idle rows (no spend and no registers) are dimmed and always last;
  * the name emits `pick` → the page writes `?workspaceId=`. Footer "รวมทั้งหมด" = `results` (each UTM once) + `now`.
+ *
+ * FEAT-090 — one workspace has exactly one owner admin and the UTM numbers of a row are the numbers of the UTM
+ * keys **that admin owns**, so the first column is the person: header `คน`, the admin's `displayName` as the
+ * (bold) pick target and the workspace name muted beneath it. A row whose `admin` is null (the admin row is
+ * gone) still shows the workspace name as the pick target. The emitted value stays the workspace id — the page's
+ * `?workspaceId=` scope is unchanged (A11).
  */
 import type { PerfNow, PerfResults, PerfWorkspaceRow } from '#shared/types/report-performance'
 
@@ -79,8 +85,9 @@ const shown = computed(() => {
   const items = props.rows.map(row => ({ row, values: valuesOf(row, row.now), idle: isIdle(row) }))
   const key = sort.col.value
   items.sort((a, b) => {
-    const av = key === 'name' ? (a.row.workspace.name ?? '') : a.values[key]
-    const bv = key === 'name' ? (b.row.workspace.name ?? '') : b.values[key]
+    // FEAT-090 — the first column is the person, so sorting it sorts by the owner's name (workspace as fallback)
+    const av = key === 'name' ? (a.row.admin?.displayName ?? a.row.workspace.name ?? '') : a.values[key]
+    const bv = key === 'name' ? (b.row.admin?.displayName ?? b.row.workspace.name ?? '') : b.values[key]
     return perfCompare(av, bv, sort.dir.value)
   })
   return [...items.filter(i => !i.idle), ...items.filter(i => i.idle)]
@@ -100,7 +107,7 @@ const footer = computed(() => valuesOf(props.results, {
         <tr class="border-b border-default">
           <ReportPerformanceSortTh
             testid="rf-workspace-sort-name"
-            label="Workspace / admin"
+            label="คน"
             :sort-state="sort.ariaSort('name')"
             sticky
             @sort="sort.toggle('name')"
@@ -129,15 +136,18 @@ const footer = computed(() => valuesOf(props.results, {
           :data-idle="item.idle ? 'true' : 'false'"
         >
           <td class="sticky left-0 z-[1] bg-default px-3 py-2">
+            <!-- FEAT-090 — the person first (bold), their workspace beneath; the pick is still the workspace id -->
             <button
               type="button"
-              class="font-medium text-primary hover:underline"
+              class="block max-w-56 truncate text-left font-semibold text-primary hover:underline"
               data-testid="rf-workspace-pick"
               @click="$emit('pick', item.row.workspace.id)"
             >
-              {{ item.row.workspace.name ?? item.row.workspace.id }}
+              {{ item.row.admin?.displayName ?? item.row.workspace.name ?? item.row.workspace.id }}
             </button>
-            <span v-if="item.row.admin?.displayName" class="ml-2 text-xs text-muted">{{ item.row.admin.displayName }}</span>
+            <div class="max-w-56 truncate text-xs text-muted" data-testid="rf-workspace-name">
+              {{ item.row.workspace.name ?? item.row.workspace.id }}
+            </div>
             <div v-if="item.row.sharedUtms > 0" class="text-xs text-warning">
               ⚠ ใช้ UTM ร่วมกับ {{ item.row.sharedWith.map(ws => ws.name ?? ws.id).join(', ') }}
             </div>

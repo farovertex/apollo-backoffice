@@ -7,6 +7,10 @@
  * FEAT-084 — spend is THB (`MoneyCell total` + raw `THB x + USD y` sub), Dep/Budget from that THB spend (the API's
  * `metrics.spend`); the Balance cell keeps the per-currency list as its sub line under the workspace's
  * `now.balanceThb` ("≈ ฿" when estimated; the list alone when the API has no `balanceThb`).
+ *
+ * FEAT-090 — the UTM numbers of a row are the numbers of the UTM keys its **owner admin** owns, so the first
+ * column is the person: header `คน`, the admin's `displayName` bold, the workspace name muted beneath (the same
+ * change as the performance table). The emitted pick is still the workspace id.
  */
 import type { DashboardFunnel, DashboardWorkspaceRow } from '#shared/types/report-dashboard'
 
@@ -61,7 +65,7 @@ const HEADERS: { label: string, key?: string }[] = [
       <thead>
         <tr class="border-b border-default">
           <th scope="col" class="sticky left-0 z-[2] bg-elevated px-3 py-2 text-left text-xs font-medium text-muted uppercase">
-            Workspace / admin
+            คน
           </th>
           <th
             v-for="h in HEADERS"
@@ -86,10 +90,17 @@ const HEADERS: { label: string, key?: string }[] = [
           :data-id="row.workspace.id"
         >
           <td class="sticky left-0 z-[1] bg-default px-3 py-2">
-            <button type="button" class="font-medium text-primary hover:underline" @click="$emit('pick', row.workspace.id)">
-              {{ row.workspace.name ?? row.workspace.id }}
+            <!-- FEAT-090 — the person first (bold), their workspace muted beneath; the pick stays the workspace id -->
+            <button
+              type="button"
+              class="block max-w-56 truncate text-left font-semibold text-primary hover:underline"
+              @click="$emit('pick', row.workspace.id)"
+            >
+              {{ row.admin?.displayName ?? row.workspace.name ?? row.workspace.id }}
             </button>
-            <span v-if="row.admin?.displayName" class="ml-2 text-xs text-muted">{{ row.admin.displayName }}</span>
+            <div class="max-w-56 truncate text-xs text-muted" data-testid="rd-workspace-name">
+              {{ row.workspace.name ?? row.workspace.id }}
+            </div>
           </td>
           <td class="px-3 py-2 text-right">
             <MoneyCell

@@ -67,6 +67,11 @@
  * `adt-empty-creator` (another creator), both with `adt-show-all` to fall back to `Everyone`. After a create
  * or duplicate, a filter on another creator switches to **me** before the single `reload(1)` (the new row is
  * always the caller's own); `all` / `me` keep the filter, like edit / delete / UTM-sync.
+ *
+ * **FEAT-090** (api-contract v1 §2.3 · spec "UI behaviour" §1, AC-14): the UTM cell carries the owner of the
+ * row's UTM key underneath its summary — `adt-row-utm-owner` (`utmOwner.displayName`), rendered only when the
+ * view's new key is non-null (no UTM / a key with no owner row / a deleted admin → nothing). Read-only: a key
+ * is moved on the GOD page `/settings/utm-keys`, never here, and there is no new filter.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -824,7 +829,22 @@ function onDeleted() {
                   <span class="line-clamp-2 max-w-56" :title="ctaCell(template)" data-testid="adt-cta">{{ ctaCell(template) }}</span>
                 </td>
                 <td class="border-b border-default px-3 py-2">
-                  <span class="line-clamp-2 max-w-40" :title="utmCell(template)" data-testid="adt-utm">{{ utmCell(template) }}</span>
+                  <div class="flex max-w-40 flex-col items-start gap-1">
+                    <span class="line-clamp-2" :title="utmCell(template)" data-testid="adt-utm">{{ utmCell(template) }}</span>
+                    <!-- FEAT-090 — who owns this UTM key (read-only; moved on Settings → UTM keys) -->
+                    <UBadge
+                      v-if="template.utmOwner"
+                      :label="template.utmOwner.displayName"
+                      color="neutral"
+                      variant="subtle"
+                      size="sm"
+                      icon="i-lucide-user"
+                      class="max-w-full"
+                      :title="`เจ้าของ UTM: ${template.utmOwner.displayName}`"
+                      :data-owner-id="template.utmOwner.id"
+                      data-testid="adt-row-utm-owner"
+                    />
+                  </div>
                 </td>
                 <td class="border-b border-default px-2 py-2">
                   <!-- stacked: the badge under the version keeps the column inside the 1440 table width -->

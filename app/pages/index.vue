@@ -233,7 +233,7 @@ const pageState = computed(() => {
 
             <section v-if="isGod" class="flex min-w-0 flex-col gap-2">
               <h2 class="text-sm font-semibold text-highlighted">
-                แยกตาม workspace
+                แยกตามคน
               </h2>
               <ReportDashboardWorkspaceTable
                 :rows="report.byWorkspace"

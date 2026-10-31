@@ -10,9 +10,11 @@
  * `fetchedAt` / `sourceUpdatedAt` / `refreshedAt` are ISO instants.
  */
 import type { FxReportBlock, SpendFx, SpendFxRow } from './fx'
+import type { UtmOwnerRef } from './utm-keys'
 
 /** One row of `GET /reports/utm` — exactly these 19 keys (contract §2.2; `detail` is never served). */
 /** FEAT-084 — `spend` / `costPerDeposit` are THB; + 3 keys (22) */
+/** FEAT-090 — + `owner` **last** (23): the admin who owns the row's UTM key (api-contract v1 §5.1) */
 export interface UtmReportRow extends SpendFxRow {
   /** `YYYY-MM-DD`, Thai day */
   day: string
@@ -41,6 +43,11 @@ export interface UtmReportRow extends SpendFxRow {
   sourceUpdatedAt: string | null
   /** ISO — when the job wrote the fact */
   fetchedAt: string
+  /**
+   * FEAT-090 — the owner of this UTM key (`utmKeys.ownerAdminId` → `admins.displayName`), `null` only for a key
+   * that has no `utmKeys` row (GOD-only sight). An Admin only ever receives rows of keys they own.
+   */
+  owner: UtmOwnerRef | null
 }
 
 /** `totals` of the envelope — exactly these 8 keys, over every matching row **before** `limit` (contract §2.2). */

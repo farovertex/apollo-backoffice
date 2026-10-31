@@ -150,11 +150,26 @@
  *    the current state with the labels `/options` serves (never a hard-coded enum label). ★ It never carries a
  *    secret: the `identity` summary only says *whether* a Spark code is bound
  *    (`ผูกโพสต์ด้วยรหัสแล้ว` / `ยังไม่ได้ใส่รหัส`), never the code, its mask or its last 4 characters.
+ *
+ * FEAT-090 (api-contract.md v1 §2.1 / §2.3 / §7, spec "UI behaviour" §1) — a UTM key belongs to exactly one
+ * admin. Three additions, all inside the UTM section:
+ * 1. `options.utmPrefixes` is now per caller (an Admin only gets the prefixes they manage), so the empty line
+ *    `adt-utm-no-prefixes` reads `คุณยังไม่ได้ดูแล prefix ใด — ติดต่อ GOD` for an Admin — without the settings
+ *    link, which is GOD-only. A GOD keeps the old sentence and the link.
+ * 2. **GOD only**, while the switch is on: `adt-utm-owner` (`USelect` over one `GET /admins` per modal open,
+ *    non-deleted rows) + `adt-utm-owner-help`. Default = the row's `utmOwner` (edit / duplicate) else the GOD
+ *    themself. It is sent as the **top-level** body key `utmOwnerAdminId` (never inside `config`, which is
+ *    copied verbatim into orders) and only when the body really carries a non-null `config.utm`. An Admin never
+ *    sends it.
+ * 3. Error routing: 400 at `config.utm` (`UTM ชุดนี้ถูกใช้โดย … อยู่แล้ว — เปลี่ยน campaign`) keeps using the
+ *    existing section place `adt-utm-error`; 400 at `config.utm.prefix` (`คุณไม่ได้ดูแล prefix นี้`) the prefix
+ *    field; 400 at `utmOwnerAdminId` **and** the 404 `ไม่พบ admin` the owner select.
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
 import type { Form, FormErrorEvent, FormSubmitEvent, ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
+import type { AdminsResponse } from '#shared/types/admins'
 import { ctaValuesFrom } from '~/utils/ad-cta'
 import { UTM_NAME_MAX_LENGTH, UTM_PREFIX_MAX_LENGTH, parseUtm } from '~/utils/utm'
 import {
@@ -280,6 +295,19 @@ const UTM_MESSAGES = {
   gatewayFallback: 'ตรวจ UTM กับระบบปลายทางไม่ได้ — ลองใหม่อีกครั้ง'
 } as const
 
+// ── FEAT-090 UTM key owner (api-contract v1 §2.1, §2.3, spec "UI behaviour" §1) ──────────────────────────────────────
+/** the texts of the UTM key owner block; `adminNotFound` is the API's own 404 text (`UTM_KEY_MESSAGES`) */
+const UTM_OWNER_TEXT = {
+  label: 'เจ้าของ UTM',
+  help: 'เจ้าของ UTM ชุดนี้ (ใช้คำนวณรายงาน) — ตั้งได้เฉพาะตอนจอง key ใหม่ · key ที่มีเจ้าของแล้วย้ายได้ที่ Settings → UTM keys',
+  /** `GET /admins` failed — the select keeps the preselected owner, the save still works */
+  loadFailed: 'โหลดรายชื่อ admin ไม่สำเร็จ',
+  adminNotFound: 'ไม่พบ admin'
+} as const
+/** an Admin who manages no prefix cannot bind anything — and has nobody to click (no settings page for them) */
+const UTM_NO_PREFIX_ADMIN = 'คุณยังไม่ได้ดูแล prefix ใด — ติดต่อ GOD'
+const UTM_NO_PREFIX_GOD = 'ยังไม่ตั้งรายการ Prefix'
+
 // ── form state (mirrors the API body; every enum is a plain string so an unknown option value still renders) ─────────
 interface ConfigState {
   adNamePrefix: string
@@ -347,6 +375,13 @@ interface FormState {
   name: string
   description: string
   config: ConfigState
+  /**
+   * FEAT-090 — the UTM key owner the **GOD** picked (`''` = nobody picked yet → the API defaults to the caller).
+   * Part of the form state (not a bare ref) so an edit of it clears the server errors like every other field;
+   * it is a **top-level** body key, never part of `config` (api-contract §2.1, A7), and it is only ever sent by
+   * a GOD together with a non-null `config.utm`.
+   */
+  utmOwnerAdminId: string
 }
 
 // ── tri-state consent (`inherit ↔ null`, `on ↔ true`, `off ↔ false` — spec A4) ──────────────────────────────────────
@@ -493,7 +528,9 @@ function stateFrom(template: AdTemplate | null): FormState {
   return {
     name: source ? (duplicate ? `${source.name} (copy)` : source.name) : '',
     description: source?.description ?? '',
-    config: configStateFrom(config, source?.addOnImage ?? null, source?.buttonImage ?? null)
+    config: configStateFrom(config, source?.addOnImage ?? null, source?.buttonImage ?? null),
+    // FEAT-090 (spec §1) — the row's own owner when it has one (edit / duplicate), else the GOD themself
+    utmOwnerAdminId: source?.utmOwner?.id ?? admin.value?.id ?? ''
   }
 }
 
@@ -889,6 +926,68 @@ const utmPrefixItems = computed<string[]>(() => {
 /** no prefix has been set up yet → the select has nothing to offer (GOD gets the link to the settings page) */
 const noUtmPrefixes = computed(() => utmPrefixItems.value.length === 0)
 
+/**
+ * FEAT-090 (spec §1) — `options.utmPrefixes` is now per caller: an **Admin** only gets the active prefixes they
+ * manage (`prefixes.adminIds`), so an empty list for them does not mean "nothing is set up" but "you manage
+ * none" — and there is nothing they could click (the settings page is GOD-only). A GOD keeps the old sentence
+ * and the link.
+ */
+const noUtmPrefixesText = computed(() => (isGod.value ? UTM_NO_PREFIX_GOD : UTM_NO_PREFIX_ADMIN))
+
+// ── FEAT-090 · the UTM key owner (GOD only) ─────────────────────────────────────────────────────────────────────────
+interface OwnerItem { value: string, label: string }
+
+/** the admins `GET /admins` served (GOD-only endpoint), non-deleted, one request per modal open */
+const ownerAdmins = ref<OwnerItem[]>([])
+const ownerAdminsPending = ref(false)
+const ownerAdminsError = ref<string | null>(null)
+let ownerAdminsSeq = 0
+
+async function loadOwnerAdmins() {
+  const seq = ++ownerAdminsSeq
+  ownerAdminsPending.value = true
+  ownerAdminsError.value = null
+  try {
+    // retry: 0 — exactly one GET per open
+    const res = await api<AdminsResponse>('/admins', { retry: 0 })
+    if (seq !== ownerAdminsSeq) return
+    ownerAdmins.value = (res.admins ?? [])
+      .filter(a => a.status !== 'deleted')
+      .map(a => ({ value: a.id, label: a.displayName }))
+  } catch (e) {
+    if (seq !== ownerAdminsSeq) return
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    ownerAdmins.value = []
+    ownerAdminsError.value = err.data?.error ?? err.message ?? UTM_OWNER_TEXT.loadFailed
+  } finally {
+    if (seq === ownerAdminsSeq) ownerAdminsPending.value = false
+  }
+}
+
+function resetOwnerAdmins() {
+  ownerAdminsSeq++
+  ownerAdmins.value = []
+  ownerAdminsPending.value = false
+  ownerAdminsError.value = null
+}
+
+/**
+ * The items the select offers: whoever `GET /admins` served, plus the currently selected owner when that answer
+ * does not contain them (a deleted admin still owning a key, or a failed / pending request) — so the control
+ * never shows a bare id and a save never silently moves the key to the GOD.
+ */
+const ownerItems = computed<OwnerItem[]>(() => {
+  const picked = state.utmOwnerAdminId
+  if (!picked || ownerAdmins.value.some(a => a.value === picked)) return ownerAdmins.value
+  const name = sourceRow.value?.utmOwner?.id === picked
+    ? sourceRow.value.utmOwner.displayName
+    : (admin.value?.id === picked ? admin.value.displayName : picked)
+  return [...ownerAdmins.value, { value: picked, label: name }]
+})
+
+/** the owner block is a GOD control and only matters while a UTM set is bound */
+const showUtmOwner = computed(() => isGod.value && state.config.utm.enabled)
+
 /** the three ids the API answered with, display-only; absent for a create and for an unbound / old template */
 const utmIds = computed(() => {
   const utm = editing.value?.config?.utm
@@ -1179,8 +1278,11 @@ watch(open, (isOpen) => {
     // the network refresh it also starts stays async and unaffected by the order.
     initPostInfo()
     resetForm()
+    // FEAT-090 (api-contract §7) — one `GET /admins` per open, GOD only (the endpoint is GOD-only)
+    if (isGod.value) void loadOwnerAdmins()
     return
   }
+  resetOwnerAdmins()
   stopPostPolling()
   postSession++
   postInfo.value = null
@@ -1290,6 +1392,8 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
   return z.object({
     name: z.string().trim().min(1, 'Name is required').max(100, 'Name must be at most 100 characters'),
     description: z.string().trim().max(500, 'Description must be at most 500 characters'),
+    // FEAT-090 — GOD-only top-level key; `''` means "do not send it" (the API then owns the key itself)
+    utmOwnerAdminId: z.string(),
     config: z.object({
       adNamePrefix: z.string().trim().max(100, 'Prefix must be at most 100 characters'),
       identity: z.object({
@@ -1584,6 +1688,18 @@ function configFromState(): AdConfigRequest {
   }
 }
 
+/**
+ * FEAT-090 (api-contract §2.1 / §7) — `utmOwnerAdminId` travels **only** when the caller is a GOD and the body
+ * really carries a non-null `config.utm` (an Admin sending it gets 400 `utmOwnerGodOnly`, and a GOD sending it
+ * without UTM gets 400 `utmOwnerWithoutUtm`). An empty selection sends nothing: the API then owns the key for
+ * the GOD themself.
+ */
+function ownerIdToSend(utm: UtmRefBody | null | undefined): string | null {
+  if (!isGod.value || !utm) return null
+  const id = state.utmOwnerAdminId.trim()
+  return id === '' ? null : id
+}
+
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
@@ -1684,6 +1800,10 @@ function patchBodyFrom(original: AdTemplate, name: string, description: string |
   }
 
   if (hasConfigChange) body.config = changed
+  // FEAT-090 — only when this very PATCH re-states the UTM set (a save that leaves `utm` untouched never
+  // touches the key, so the owner has nothing to decide)
+  const owner = ownerIdToSend(changed.utm)
+  if (owner) body.utmOwnerAdminId = owner
   return body
 }
 
@@ -1695,6 +1815,8 @@ function patchBodyFrom(original: AdTemplate, name: string, description: string |
  */
 const FIELD_NAMES: ReadonlySet<string> = new Set([
   'name', 'description',
+  // FEAT-090 — the GOD-only owner select (400 `utmOwnerGodOnly` / `utmOwnerWithoutUtm`, and the 404 below)
+  'utmOwnerAdminId',
   'config.adNamePrefix',
   'config.identity.mode', 'config.identity.source',
   'config.identity.post.selection', 'config.identity.post.code',
@@ -1786,6 +1908,13 @@ function showApiError(e: unknown, fallback: string) {
   // 409 duplicate name → always at the name field
   if (status === 409) {
     serverErrors.value.name = data?.error ?? 'Name already used in this workspace'
+    return
+  }
+
+  // FEAT-090 — the API answers a **404** (not a zod issue) when the GOD named an unknown / deleted admin as
+  // the UTM key owner: that is about the owner select, not about the form as a whole (api-contract §2.1 step 5)
+  if (status === 404 && data?.error === UTM_OWNER_TEXT.adminNotFound) {
+    serverErrors.value.utmOwnerAdminId = data.error
     return
   }
 
@@ -1920,7 +2049,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   }
 
   // create always sends the complete 6-key config and never `catalogVersion` (the API stamps it)
-  const body: CreateAdTemplateBody = { name, description, config: configFromState() }
+  const config = configFromState()
+  const body: CreateAdTemplateBody = { name, description, config }
+  // FEAT-090 — GOD only, and only with a bound UTM set (api-contract §2.1 steps 0/1)
+  const ownerId = ownerIdToSend(config.utm)
+  if (ownerId) body.utmOwnerAdminId = ownerId
   // FEAT-057 — one single POST for a duplicate too; `duplicateOf` is the only extra key (api-contract §5), and
   // it is what lets `config.identity.post` be the bare `{ selection: 'authCode' }` while the keep hint is shown
   // (§5.1: the API copies the source's secret code — the BO never sees it)
@@ -2092,7 +2225,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               class="flex flex-wrap items-center gap-1 text-xs text-muted"
               data-testid="adt-utm-no-prefixes"
             >
-              <span>ยังไม่ตั้งรายการ Prefix</span>
+              <!-- FEAT-090 — an Admin reads "you manage no prefix" and has no page to go to; a GOD keeps the link -->
+              <span>{{ noUtmPrefixesText }}</span>
               <!-- only a GOD can maintain the list · FEAT-076: managed on /settings/prefixes (utm is read-only) -->
               <NuxtLink
                 v-if="isGod"
@@ -2186,6 +2320,37 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                     data-testid="adt-utm-campaign"
                   />
                 </UFormField>
+              </div>
+
+              <!--
+                FEAT-090 — GOD only: who owns the UTM key this save claims. A new key is booked for the chosen
+                admin (reports then count its sign-ups / deposits for them); a key that already has an owner
+                keeps it (the API answers `utmInUse` when they differ) and is moved on Settings → UTM keys.
+              -->
+              <div v-if="showUtmOwner" class="grid gap-4 sm:grid-cols-2">
+                <UFormField
+                  :label="UTM_OWNER_TEXT.label"
+                  name="utmOwnerAdminId"
+                  :error="serverErrors['utmOwnerAdminId']"
+                >
+                  <USelect
+                    v-model="state.utmOwnerAdminId"
+                    :items="ownerItems"
+                    value-key="value"
+                    :loading="ownerAdminsPending"
+                    :placeholder="ownerAdminsPending ? 'กำลังโหลด admin…' : '— เลือกเจ้าของ —'"
+                    icon="i-lucide-user"
+                    class="w-full"
+                    :disabled="submitting"
+                    data-testid="adt-utm-owner"
+                  />
+                  <template v-if="ownerAdminsError" #hint>
+                    <span class="text-error" data-testid="adt-utm-owner-admins-error">{{ ownerAdminsError }}</span>
+                  </template>
+                </UFormField>
+                <p class="self-center text-xs text-muted" data-testid="adt-utm-owner-help">
+                  {{ UTM_OWNER_TEXT.help }}
+                </p>
               </div>
 
               <!-- display-only: the ids the API got from the UTM system on the last successful save -->

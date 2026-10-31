@@ -12,13 +12,17 @@
  * FEAT-076 — third tab `Prefixes` (`/settings/prefixes`, GOD + Admin; an Admin sees only that tab).
  * FEAT-077 — fourth tab `Telegram` (`/settings/telegram`, GOD only, after `Prefixes`).
  * FEAT-086 — tab `กฎปิด ad group` (`/settings/ad-group-guard`, GOD + Admin like `Prefixes`, right after it).
+ * FEAT-090 — GOD-only tab `UTM keys` (`/settings/utm-keys`, one key = one owner) directly after `Prefixes`;
+ * an Admin does not see it (`utm-keys-access` sends them back to `Prefixes`). Its table is as wide as the
+ * prefixes one, so it shares the wide body.
  */
 import type { NavigationMenuItem } from '@nuxt/ui'
 
 const { admin } = useAuth()
 const route = useRoute()
 // FEAT-076 — the Prefixes table has 7 columns; it gets a wider column than the form-style tabs
-const wide = computed(() => route.path.startsWith('/settings/prefixes'))
+// FEAT-090 — the UTM-keys table has 9 columns; same wide body as the prefixes table
+const wide = computed(() => route.path.startsWith('/settings/prefixes') || route.path.startsWith('/settings/utm-keys'))
 
 const isGod = computed(() => admin.value?.roles?.includes('GOD') === true)
 const isAdmin = computed(() => admin.value?.roles?.includes('Admin') === true)
@@ -43,7 +47,16 @@ const links = computed<NavigationMenuItem[][]>(() => [[...(isGod.value
       label: 'Prefixes',
       icon: 'i-lucide-tag',
       to: '/settings/prefixes'
-    }, {
+    }]
+  : []), ...(isGod.value
+  ? [{
+      // FEAT-090 — one UTM key = one owner admin; GOD moves a key here (`utm-keys-access`)
+      label: 'UTM keys',
+      icon: 'i-lucide-key-round',
+      to: '/settings/utm-keys'
+    }]
+  : []), ...(isGod.value || isAdmin.value
+  ? [{
       // FEAT-086 — GOD (master switch + every workspace) and Admin (own workspace rules), `prefixes-access`
       label: 'กฎปิด ad group',
       icon: 'i-lucide-shield-alert',

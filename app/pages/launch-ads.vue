@@ -122,6 +122,17 @@
  * the confirm modal gets the same text as `adGroupGuardText` (null when nothing would be guarded).
  * The page has no draft/publish state of its own (the mode is the button pressed), so the line is always shown and
  * says it applies to Create & publish only; Save as draft never sends the key.
+ *
+ * FEAT-090 (api-contract.md v1 §4 / §7, spec "UI behaviour" §2, A9) — a UTM key has exactly one owner admin and
+ * the API refuses an order whose template key is owned by somebody else than the owner of each target account's
+ * workspace. The template scope therefore follows the **selection**, for every role:
+ * `templateWorkspaceIds` = the distinct `workspace.id` of the selected accounts (`selectedWorkspaceIds`), sent as
+ * `workspaceIds` on the two list requests and re-sent on every selection change (the FEAT-073 session /
+ * clear-the-selection machinery is unchanged). Nothing selected → **no** template request at all and the single
+ * line `la-tpl-none` above both pickers (their own empty texts stay silent); a selection spanning more than one
+ * workspace → the non-blocking warning `la-ws-mixed`. A 400 `issues[].path === 'adTemplateId'` now lands under
+ * the ad-template picker (`la-adt-error`, verbatim) instead of the shared `la-template-field-error`, which keeps
+ * serving `adGroupTemplateId` (FEAT-061 AC-20).
  */
 import { formatTimeAgo, useLocalStorage } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -158,7 +169,6 @@ const FALLBACK_MAX_COPIES = 8
 
 const api = useApi()
 const toast = useToast()
-const auth = useAuth()
 
 // ── step 1 · targets ─────────────────────────────────────────────────────────────────────────────────────────────────
 const accounts = ref<LaunchAccount[]>([])
@@ -356,51 +366,53 @@ function workspaceLabel(id: string): string {
 }
 
 /**
- * FEAT-073 (api-contract.md v1 §2, spec "Template scope") — scope the step-2 template lists follow, derived
- * from the caller's role and the step-1 `workspaceFilter` (the same select that already filters the accounts
- * client-side). `isGod` / `accessible` mirror the pattern of `ad-templates.vue`'s Created-by filter.
+ * FEAT-090 (spec "UI behaviour" §2, A9) — the scope is **the selection**, for every role: the distinct
+ * `workspaceId` of the accounts picked in step 1. A UTM key belongs to one admin and the API refuses an order
+ * whose template key is owned by somebody other than the owner of each target account's workspace, so offering
+ * another workspace's templates could only end in a 400. `undefined` (nothing selected) means: no request at
+ * all and the `la-tpl-none` line in both pickers. For an Admin this is a subset of what FEAT-073 sent
+ * (`ctx.workspaceIds`), so nothing they could legally launch disappears.
  */
-const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
-const accessibleWorkspaceIds = computed<string[]>(
-  () => auth.context.value?.workspaceIds ?? (auth.admin.value?.homeWorkspaceId ? [auth.admin.value.homeWorkspaceId] : [])
-)
-
-/** `string[] | undefined` sent as `workspaceIds` on the two list requests — `undefined` omits the key */
 const templateWorkspaceIds = computed<string[] | undefined>(() => {
-  if (workspaceFilter.value !== 'all') return [workspaceFilter.value]
-  if (isGod.value) return undefined
-  return accessibleWorkspaceIds.value.length > 0 ? accessibleWorkspaceIds.value : undefined
+  const ids = selectedWorkspaceIds.value
+  return ids.length > 0 ? ids : undefined
 })
 /** joined once so the re-fetch watcher below has a single primitive to compare */
 const templateWorkspaceIdsKey = computed(() => templateWorkspaceIds.value?.join(',') ?? '')
 
-const templateScopeKind = computed<'none' | 'one' | 'mine'>(() => {
-  if (workspaceFilter.value !== 'all') return 'one'
-  if (isGod.value) return 'none'
-  const n = accessibleWorkspaceIds.value.length
+type TemplateScopeKind = 'none' | 'one' | 'many'
+
+const templateScopeKind = computed<TemplateScopeKind>(() => {
+  const n = selectedWorkspaceIds.value.length
   if (n === 0) return 'none'
-  return n === 1 ? 'one' : 'mine'
+  return n === 1 ? 'one' : 'many'
 })
 
-/** `la-tpl-scope` text — `null` hides the element (`none`) */
+/** nothing selected → the pickers say so (`la-tpl-none`) and no template request is sent */
+const TPL_NONE_TEXT = 'เลือกบัญชีก่อน แล้วรายการ template ของเจ้าของบัญชีจะแสดง'
+/** FEAT-090 — the selection spans more than one workspace: a UTM template can only work for one owner */
+const WS_MIXED_TEXT = 'บัญชีที่เลือกอยู่คนละ workspace — template ที่มี UTM ใช้ได้กับบัญชีของเจ้าของ template เท่านั้น'
+
+const showTemplateNone = computed(() => templateScopeKind.value === 'none')
+const showWorkspaceMixed = computed(() => selectedWorkspaceIds.value.length > 1)
+
+/** `la-tpl-scope` text — `null` hides the element (nothing selected) */
 const templateScopeLine = computed<string | null>(() => {
-  if (templateScopeKind.value === 'mine') return 'Templates of your workspaces'
-  if (templateScopeKind.value === 'one') {
-    const id = workspaceFilter.value !== 'all' ? workspaceFilter.value : accessibleWorkspaceIds.value[0]
-    return id ? `Templates of ${workspaceLabel(id)}` : null
-  }
-  return null
+  const ids = selectedWorkspaceIds.value
+  if (ids.length === 0) return null
+  if (ids.length === 1) return `Templates of ${workspaceLabel(ids[0] as string)}`
+  return `Templates of ${ids.length} workspaces: ${ids.map(id => workspaceLabel(id)).join(', ')}`
 })
 
-const AGT_EMPTY_TEXT: Record<'none' | 'one' | 'mine', string> = {
+const AGT_EMPTY_TEXT: Record<TemplateScopeKind, string> = {
   none: 'No ad group template yet — create one under Ad group templates first.',
   one: 'No ad group template in this workspace yet — create one under Ad group templates first.',
-  mine: 'No ad group template in your workspaces yet — create one under Ad group templates first.'
+  many: 'No ad group template in the selected accounts’ workspaces yet — create one under Ad group templates first.'
 }
-const ADT_EMPTY_TEXT: Record<'none' | 'one' | 'mine', string> = {
+const ADT_EMPTY_TEXT: Record<TemplateScopeKind, string> = {
   none: 'No ad template yet — create one under Ad templates first.',
   one: 'No ad template in this workspace yet — create one under Ad templates first.',
-  mine: 'No ad template in your workspaces yet — create one under Ad templates first.'
+  many: 'No ad template in the selected accounts’ workspaces yet — create one under Ad templates first.'
 }
 const agtEmptyText = computed(() => AGT_EMPTY_TEXT[templateScopeKind.value])
 const adtEmptyText = computed(() => ADT_EMPTY_TEXT[templateScopeKind.value])
@@ -478,9 +490,14 @@ watch(idleOnly, (on) => {
 const selectedCount = computed(() => Object.keys(selection.value).length)
 /** target order = the order the API served the accounts in (the API keeps the body order) */
 const selectedAccounts = computed(() => availableAccounts.value.filter(a => selection.value[a.id]))
-const selectedWorkspaceCount = computed(
-  () => new Set(selectedAccounts.value.map(a => a.workspace?.id).filter(Boolean)).size
+/**
+ * FEAT-090 — the distinct workspaces of the selected accounts, in selection order. It is the template scope
+ * (`templateWorkspaceIds` above reads it) and it decides the mixed-workspace warning.
+ */
+const selectedWorkspaceIds = computed<string[]>(
+  () => [...new Set(selectedAccounts.value.map(a => a.workspace?.id).filter((id): id is string => !!id))]
 )
+const selectedWorkspaceCount = computed(() => selectedWorkspaceIds.value.length)
 
 function advertiserOf(account: LaunchAccount): LaunchAdvertiser | null {
   const id = selection.value[account.id] ?? computedDefaultId(account)
@@ -602,6 +619,12 @@ const adtOptions = ref<AdTemplateOptions | null>(null)
 const templatesPending = ref(false)
 const templatesError = ref<string | null>(null)
 const templateFieldError = ref<string | null>(null)
+/**
+ * FEAT-090 (spec §2) — a 400 whose issue path is `adTemplateId` is about the **ad template** (today: its UTM key
+ * belongs to another admin than the owner of a target account's workspace), so it is shown under that picker
+ * (`la-adt-error`) instead of in the shared alert above the two lists.
+ */
+const adTemplateError = ref<string | null>(null)
 let templatesRequested = false
 /** the `/options` pair is fetched exactly once per page lifetime (FEAT-016 AC-14) — never on a FEAT-073 re-fetch */
 let optionsLoaded = false
@@ -611,12 +634,25 @@ let templatesSession = 0
 
 async function loadTemplates() {
   const s = ++templatesSession
+  const ids = templateWorkspaceIds.value
+  // FEAT-090 (spec §2) — nothing selected = nothing to scope by: no request at all, the pickers show
+  // `la-tpl-none`, and whatever an earlier selection had loaded is dropped
+  if (!ids) {
+    agtItems.value = []
+    agtTotal.value = 0
+    adtItems.value = []
+    adtTotal.value = 0
+    adGroupTemplateId.value = null
+    adTemplateId.value = null
+    templatesPending.value = false
+    templatesError.value = null
+    return
+  }
   templatesPending.value = true
   templatesError.value = null
-  const ids = templateWorkspaceIds.value
   const query: Record<string, unknown> = { page: 1, limit: TEMPLATE_LIMIT }
-  // FEAT-073 (api-contract.md v1 §2) — the key is omitted entirely for a GOD on "All workspaces"
-  if (ids) query.workspaceIds = ids.join(',')
+  // FEAT-090 — the selected accounts' workspaces, for every role (FEAT-073 sent the workspace filter / scope)
+  query.workspaceIds = ids.join(',')
   const needOptions = !optionsLoaded
   try {
     // retry: 0 — two list requests every time, the two `/options` requests only on the first open
@@ -648,7 +684,10 @@ async function loadTemplates() {
       adTemplateId.value = null
       resetAny = true
     }
-    if (resetAny) templateFieldError.value = null
+    if (resetAny) {
+      templateFieldError.value = null
+      adTemplateError.value = null
+    }
   } catch (e) {
     if (s !== templatesSession) return
     const err = e as FetchError<Partial<ApiErrorBody>>
@@ -662,6 +701,9 @@ async function loadTemplates() {
 
 function ensureTemplates() {
   if (templatesRequested) return
+  // FEAT-090 — with no account selected there is nothing to request; the gate stays open so the first
+  // selection (or the next step-2 visit) still fetches
+  if (!templateWorkspaceIds.value) return
   templatesRequested = true
   void loadTemplates()
 }
@@ -674,6 +716,8 @@ function retryTemplates() {
 // FEAT-073 (spec "Re-fetch on scope change") — repeats the two list requests (not `/options`) once the lists
 // were requested at least once; a change made before step 2 was ever opened causes no request.
 watch(templateWorkspaceIdsKey, () => {
+  // FEAT-090 — a selection made while step 2 was never opened still causes no request (the step-2 gate does
+  // it); once the lists were requested at least once, every selection change re-scopes them
   if (!templatesRequested) return
   void loadTemplates()
 })
@@ -1165,18 +1209,25 @@ function onCurrencyUnknown(advertisers: CreateOrderCurrencyUnknownBody['advertis
 /** 400 — put every zod issue where the user can see it */
 function onValidationIssues(issues: NonNullable<ApiErrorBody['issues']>) {
   const nameIssue = issues.find(i => i.path === 'name')
-  const templateIssue = issues.find(i => i.path === 'adGroupTemplateId' || i.path === 'adTemplateId')
+  const groupIssue = issues.find(i => i.path === 'adGroupTemplateId')
+  // FEAT-090 — its own place under the ad-template picker (the UTM owner mismatch lands here)
+  const adIssue = issues.find(i => i.path === 'adTemplateId')
   if (nameIssue) {
     nameServerError.value = nameIssue.message
     step.value = 3
   }
-  if (templateIssue) {
-    templateFieldError.value = templateIssue.message
+  if (groupIssue) {
+    templateFieldError.value = groupIssue.message
     step.value = 2
     ensureTemplates()
   }
-  const rest = issues.filter(i => i !== nameIssue && i !== templateIssue)
-  if (rest.length > 0 || (!nameIssue && !templateIssue)) {
+  if (adIssue) {
+    adTemplateError.value = adIssue.message
+    step.value = 2
+    ensureTemplates()
+  }
+  const rest = issues.filter(i => i !== nameIssue && i !== groupIssue && i !== adIssue)
+  if (rest.length > 0 || (!nameIssue && !groupIssue && !adIssue)) {
     formError.value = issues.map(i => `${i.path}: ${i.message}`).join(' · ')
   }
 }
@@ -1187,6 +1238,7 @@ async function create(publishMode: PublishMode) {
   formError.value = null
   nameServerError.value = null
   templateFieldError.value = null
+  adTemplateError.value = null
   try {
     // retry: 0 — exactly one POST per click
     const res = await api<CreateOrderResponse>('/campaign-orders', {
@@ -1855,13 +1907,31 @@ onUnmounted(() => {
 
               <!-- step 2 · templates -->
               <div v-else-if="step === 2" class="flex flex-col gap-4">
-                <!-- FEAT-073 — scope line under the step title; absent for a GOD on "All workspaces" -->
+                <!-- FEAT-073 / FEAT-090 — scope line under the step title; absent while nothing is selected -->
                 <p
                   v-if="templateScopeLine"
                   class="text-xs text-muted"
                   data-testid="la-tpl-scope"
                 >
                   {{ templateScopeLine }}
+                </p>
+
+                <!-- FEAT-090 — non-blocking: the API decides, this only explains why a template may be refused -->
+                <UAlert
+                  v-if="showWorkspaceMixed"
+                  color="warning"
+                  variant="subtle"
+                  icon="i-lucide-triangle-alert"
+                  :description="WS_MIXED_TEXT"
+                  data-testid="la-ws-mixed"
+                />
+
+                <!--
+                  FEAT-090 — nothing selected in step 1: the two lists were never requested (the templates are
+                  the account owner's), so this one line speaks for both pickers below.
+                -->
+                <p v-if="showTemplateNone" class="text-sm text-muted" data-testid="la-tpl-none">
+                  {{ TPL_NONE_TEXT }}
                 </p>
 
                 <UAlert
@@ -1942,7 +2012,8 @@ onUnmounted(() => {
                   >
                     ซ่อน {{ agtCurrencyHidden }} template สกุลอื่น ({{ selectionCurrency }})
                   </p>
-                  <p v-if="!templatesPending && agtCurrencyItems.length === 0" class="text-sm text-muted" data-testid="la-agt-empty">
+                  <!-- FEAT-090 — while nothing is selected the single `la-tpl-none` line above speaks for both pickers -->
+                  <p v-if="!showTemplateNone && !templatesPending && agtCurrencyItems.length === 0" class="text-sm text-muted" data-testid="la-agt-empty">
                     {{ agtItems.length > 0 && selectionCurrency ? `ไม่มี template สกุล ${selectionCurrency}` : agtEmptyText }}
                   </p>
                   <!-- exactly 5 rows (5 × 52 px + the frame's own 2 px borders), the rest scrolls (AC-13) -->
@@ -2116,7 +2187,17 @@ onUnmounted(() => {
                       data-testid="la-adt-search"
                     />
                   </div>
-                  <p v-if="!templatesPending && adtItems.length === 0" class="text-sm text-muted" data-testid="la-adt-empty">
+                  <!-- FEAT-090 — the ad-template picker's own refusal (its UTM key belongs to another admin) -->
+                  <UAlert
+                    v-if="adTemplateError"
+                    color="error"
+                    variant="subtle"
+                    icon="i-lucide-triangle-alert"
+                    :description="adTemplateError"
+                    role="alert"
+                    data-testid="la-adt-error"
+                  />
+                  <p v-if="!showTemplateNone && !templatesPending && adtItems.length === 0" class="text-sm text-muted" data-testid="la-adt-empty">
                     {{ adtEmptyText }}
                   </p>
                   <!--

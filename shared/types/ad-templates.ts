@@ -27,6 +27,8 @@
  * badge `adt-cta-image-badge` lives next to `adt-addon-badge` (`utils/ad-cta-image.ts`).
  */
 
+import type { UtmOwnerRef } from './utm-keys'
+
 /** One entry of an option list served by `GET /ad-templates/options`. */
 export interface OptionItem {
   value: string
@@ -422,6 +424,13 @@ export interface AdTemplate {
    * Edit, Sync UTM and Delete only for a row that carries `true`; every row can be duplicated.
    */
   canEdit: boolean
+  /**
+   * FEAT-090 (api-contract v1 §2.3) — the admin who owns this template's UTM key (join on read: the key of
+   * `config.utm` → `utmKeys.ownerAdminId` → `admins.displayName`). `null` when the template has no / an
+   * incomplete `config.utm`, when the key has no `utmKeys` row yet, or when the owner's admin row is gone.
+   * Read-only: the owner of an existing key is moved on `/settings/utm-keys`, never through this view.
+   */
+  utmOwner: UtmOwnerRef | null
   createdAt: string
   updatedAt: string
 }
@@ -529,6 +538,13 @@ export interface CreateAdTemplateBody {
    * as `duplicatedFrom`. Unknown id → 404 `ไม่พบ template`, nothing created.
    */
   duplicateOf?: string
+  /**
+   * FEAT-090 (api-contract v1 §2.1, §7) — **GOD only**, top-level (never inside `config`, which is copied
+   * verbatim into orders): the admin who shall own the UTM key this save claims. Sent only when the caller is a
+   * GOD **and** `config.utm` is non-null; an Admin never sends it (400 `utmOwnerAdminId ตั้งได้เฉพาะ GOD`).
+   * It only decides the owner of a **new** key — an existing key keeps its owner (400 `inUse` when they differ).
+   */
+  utmOwnerAdminId?: string
 }
 
 /**
@@ -542,6 +558,8 @@ export interface PatchAdTemplateBody {
   name?: string
   description?: string | null
   config?: Partial<AdConfigRequest>
+  /** FEAT-090 — same rule as on the create body: GOD only, and only together with a non-null `config.utm` */
+  utmOwnerAdminId?: string
 }
 
 /** `DELETE /ad-templates/:id` 200 body. */

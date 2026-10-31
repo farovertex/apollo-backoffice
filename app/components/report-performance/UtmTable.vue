@@ -5,6 +5,11 @@
  * FEAT-067's `UtmCell` — re-implemented here, not imported, the ads-monitor files belong to FEAT-068). A key
  * used by more than one workspace carries the "ใช้ร่วมกับ …" warning. Sorted by spend desc (nulls last) until a
  * header is clicked.
+ *
+ * FEAT-090 — a second non-numeric column `เจ้าของ` right after the UTM cell (`rf-table-utm-col-owner`): the admin
+ * who owns the key (`owner.displayName`, `—` when the API serves `null` — a key without an owner row, GOD only).
+ * The facts of the row count for that admin; `workspaces` / the shared warning keep listing every workspace that
+ * uses the key. The column is display-only (not sortable) and every existing test id stays as it was.
  */
 import type { PerfUtmRow } from '#shared/types/report-performance'
 import type { ReportRangeState } from '#shared/types/reports'
@@ -127,6 +132,17 @@ const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.
             sticky
             @sort="sort.toggle('utm')"
           />
+          <!-- FEAT-090 — display-only owner column; its "i" hint uses the same `rf-table-utm-col-*` help map -->
+          <th scope="col" class="bg-elevated p-0 text-xs font-medium text-muted" data-testid="rf-table-utm-col-owner">
+            <div class="flex items-center justify-start gap-1 px-3 py-2">
+              <span class="uppercase">เจ้าของ</span>
+              <ReportsInfoHint
+                id="rf-table-utm-col-owner"
+                :text="REPORT_HELP['rf-table-utm-col-owner']!"
+                class="shrink-0"
+              />
+            </div>
+          </th>
           <ReportPerformanceSortTh
             v-for="c in NUM_COLS"
             :key="c.key"
@@ -142,7 +158,7 @@ const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.
       </thead>
       <tbody>
         <tr v-if="rows.length === 0">
-          <td :colspan="NUM_COLS.length + 1" class="px-3 py-4 text-center text-sm text-muted">
+          <td :colspan="NUM_COLS.length + 2" class="px-3 py-4 text-center text-sm text-muted">
             ไม่มียอดจาก UTM ในช่วงนี้
           </td>
         </tr>
@@ -165,6 +181,13 @@ const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.
             <div v-if="sharedText(item.row)" class="truncate text-xs text-warning" data-testid="rf-utm-shared">
               ⚠ {{ sharedText(item.row) }}
             </div>
+          </td>
+          <td
+            class="max-w-40 truncate px-3 py-2"
+            :class="item.row.owner ? '' : 'text-dimmed'"
+            data-testid="rf-utm-owner"
+          >
+            {{ item.row.owner?.displayName ?? REPORT_DASH }}
           </td>
           <td
             v-for="c in NUM_COLS"
@@ -191,6 +214,8 @@ const footerUnconverted = computed(() => mergeUnconverted(props.rows.map(r => r.
           <td class="sticky left-0 z-[1] bg-elevated px-3 py-2">
             รวม {{ formatInt(rows.length) }} UTM
           </td>
+          <!-- FEAT-090 — the owner column has no total -->
+          <td class="px-3 py-2" />
           <td v-for="c in NUM_COLS" :key="c.key" class="px-3 py-2 text-right tabular-nums">
             <MoneyCell
               v-if="c.fmt === 'thb'"

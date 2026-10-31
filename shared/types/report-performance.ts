@@ -5,6 +5,7 @@
  */
 import type { FxReportBlock, SpendFx, SpendFxRow } from './fx'
 import type { ReportRangeInfo } from './reports'
+import type { UtmOwnerRef } from './utm-keys'
 
 /** `{ id, name }` of a workspace as it appears inside rows and lists */
 export interface PerfWorkspaceRef {
@@ -138,6 +139,12 @@ export interface PerfUtmRow extends SpendFxRow {
   sourceId: string
   mediumId: string
   campaignId: string
+  /**
+   * FEAT-090 (api-contract v1 §5.2) — the admin who owns this key; `null` for a key without a `utmKeys` row
+   * (GOD only). The facts of the row count for this admin — `workspaces` below still lists *every* workspace
+   * whose builds / templates use the key.
+   */
+  owner: UtmOwnerRef | null
   advertisers: number
   workspaces: PerfWorkspaceRef[]
   /** null when no ad carries the key (FEAT-040 rule) */

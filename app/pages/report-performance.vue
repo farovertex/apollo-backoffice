@@ -20,7 +20,8 @@ definePageMeta({ path: '/reports/performance' })
 const TABS: readonly PerfTab[] = ['day', 'workspace', 'utm', 'account']
 const TAB_LABEL: Record<PerfTab, string> = {
   day: 'รายวัน',
-  workspace: 'แยกตาม workspace',
+  // FEAT-090 — one workspace = one owner admin, and the UTM numbers are the **owner's** → the tab is about คน
+  workspace: 'แยกตามคน',
   utm: 'แยกตาม UTM',
   account: 'แยกตามบัญชี'
 }

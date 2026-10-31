@@ -49,6 +49,7 @@ export const REPORT_HELP: Record<string, string> = {
   'rf-table-workspace-col-accounts': 'TikTok account ของ workspace นี้ตอนนี้',
   'rf-table-workspace-col-banned': 'advertiser ของ workspace นี้ที่ถูกระงับอยู่ตอนนี้',
   'rf-table-workspace-col-launching': 'advertiser ของ workspace นี้ที่กำลังยิงโฆษณาตอนนี้',
+  'rf-table-utm-col-owner': 'เจ้าของ UTM key ชุดนี้ (หนึ่ง key = หนึ่งคน) — ยอดสมัคร/ฝากของ key นี้ถูกคิดให้คนนี้\nย้ายเจ้าของได้ที่ Settings → UTM keys · "—" = key ที่ยังไม่มีเจ้าของ',
   'rf-table-utm-col-advertisers': 'จำนวน advertiser ที่มีโฆษณาถือ UTM ชุดนี้ (ทุก workspace)',
   'rf-table-utm-col-spend': 'ค่าโฆษณาของโฆษณาทุกตัวที่ถือ UTM ชุดนี้ ทุก workspace ในช่วง\n"—" = ยังไม่มีโฆษณาจากระบบที่ถือ UTM นี้',
   'rf-table-utm-col-registers': 'คนสมัครของ UTM ชุดนี้จากระบบ UTM ในช่วง',

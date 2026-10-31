@@ -40,6 +40,12 @@
  * **export CSV** is a plain anchor at the Nitro proxy (`/backend/reports/utm.csv?…`), not a `fetch`: the
  * proxy forwards status, body and `content-type` but strips every other upstream header, so the API's
  * `content-disposition` never reaches the browser — the `download` attribute carries the file name instead.
+ *
+ * FEAT-090 (api-contract.md v1 §5.1 · spec "UI behaviour" §4) — a UTM key has exactly one owner admin and the
+ * **API** scopes the rows by it (an Admin only receives the keys they own; the old prefix rule is gone). The
+ * page only renders the new last row key: the column `เจ้าของ` (`ru-col-owner`) right after CAMPAIGN,
+ * `owner.displayName` or `—` for a key without an owner row (GOD only), plus the note sentence
+ * "Admin เห็นเฉพาะ UTM key ที่ตนเป็นเจ้าของ". The CSV is unchanged (no owner column, A6).
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
@@ -60,7 +66,8 @@ const PREFIX_ALL_LABEL = '— ทุก Prefix —'
 // FEAT-084 — the currency sentence ("หน่วยตามสกุลของ ad account ไม่ได้แปลงค่า") became the THB wording of the
 // response's `fx` (`fxReportCaption`, in `noteText`); the matching and timing sentences stay as they were
 const NOTE_HEAD = 'source, medium และ campaign ต้องพิมพ์ให้ตรงทุกตัวอักษร · Spend คือค่าโฆษณาของ ads ที่ระบบสร้างจาก template ที่ผูก UTM นี้ เป็น THB'
-const NOTE_TAIL = 'วันของ Spend ตัดตาม timezone ของ ad account (ตั้งเป็น Asia/Bangkok ทุกบัญชี) ส่วนยอดสมัครตัดเวลาไทย · "—" คือ UTM ที่ยังไม่มี ads จากระบบ'
+// FEAT-090 — the Admin scope is "the keys you own" (one key = one owner admin), so the note says so
+const NOTE_TAIL = 'วันของ Spend ตัดตาม timezone ของ ad account (ตั้งเป็น Asia/Bangkok ทุกบัญชี) ส่วนยอดสมัครตัดเวลาไทย · "—" คือ UTM ที่ยังไม่มี ads จากระบบ · Admin เห็นเฉพาะ UTM key ที่ตนเป็นเจ้าของ'
 const FORBIDDEN_TEXT = 'คุณไม่มีสิทธิ์ดูรายงานนี้'
 const LOAD_FALLBACK = 'โหลดรายงานไม่สำเร็จ'
 const REFRESH_FALLBACK = 'สั่งดึงยอดไม่สำเร็จ'
@@ -351,12 +358,14 @@ const footLabel = computed(() => {
     : `total ${formatInt(total.value)} rows`
 })
 
-const HEADERS: { label: string, numeric: boolean }[] = [
+const HEADERS: { label: string, numeric: boolean, testid?: string }[] = [
   { label: 'DAY', numeric: false },
   { label: 'PREFIX', numeric: false },
   { label: 'SOURCE', numeric: false },
   { label: 'MEDIUM', numeric: false },
   { label: 'CAMPAIGN', numeric: false },
+  // FEAT-090 — the owner of the row's UTM key (GOD and Admin alike; `—` for a key without an owner row)
+  { label: 'เจ้าของ', numeric: false, testid: 'ru-col-owner' },
   { label: 'TOTAL REGISTER', numeric: true },
   { label: 'TOTAL DEPOSIT', numeric: true },
   { label: 'AMOUNT DEPOSIT', numeric: true },
@@ -572,6 +581,7 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                     scope="col"
                     class="px-3 py-2 text-xs font-medium tracking-wide text-muted"
                     :class="header.numeric ? 'text-right' : 'text-left'"
+                    :data-testid="header.testid"
                   >
                     {{ header.label }}
                   </th>
@@ -601,6 +611,15 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                   </td>
                   <td class="px-3 py-2">
                     {{ row.campaign }}
+                  </td>
+                  <!-- FEAT-090 — the key's owner; an Admin only ever gets rows of keys they own -->
+                  <td
+                    class="px-3 py-2"
+                    :class="row.owner ? '' : 'text-muted'"
+                    data-testid="ru-owner"
+                    :data-owner="row.owner?.id ?? ''"
+                  >
+                    {{ row.owner?.displayName ?? REPORT_DASH }}
                   </td>
                   <td class="px-3 py-2 text-right tabular-nums">
                     {{ formatInt(row.registers) }}
@@ -664,7 +683,8 @@ function spendTitle(spendCurrency: string | null, adCount: number): string {
                   :data-total="total"
                   :data-shown="rows.length"
                 >
-                  <td class="px-3 py-2" colspan="5">
+                  <!-- FEAT-090 — one more non-numeric column (เจ้าของ) in front of the counters -->
+                  <td class="px-3 py-2" colspan="6">
                     {{ footLabel }}
                   </td>
                   <td class="px-3 py-2 text-right tabular-nums">
