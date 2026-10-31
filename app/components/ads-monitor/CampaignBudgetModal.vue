@@ -11,6 +11,13 @@
  *
  * `UModal`'s root is renderless, so `data-testid` is v-bound onto the rendered DialogContent element through
  * `content` (same trick as `DeleteModal.vue` / `BudgetModal.vue`).
+ *
+ * Deviation from contract §6's literal "`step 1`" (flagged to the Lead, bo.md T2): `UInputNumber`'s step/min
+ * snap the blurred value onto the grid `min + n*step` — with `min="0.01"` and `step="1"` that grid is
+ * `0.01, 1.01, 2.01, …`, so typing a whole number like "650" and blurring silently turned it into "650.01"
+ * (confirmed by hand), and any decimal the admin actually meant (e.g. "650.50") would have been rounded away
+ * to the nearest whole number first. `step="0.01"` (same value `BudgetModal.vue` already uses for the same
+ * kind of currency field) puts every 2-decimal amount exactly on the grid, so nothing gets silently changed.
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { MonitorRow } from '#shared/types/ads-monitor'
@@ -111,7 +118,7 @@ function confirm() {
             <UInputNumber
               v-model="amount"
               :min="AMOUNT_MIN"
-              :step="1"
+              :step="0.01"
               :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }"
               class="w-full"
               :disabled="saving"
