@@ -12,16 +12,27 @@
  *    `deletable.reason` as tooltip **and** `title` (the API's Thai sentence).
  *
  * `data-state` ( deleted · pending · error · ok · blocked ) is the one attribute QA needs to assert on.
+ *
+ * FEAT-093 — the same cell now renders on the ad-group / ad tabs too (`POST /ads-monitor/delete`, the bulk
+ * confirm modal with this one row). The campaign tab's behaviour is unchanged; only the aria-label and the
+ * `data-level` attribute follow `row.level`.
  */
 import type { MonitorRow } from '#shared/types/ads-monitor'
 
 const props = defineProps<{ row: MonitorRow }>()
 const emit = defineEmits<{ ask: [] }>()
 
+/** FEAT-093 — what the trash button is about to delete, per level (campaign keeps its old wording). */
+const LEVEL_NOUN: Record<MonitorRow['level'], string> = {
+  campaign: 'แคมเปญ',
+  adGroup: 'กลุ่มโฆษณา',
+  ad: 'โฆษณา'
+}
+
 const deleted = computed(() => typeof props.row.deletedAt === 'string' && props.row.deletedAt !== '')
 const pending = computed(() => (deleted.value ? null : props.row.deletePending ?? null))
 const failure = computed(() => (deleted.value || pending.value ? null : props.row.deleteError ?? null))
-/** a row without `deletable` (an older API, or a non-campaign level) can never be deleted from here */
+/** a row without `deletable` (an older API) can never be deleted from here */
 const deletable = computed(() => props.row.deletable ?? { ok: false, reason: null })
 const blockedReason = computed(() => (deletable.value.ok ? null : deletable.value.reason))
 
@@ -32,7 +43,7 @@ const state = computed(() => {
   return deletable.value.ok ? 'ok' : 'blocked'
 })
 
-const ariaLabel = computed(() => `ลบแคมเปญ ${props.row.name ?? props.row.id}`)
+const ariaLabel = computed(() => `ลบ${LEVEL_NOUN[props.row.level]} ${props.row.name ?? props.row.id}`)
 </script>
 
 <template>
@@ -40,6 +51,7 @@ const ariaLabel = computed(() => `ลบแคมเปญ ${props.row.name ?? p
     class="flex min-w-0 flex-col items-start gap-1"
     data-testid="am-delete"
     :data-id="row.id"
+    :data-level="row.level"
     :data-state="state"
   >
     <template v-if="deleted">

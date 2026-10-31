@@ -8,7 +8,7 @@
  * Currency is unknown system-wide (spec A8) — numbers are printed bare and the spend tile carries the caption
  * "สกุลเงินของบัญชี".
  */
-import type { MonitorStatusKey } from '#shared/types/ads-monitor'
+import type { MonitorRow, MonitorStatusKey } from '#shared/types/ads-monitor'
 import type { AdState, AdvertiserReportState, KpiMetrics, ReportError } from '#shared/types/reports'
 
 export const REPORT_DASH = '—'
@@ -183,6 +183,21 @@ export function levelColor(raw: string | null | undefined): ReportColor {
 export function last4(id: string | null | undefined): string {
   if (!id) return REPORT_DASH
   return id.length > 4 ? `…${id.slice(-4)}` : id
+}
+
+/**
+ * FEAT-093 — may this ad-group / ad row be ticked for a bulk delete? Mirrors `AdsMonitorDeleteCell`'s `ok`
+ * state (the BO never re-derives the rule): the API says it is deletable **and** it is not already pending or
+ * deleted. The last two are checked explicitly because the page's optimistic override after a 202 sets
+ * `deletePending` while `deletable` still reads `ok` from the previous response. The page and the table use
+ * this one predicate, so the header "select all on this page" and the per-row checkbox can never disagree.
+ */
+export function monitorRowSelectable(
+  row: Pick<MonitorRow, 'deletable' | 'deletePending' | 'deletedAt'>
+): boolean {
+  if (typeof row.deletedAt === 'string' && row.deletedAt !== '') return false
+  if (row.deletePending) return false
+  return row.deletable?.ok === true
 }
 
 /** Freshness of a row's last fetch: `ok` · `late` (older than 2 intervals) · `error` (the advertiser has one). */

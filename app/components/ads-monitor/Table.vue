@@ -81,6 +81,11 @@ const props = defineProps<{
   /** FEAT-084 — response-level raw breakdown of `totals.spend` (THB), for the Total row's sub line */
   spendByCurrency?: MoneyByCurrency
   spendUnconverted?: MoneyUnconverted
+  /**
+   * FEAT-093 — the rowKeys (`<level>:<id>`) ticked on the current page, owned by the page. A new `Set`
+   * instance on every change drives re-render. Only the ad-group / ad tabs render the checkbox column.
+   */
+  selected?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -98,11 +103,44 @@ const emit = defineEmits<{
   'filter-campaign': [campaignId: string]
   /** FEAT-082 — ad tab only: the row's `am-review-open` was pressed, the page opens the review drawer */
   'open-review': [row: MonitorRow]
+  /** FEAT-093 — ad-group / ad tabs: one row's checkbox toggled */
+  'select-row': [row: MonitorRow, value: boolean]
+  /** FEAT-093 — ad-group / ad tabs: the header "select all on this page" checkbox toggled */
+  'select-all': [value: boolean]
 }>()
 
 /** TASK-campaign-delete-ui — a deleted row stays in the list, dimmed (`deletedAt` is set on all three tabs). */
 function isDeleted(row: MonitorRow): boolean {
   return typeof row.deletedAt === 'string' && row.deletedAt !== ''
+}
+
+// ── FEAT-093 · multi-select (api-contract.md v1 §6; ad-group / ad tabs only) ─────────────────────────────────────────
+function rowKey(row: MonitorRow): string {
+  return `${row.level}:${row.id}`
+}
+
+function isSelected(row: MonitorRow): boolean {
+  return props.selected?.has(rowKey(row)) ?? false
+}
+
+/** which rows of the current page may be ticked — the one predicate shared with the page (`monitorRowSelectable`) */
+const selectableRows = computed(() => props.rows.filter(monitorRowSelectable))
+
+/** header checkbox: all selectable rows ticked → true, some → 'indeterminate' (aria-checked="mixed"), none → false */
+const selectAllState = computed<boolean | 'indeterminate'>(() => {
+  const selectable = selectableRows.value
+  if (selectable.length === 0) return false
+  const ticked = selectable.filter(isSelected).length
+  if (ticked === 0) return false
+  return ticked === selectable.length ? true : 'indeterminate'
+})
+
+/** disabled title of a row's checkbox: the API's reason when blocked, else a short state word (pending / deleted) */
+function selectTitle(row: MonitorRow): string | undefined {
+  if (row.deletable && !row.deletable.ok) return row.deletable.reason ?? undefined
+  if (row.deletePending) return 'กำลังลบ…'
+  if (isDeleted(row)) return 'ลบแล้ว'
+  return undefined
 }
 
 type Align = 'left' | 'right'
@@ -161,19 +199,25 @@ const COLUMNS: Record<MonitorLevel, Column[]> = {
     // TASK-campaign-delete-ui — campaign tab only, always the **last** column (nothing else moves)
     { key: 'delete', label: 'ลบ', align: 'left' }
   ],
+  // FEAT-093 — the ad-group / ad tabs gain a `select` checkbox as the FIRST column and a `delete` cell as the
+  // LAST column (the campaign tab above is untouched — it has no checkbox and keeps its own delete column).
   adGroup: [
+    { key: 'select', label: '', align: 'left' },
     ...HEAD,
     { key: 'campaign', label: 'แคมเปญ', align: 'left' },
     { key: 'budget', label: 'งบประมาณ', align: 'right' },
     { key: 'bid', label: 'Bid', align: 'left' },
     { key: 'schedule', label: 'ตารางเวลา', align: 'left' },
-    ...METRIC_COLUMNS
+    ...METRIC_COLUMNS,
+    { key: 'delete', label: 'ลบ', align: 'left' }
   ],
   ad: [
+    { key: 'select', label: '', align: 'left' },
     ...HEAD,
     { key: 'source', label: 'Source', align: 'left' },
     { key: 'adGroup', label: 'กลุ่มโฆษณา', align: 'left' },
-    ...METRIC_COLUMNS
+    ...METRIC_COLUMNS,
+    { key: 'delete', label: 'ลบ', align: 'left' }
   ]
 }
 
@@ -292,12 +336,22 @@ function scheduleText(row: MonitorRow): string {
             :class="[
               column.align === 'right' ? 'text-right' : 'text-left',
               index === 0 ? 'rounded-l-lg border-l' : '',
-              index === columns.length - 1 ? 'rounded-r-lg border-r' : ''
+              index === columns.length - 1 ? 'rounded-r-lg border-r' : '',
+              column.key === 'select' ? 'w-10' : ''
             ]"
             :data-field="column.key"
           >
+            <UCheckbox
+              v-if="column.key === 'select'"
+              :model-value="selectAllState"
+              :disabled="selectableRows.length === 0"
+              aria-label="เลือกทั้งหน้า"
+              title="เลือกทั้งหน้า"
+              data-testid="am-select-all"
+              @update:model-value="(v: boolean | 'indeterminate') => emit('select-all', v === true)"
+            />
             <button
-              v-if="column.key === 'name'"
+              v-else-if="column.key === 'name'"
               type="button"
               class="inline-flex items-center gap-1 font-semibold text-highlighted"
               data-testid="am-name-collapse"
@@ -345,8 +399,18 @@ function scheduleText(row: MonitorRow): string {
             :class="column.align === 'right' ? 'text-right tabular-nums' : ''"
             :data-field="column.key"
           >
+            <UCheckbox
+              v-if="column.key === 'select'"
+              :model-value="isSelected(row)"
+              :disabled="!monitorRowSelectable(row)"
+              :title="selectTitle(row)"
+              :aria-label="`เลือก ${row.name ?? row.id}`"
+              :data-testid="`am-select-${row.id}`"
+              @update:model-value="(v: boolean | 'indeterminate') => emit('select-row', row, v === true)"
+            />
+
             <MoneyCell
-              v-if="column.metric && moneyOf(row, column.metric)"
+              v-else-if="column.metric && moneyOf(row, column.metric)"
               v-bind="moneyOf(row, column.metric)!"
               :mode="mode ?? 'thb'"
               :data-testid="`am-row-${column.key}`"

@@ -60,6 +60,7 @@
 import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
 import type {
+  AdsDeleteAccepted,
   AdsMonitorResponse,
   BudgetPendingView,
   DeleteAccepted,
@@ -355,6 +356,8 @@ const queryKey = computed(() => JSON.stringify([
 ]))
 
 watch(queryKey, () => {
+  // FEAT-093 — selection is per tab/filter/page; any of those changing (all encoded in `queryKey`) drops it
+  clearSelection()
   void load()
 })
 
@@ -462,9 +465,18 @@ const deleteOpen = ref(false)
 const deleteRow = ref<MonitorRow | null>(null)
 const deleting = ref(false)
 
+/**
+ * FEAT-093 — the trash button of a row (campaign tab, or the per-row / retry button of the ad-group / ad tabs).
+ * The campaign level keeps its own single-row modal + `delete-campaign` request; the other two levels open the
+ * shared multi-select modal with just that one row (so the single-row and bulk paths are one code path).
+ */
 function askDelete(row: MonitorRow) {
-  deleteRow.value = row
-  deleteOpen.value = true
+  if (row.level === 'campaign') {
+    deleteRow.value = row
+    deleteOpen.value = true
+    return
+  }
+  askDeleteMany([row])
 }
 
 async function confirmDelete(row: MonitorRow) {
@@ -493,6 +505,122 @@ async function confirmDelete(row: MonitorRow) {
   } finally {
     deleting.value = false
     inFlight.delete(key)
+  }
+}
+
+// ── FEAT-093 · multi-select delete of ad groups / ads (`POST /ads-monitor/delete`, one job per advertiser) ──────────
+/**
+ * Ad-group and ad tabs only (the campaign tab has no checkbox). Selection is a `Set` of `rowKey`s of the
+ * current page, cleared on every tab switch / filter / page change (the `queryKey` watch) and after every
+ * confirm. The page and `AdsMonitorTable` share the one `monitorRowSelectable()` predicate, so the per-row
+ * checkbox and the header "select all on this page" can never disagree.
+ */
+const selected = ref<Set<string>>(new Set())
+
+function clearSelection() {
+  if (selected.value.size > 0) selected.value = new Set()
+}
+
+/** the ticked rows that are still on the page (stale keys from a Refresh are ignored) */
+const selectedRows = computed(() => rows.value.filter(row => selected.value.has(rowKey(row))))
+const selectionCount = computed(() => selectedRows.value.length)
+
+function onSelectRow(row: MonitorRow, value: boolean) {
+  const key = rowKey(row)
+  const next = new Set(selected.value)
+  if (value) next.add(key)
+  else next.delete(key)
+  selected.value = next
+}
+
+function onSelectAll(value: boolean) {
+  if (!value) {
+    clearSelection()
+    return
+  }
+  const next = new Set<string>()
+  for (const row of rows.value) if (monitorRowSelectable(row)) next.add(rowKey(row))
+  selected.value = next
+}
+
+/**
+ * The bulk confirm modal is the same `AdsMonitorDeleteModal` as the campaign tab, opened with the current tab's
+ * level and the rows to delete (one from a row's trash/retry button, many from the selection bar).
+ */
+const bulkOpen = ref(false)
+const bulkRows = ref<MonitorRow[]>([])
+const bulkLevel = ref<MonitorLevel>('adGroup')
+const bulkDeleting = ref(false)
+
+function askDeleteMany(rowsToDelete: MonitorRow[]) {
+  if (rowsToDelete.length === 0) return
+  bulkRows.value = [...rowsToDelete]
+  // the bar only exists on ad-group / ad tabs; a single-row open uses the row's own level
+  bulkLevel.value = rowsToDelete[0]!.level
+  bulkOpen.value = true
+}
+
+/**
+ * One `POST /ads-monitor/delete` per advertiser (sequential, ids in table order). 202 → lay `deletePending`
+ * over every row of that advertiser; 409 → `conflictToast` (queue position for `duplicate`) and continue;
+ * other → an error toast and continue. After the loop: close the modal, clear the selection, one `load()` when
+ * any advertiser answered 409, and a success toast counting the ids that were accepted.
+ */
+async function confirmDeleteMany(rowsToDelete: MonitorRow[]) {
+  if (rowsToDelete.length === 0 || bulkDeleting.value) return
+  const level = bulkLevel.value
+  if (level === 'campaign') return // guard — the campaign tab never reaches this path
+
+  bulkDeleting.value = true
+
+  // group by advertiser, keeping the rows in the order they were selected (= table order)
+  const byAdvertiser = new Map<string, MonitorRow[]>()
+  for (const row of rowsToDelete) {
+    const list = byAdvertiser.get(row.advertiser.id) ?? []
+    list.push(row)
+    byAdvertiser.set(row.advertiser.id, list)
+  }
+
+  let acceptedIds = 0
+  let anyConflict = false
+  try {
+    for (const [advertiserId, advRows] of byAdvertiser) {
+      const key = `delete:${advertiserId}`
+      if (inFlight.has(key)) continue
+      inFlight.add(key)
+      const ids = advRows.map(row => row.id)
+      try {
+        const res = await api<AdsDeleteAccepted>('/ads-monitor/delete', {
+          retry: 0,
+          method: 'POST',
+          body: { advertiserId, level, ids }
+        })
+        const patch: Record<string, RowOverride> = {}
+        for (const row of advRows) patch[rowKey(row)] = { deletePending: res.deletePending, deleteError: null }
+        overrides.value = { ...overrides.value, ...patch }
+        acceptedIds += ids.length
+      } catch (e) {
+        const err = e as FetchError<Partial<ApiErrorBody & MaybeDuplicateBody>>
+        const message = err.data?.error ?? err.message ?? 'ลบไม่สำเร็จ'
+        if ((err.response?.status ?? err.statusCode) === 409) {
+          conflictToast(err.data, message)
+          anyConflict = true
+        } else {
+          toast.add({ title: 'ลบไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
+        }
+      } finally {
+        inFlight.delete(key)
+      }
+    }
+  } finally {
+    bulkDeleting.value = false
+  }
+
+  bulkOpen.value = false
+  clearSelection()
+  if (anyConflict) await load()
+  if (acceptedIds > 0) {
+    toast.add({ title: `ส่งคำสั่งลบ ${acceptedIds} รายการเข้าคิวแล้ว`, icon: 'i-lucide-circle-check', color: 'success' })
   }
 }
 
@@ -980,6 +1108,14 @@ const intervalText = computed(() => {
           </UEmpty>
 
           <template v-else-if="showTable && data">
+            <!-- FEAT-093 — the multi-select action bar (ad-group / ad tabs only; the campaign tab can never select) -->
+            <AdsMonitorSelectionBar
+              v-if="tab !== 'campaign' && selectionCount > 0"
+              :count="selectionCount"
+              @delete="askDeleteMany(selectedRows)"
+              @clear="clearSelection"
+            />
+
             <AdsMonitorTable
               :level="tab"
               :rows="rows"
@@ -992,6 +1128,7 @@ const intervalText = computed(() => {
               :utm-collapsed="utmCollapsed"
               :range="rangeState"
               :campaign-id="campaignId"
+              :selected="selected"
               @toggle="toggle"
               @show-covers="showCovers"
               @delete="askDelete"
@@ -1000,6 +1137,8 @@ const intervalText = computed(() => {
               @update:utm-collapsed="setUtmCollapsed"
               @filter-campaign="onFilterCampaign"
               @open-review="showReview"
+              @select-row="onSelectRow"
+              @select-all="onSelectAll"
             />
 
             <div class="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4 text-sm text-muted">
@@ -1022,11 +1161,22 @@ const intervalText = computed(() => {
 
   <AdsMonitorCoversModal v-model:open="coversOpen" :row="coversRow" />
 
+  <!-- campaign tab: single-row delete via `POST /ads-monitor/delete-campaign` (unchanged) -->
   <AdsMonitorDeleteModal
     v-model:open="deleteOpen"
-    :row="deleteRow"
+    level="campaign"
+    :rows="deleteRow ? [deleteRow] : []"
     :deleting="deleting"
-    @confirm="confirmDelete"
+    @confirm="(rowsToDelete) => rowsToDelete[0] && confirmDelete(rowsToDelete[0])"
+  />
+
+  <!-- FEAT-093 — ad-group / ad tabs: multi-select delete via `POST /ads-monitor/delete` -->
+  <AdsMonitorDeleteModal
+    v-model:open="bulkOpen"
+    :level="bulkLevel"
+    :rows="bulkRows"
+    :deleting="bulkDeleting"
+    @confirm="confirmDeleteMany"
   />
 
   <AdsMonitorBudgetModal
