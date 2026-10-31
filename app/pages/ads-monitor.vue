@@ -62,6 +62,8 @@ import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
 import type {
   AdsMonitorResponse,
   BudgetPendingView,
+  CampaignBudgetAccepted,
+  CampaignBudgetUnchanged,
   DeleteAccepted,
   MonitorLevel,
   MonitorLinkedFilter,
@@ -191,7 +193,9 @@ let session = 0
  * on every load, because the response is then the truth again — so the optimistic "กำลังลบ…" survives a
  * re-render but never outlives a reload, where the API's own `deletePending` takes over (TASK-campaign-delete-ui).
  */
-type RowOverride = Partial<Pick<MonitorRow, 'optPending' | 'optError' | 'deletePending' | 'deleteError' | 'review'>>
+type RowOverride = Partial<Pick<MonitorRow,
+  'optPending' | 'optError' | 'deletePending' | 'deleteError' | 'review' | 'campaignBudgetPending' | 'campaignBudgetError'
+>>
 const overrides = ref<Record<string, RowOverride>>({})
 
 /**
@@ -549,6 +553,64 @@ async function confirmBudget(row: MonitorRow, body: SetBudgetBody) {
     }
   } finally {
     budgetSaving.value = false
+    inFlight.delete(key)
+  }
+}
+
+// ── campaign budget (FEAT-091 · `POST /ads-monitor/campaign-budget`) ────────────────────────────────────────────────
+/**
+ * Campaign tab only, opened from `AdsMonitorCampaignBudgetCell`'s pencil/retry button. Unlike `confirmBudget()`
+ * (per-advertiser), this is per-row/campaign, exactly like `confirmDelete()`: **202** → close + row override
+ * `campaignBudgetPending` from the returned body (`overrides[rowKey]`) + a success toast; **200 `unchanged`**
+ * (defensive — the modal already disables Confirm on this) → close + a neutral toast, no override written;
+ * **409** → close, `conflictToast()` with the API's sentence, then exactly one re-read of this tab, exactly
+ * like `toggle()` / `confirmDelete()` / `confirmBudget()`; any other error → an error toast and the modal stays
+ * open with the entered amount (only `campaignBudgetSaving` resets). No polling (spec A13).
+ */
+const campaignBudgetOpen = ref(false)
+const campaignBudgetRow = ref<MonitorRow | null>(null)
+const campaignBudgetPrefill = ref<number | null>(null)
+const campaignBudgetSaving = ref(false)
+
+function askCampaignBudget(row: MonitorRow, prefill: number) {
+  campaignBudgetRow.value = row
+  campaignBudgetPrefill.value = prefill
+  campaignBudgetOpen.value = true
+}
+
+async function confirmCampaignBudget(row: MonitorRow, amount: number) {
+  const key = rowKey(row)
+  if (inFlight.has(key)) return
+  inFlight.add(key)
+  campaignBudgetSaving.value = true
+  try {
+    const res = await api<CampaignBudgetAccepted | CampaignBudgetUnchanged>('/ads-monitor/campaign-budget', {
+      retry: 0,
+      method: 'POST',
+      body: { advertiserId: row.advertiser.id, tiktokCampaignId: row.id, amount }
+    })
+    campaignBudgetOpen.value = false
+    if ('unchanged' in res) {
+      toast.add({ title: 'งบเท่าเดิม', description: 'ไม่ได้สร้าง job', icon: 'i-lucide-circle-check', color: 'neutral' })
+    } else {
+      overrides.value = {
+        ...overrides.value,
+        [key]: { ...overrides.value[key], campaignBudgetPending: res.campaignBudgetPending, campaignBudgetError: null }
+      }
+      toast.add({ title: 'ส่งงบใหม่เข้าคิวแล้ว', icon: 'i-lucide-circle-check', color: 'success' })
+    }
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody & MaybeDuplicateBody>>
+    const message = err.data?.error ?? err.message ?? 'แก้งบไม่สำเร็จ'
+    if ((err.response?.status ?? err.statusCode) === 409) {
+      campaignBudgetOpen.value = false
+      conflictToast(err.data, message)
+      await load()
+    } else {
+      toast.add({ title: 'แก้งบไม่สำเร็จ', description: message, icon: 'i-lucide-triangle-alert', color: 'error' })
+    }
+  } finally {
+    campaignBudgetSaving.value = false
     inFlight.delete(key)
   }
 }
@@ -996,6 +1058,7 @@ const intervalText = computed(() => {
               @show-covers="showCovers"
               @delete="askDelete"
               @budget="askBudget"
+              @campaign-budget="askCampaignBudget"
               @update:name-collapsed="setNameCollapsed"
               @update:utm-collapsed="setUtmCollapsed"
               @filter-campaign="onFilterCampaign"
@@ -1034,6 +1097,14 @@ const intervalText = computed(() => {
     :row="budgetRow"
     :saving="budgetSaving"
     @confirm="confirmBudget"
+  />
+
+  <AdsMonitorCampaignBudgetModal
+    v-model:open="campaignBudgetOpen"
+    :row="campaignBudgetRow"
+    :initial-amount="campaignBudgetPrefill"
+    :saving="campaignBudgetSaving"
+    @confirm="confirmCampaignBudget"
   />
 
   <AdsMonitorReviewDrawer
