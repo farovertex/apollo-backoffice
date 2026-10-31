@@ -4,18 +4,23 @@
  * build, newest `publishedAt` first (the API's own order, contract §3 "builds newest first"), ≤ 300 with
  * `buildsTruncated`.
  */
-import type { PostReportBuild } from '#shared/types/report-posts'
+import type { PostReportBuild, PostReportSharedUtm } from '#shared/types/report-posts'
 
 const props = defineProps<{
   builds: PostReportBuild[]
   truncated: boolean
+  /** v1.2 (TASK-post-report-drift, finding E) — `head.money.sharedUtm` of the row this build list belongs to;
+   *  every build's own `deposit` is the same whole-key number, so the note goes on the column header once. */
+  sharedUtm?: PostReportSharedUtm | null
 }>()
 
 function chip(b: PostReportBuild) {
-  return buildEndChip(b.outcome.review, b.outcome.end, b.outcome.endDay, b.reviewHours, b.reason)
+  return buildEndChip(b.outcome.review, b.outcome.end, b.outcome.endDay, b.reviewHours, b.reason, b.bannedAt, b.publishedAt)
 }
 
 const totalCount = computed(() => props.builds.length)
+const depositSharedWithOthers = computed(() => props.sharedUtm?.withOthers ?? 0)
+const depositHeaderTitle = computed(() => (depositSharedWithOthers.value > 0 ? sharedUtmTooltip(depositSharedWithOthers.value) : undefined))
 </script>
 
 <template>
@@ -48,8 +53,19 @@ const totalCount = computed(() => props.builds.length)
             <th class="sticky top-0 z-10 border-y border-default bg-elevated px-2 py-2 text-right text-xs font-medium text-muted">
               Spend
             </th>
-            <th class="sticky top-0 z-10 border-y border-default bg-elevated px-2 py-2 text-right text-xs font-medium text-muted">
-              Deposit
+            <th
+              class="sticky top-0 z-10 border-y border-default bg-elevated px-2 py-2 text-right text-xs font-medium text-muted"
+              :title="depositHeaderTitle"
+            >
+              <span class="inline-flex items-center gap-1">
+                <span>Deposit</span>
+                <UIcon
+                  v-if="depositSharedWithOthers > 0"
+                  name="i-lucide-info"
+                  class="size-3"
+                  data-testid="rp-shared-utm"
+                />
+              </span>
             </th>
             <th class="sticky top-0 z-10 border-y border-default bg-elevated px-2 py-2 text-right text-xs font-medium text-muted">
               Dep/Budget
@@ -87,6 +103,7 @@ const totalCount = computed(() => props.builds.length)
                 size="sm"
                 data-testid="rp-build-end"
                 :data-end="chip(b).key"
+                :title="chip(b).title"
               >
                 {{ chip(b).label }}
               </UBadge>

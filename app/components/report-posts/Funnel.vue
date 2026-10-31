@@ -12,20 +12,34 @@ const props = defineProps<{
   row: PostReportRow
 }>()
 
+const sharedUtmWithOthers = computed(() => props.row.money.sharedUtm?.withOthers ?? 0)
+
 const steps = computed(() => {
   const max = Math.max(1, props.funnel.published)
-  return postFunnelSteps(props.funnel).map(s => ({
-    ...s,
-    width: s.value > 0 ? Math.max(2, (s.value / max) * 100) : 0
-  }))
+  const shared = sharedUtmWithOthers.value > 0
+  return postFunnelSteps(props.funnel).map((s) => {
+    const isDeposited = s.key === 'deposited'
+    return {
+      ...s,
+      label: isDeposited && shared ? 'key มี deposit' : s.label,
+      title: isDeposited && shared ? sharedUtmTooltip(sharedUtmWithOthers.value) : undefined,
+      width: s.value > 0 ? Math.max(2, (s.value / max) * 100) : 0
+    }
+  })
 })
 
+/** v1.2 (TASK-post-report-drift, finding B) — adds review `banned` (แบนก่อนตรวจ) + survival `deleted` (ลบ) */
 const badEndCaption = computed(() => {
   const rejected = props.row.builds.rejected
+  const reviewBanned = props.row.builds.banned
   const banned = props.row.survival.banned
   const missing = props.row.survival.missing
-  return `จบไม่ดี: ปฏิเสธ ${formatInt(rejected)} · แบน ${formatInt(banned)} · หาย ${formatInt(missing)}`
+  const deleted = props.row.survival.deleted
+  return `จบไม่ดี: ปฏิเสธ ${formatInt(rejected)} · แบนก่อนตรวจ ${formatInt(reviewBanned)} · แบน ${formatInt(banned)} · หาย ${formatInt(missing)} · ลบ ${formatInt(deleted)}`
 })
+
+/** v1.2 — "แอดขึ้นแล้วแบนบ่อย": every build of this key whose advertiser was banned after publish, any outcome */
+const advertiserBannedCaption = computed(() => `บัญชีโดนแบน ${formatInt(props.funnel.advertiserBanned)}/${formatInt(props.funnel.published)} build`)
 </script>
 
 <template>
@@ -42,7 +56,7 @@ const badEndCaption = computed(() => {
         :data-step="s.key"
         :data-value="s.value"
       >
-        <span class="truncate text-muted">{{ s.label }}</span>
+        <span class="truncate text-muted" :title="s.title">{{ s.label }}</span>
         <span class="flex min-w-0 items-center gap-2">
           <span
             class="h-3 shrink-0 rounded-sm bg-primary/60"
@@ -55,6 +69,9 @@ const badEndCaption = computed(() => {
     </ol>
     <p class="mt-2 text-[11px] text-dimmed" data-testid="rp-funnel-bad">
       {{ badEndCaption }}
+    </p>
+    <p class="text-[11px] text-dimmed" data-testid="rp-funnel-advertiser-banned">
+      {{ advertiserBannedCaption }}
     </p>
   </section>
 </template>

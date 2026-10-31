@@ -21,8 +21,8 @@ const survivedD7 = computed(() => ratioOrNull(props.row.survival.d7.survived, pr
       <span class="text-2xl font-semibold tabular-nums text-highlighted" data-testid="rp-card-review-value">
         {{ formatPostPercent(row.review.approvedRate) }}
       </span>
-      <p class="text-xs text-muted">
-        {{ formatInt(row.builds.approved) }} / {{ formatInt(row.builds.total) }} build
+      <p class="text-xs text-muted" data-testid="rp-card-review-breakdown">
+        {{ reviewBreakdownLine({ approved: row.builds.approved, rejected: row.builds.rejected, banned: row.builds.banned, pending: row.builds.pending, unknown: row.builds.unknown }) }}
       </p>
       <p class="text-xs text-muted">
         median {{ formatPostHours(row.review.hoursMedian) }} · P90 {{ formatPostHours(row.review.hoursP90) }} · ภายใน 24 ชม. {{ formatPostPercent(row.review.within24h) }}
@@ -47,7 +47,11 @@ const survivedD7 = computed(() => ratioOrNull(props.row.survival.d7.survived, pr
         รอดถึง D3 {{ formatPostPercent(survivedD3) }} · D7 {{ formatPostPercent(survivedD7) }} · ยังส่งอยู่ {{ formatInt(row.survival.alive) }}
       </p>
       <p class="text-xs text-muted">
-        แบน {{ formatInt(row.survival.banned) }} · หาย {{ formatInt(row.survival.missing) }} · ปิดเอง {{ formatInt(row.survival.paused) }}
+        แบน {{ formatInt(row.survival.banned) }} · หาย {{ formatInt(row.survival.missing) }} · ลบ {{ formatInt(row.survival.deleted) }} · ปิดเอง {{ formatInt(row.survival.paused) }}
+      </p>
+      <p class="flex items-center gap-1 text-xs text-muted" data-testid="rp-card-survival-advertiser-banned">
+        <span>บัญชีโดนแบนหลัง publish {{ formatInt(row.builds.advertiserBanned) }}/{{ formatInt(row.builds.total) }} build</span>
+        <ReportsInfoHint id="rp-card-survival-advertiser-banned" :text="REPORT_HELP['rp-card-survival-advertiser-banned']!" />
       </p>
     </section>
 
@@ -67,7 +71,14 @@ const survivedD7 = computed(() => ratioOrNull(props.row.survival.d7.survived, pr
           :by-currency="row.money.spendByCurrency ?? {}"
           :unconverted="row.money.spendUnconverted ?? null"
         />
-        <span>ยอดฝาก {{ formatDecimal(row.money.utm?.depositAmount ?? null) }} · Cost/Dep {{ formatThb(row.money.costPerDep, 2) }}</span>
+        <span class="flex items-center gap-1 flex-wrap">
+          <span>ยอดฝาก {{ formatDecimal(row.money.utm?.depositAmount ?? null) }}</span>
+          <ReportPostsSharedUtmBadge
+            v-if="(row.money.sharedUtm?.withOthers ?? 0) > 0"
+            :with-others="row.money.sharedUtm!.withOthers"
+          />
+          <span>· Cost/Dep {{ formatThb(row.money.costPerDep, 2) }}</span>
+        </span>
       </p>
       <p class="text-xs text-muted">
         spend/build {{ formatThb(row.money.spendPerBuild) }} · deposit/build {{ formatDecimal(row.money.depositPerBuild) }}

@@ -240,7 +240,11 @@ const pageState = computed(() => {
               <ReportPostsSetups :setups="report.setups" />
             </div>
 
-            <ReportPostsBuildsTable :builds="report.builds" :truncated="report.buildsTruncated" />
+            <ReportPostsBuildsTable
+              :builds="report.builds"
+              :truncated="report.buildsTruncated"
+              :shared-utm="report.head.money.sharedUtm"
+            />
           </div>
         </template>
       </div>
