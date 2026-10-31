@@ -129,7 +129,9 @@
  * `templateWorkspaceIds` = the distinct `workspace.id` of the selected accounts (`selectedWorkspaceIds`), sent as
  * `workspaceIds` on the two list requests and re-sent on every selection change (the FEAT-073 session /
  * clear-the-selection machinery is unchanged). Nothing selected → **no** template request at all and the single
- * line `la-tpl-none` above both pickers (their own empty texts stay silent); a selection spanning more than one
+ * line `la-tpl-none` above both pickers (their own empty texts stay silent) — the two lists are emptied but the
+ * **picks** stay (BUG-079: a swap of accounts passes through an empty selection; only the answer-driven reset of
+ * A6 may drop a pick); a selection spanning more than one
  * workspace → the non-blocking warning `la-ws-mixed`. A 400 `issues[].path === 'adTemplateId'` now lands under
  * the ad-template picker (`la-adt-error`, verbatim) instead of the shared `la-template-field-error`, which keeps
  * serving `adGroupTemplateId` (FEAT-061 AC-20).
@@ -635,15 +637,16 @@ let templatesSession = 0
 async function loadTemplates() {
   const s = ++templatesSession
   const ids = templateWorkspaceIds.value
-  // FEAT-090 (spec §2) — nothing selected = nothing to scope by: no request at all, the pickers show
-  // `la-tpl-none`, and whatever an earlier selection had loaded is dropped
+  // FEAT-090 (spec §2) — nothing selected = nothing to scope by: no request at all and the pickers show
+  // `la-tpl-none`, so the two lists are emptied. BUG-079 — the **picks** are kept: every "un-tick A, tick B"
+  // gesture passes through an empty selection, and the only reset the spec asks for is the answer-driven one
+  // below (a pick the next answer no longer lists is dropped, one it still lists survives). With an empty list
+  // nothing renders as selected, and step 1's ≥ 1-account gate (`canLeaveStep1`) keeps such a pick unsubmittable.
   if (!ids) {
     agtItems.value = []
     agtTotal.value = 0
     adtItems.value = []
     adtTotal.value = 0
-    adGroupTemplateId.value = null
-    adTemplateId.value = null
     templatesPending.value = false
     templatesError.value = null
     return
