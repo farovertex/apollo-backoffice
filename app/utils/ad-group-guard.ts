@@ -43,16 +43,21 @@ export interface AdGroupGuardMetricDef {
   kind: AdGroupGuardKind
 }
 
-/** adding a metric = one row here (and one in the API catalog) — no form change */
+/**
+ * adding a metric = one row here (and one in the API catalog) — no form change
+ * TASK-guard-metric-names (2026-10-31): labels + order = the Ads monitor column headers (`ads-monitor/Table.vue`
+ * `METRIC_COLUMNS`: Spend CPC CPM Impressions Clicks CTR Conversions CPA CVR); `conversionRate` (CVR) added
+ */
 export const AGG_METRICS: readonly AdGroupGuardMetricDef[] = [
-  { key: 'spend', label: 'ใช้จ่าย', unit: 'currency', kind: 'decimal' },
-  { key: 'cpm', label: 'CPM', unit: 'currency', kind: 'decimal' },
-  { key: 'conversions', label: 'ผลลัพธ์', unit: 'count', kind: 'integer' },
-  { key: 'conversionCost', label: 'ต้นทุนต่อผลลัพธ์', unit: 'currency', kind: 'decimal' },
+  { key: 'spend', label: 'Spend', unit: 'currency', kind: 'decimal' },
   { key: 'cpc', label: 'CPC', unit: 'currency', kind: 'decimal' },
+  { key: 'cpm', label: 'CPM', unit: 'currency', kind: 'decimal' },
+  { key: 'impressions', label: 'Impressions', unit: 'count', kind: 'integer' },
+  { key: 'clicks', label: 'Clicks', unit: 'count', kind: 'integer' },
   { key: 'ctr', label: 'CTR', unit: 'percent', kind: 'decimal' },
-  { key: 'impressions', label: 'การแสดงผล', unit: 'count', kind: 'integer' },
-  { key: 'clicks', label: 'คลิก', unit: 'count', kind: 'integer' }
+  { key: 'conversions', label: 'Conversions', unit: 'count', kind: 'integer' },
+  { key: 'conversionCost', label: 'CPA', unit: 'currency', kind: 'decimal' },
+  { key: 'conversionRate', label: 'CVR', unit: 'percent', kind: 'decimal' }
 ]
 
 export const AGG_METRIC_BY_KEY = Object.fromEntries(AGG_METRICS.map(m => [m.key, m])) as Record<AdGroupGuardMetricKey, AdGroupGuardMetricDef>
@@ -80,7 +85,7 @@ export const AGG_MESSAGES = {
   combine: 'combine ต้องเป็น or หรือ and',
   items: 'ต้องมีอย่างน้อยหนึ่งเงื่อนไข',
   item: 'เงื่อนไขต้องเป็น { metric, op, value } หรือกลุ่ม { combine, items }',
-  metric: 'metric ต้องเป็น spend, cpm, conversions, conversionCost, cpc, ctr, impressions หรือ clicks',
+  metric: 'metric ต้องเป็น spend, cpc, cpm, impressions, clicks, ctr, conversions, conversionCost หรือ conversionRate',
   op: 'op ต้องเป็น gt, gte, lt, lte หรือ between',
   value: 'value ต้องเป็นตัวเลขตั้งแต่ 0',
   valueInt: 'value ต้องเป็นจำนวนเต็มตั้งแต่ 0',
@@ -92,7 +97,7 @@ export const AGG_MESSAGES = {
   /** builder only (spec §1) */
   incomplete: 'ใส่ตัวเลขให้ครบทุกเงื่อนไข (ระหว่าง: ค่าหลังต้องมากกว่าค่าหน้า)',
   groupEmpty: 'วงเล็บต้องมีอย่างน้อยหนึ่งเงื่อนไข',
-  spendWarn: 'ยังไม่มีเงื่อนไขใช้จ่าย — กลุ่มใหม่มักมี CPM สูงช่วงแรก'
+  spendWarn: 'ยังไม่มีเงื่อนไข Spend — กลุ่มใหม่มักมี CPM สูงช่วงแรก'
 } as const
 
 /** contract §1.1 guard rails (A6) */
@@ -163,12 +168,12 @@ function formatLooseGroup(g: LooseGroup, currency: string | null, nested: boolea
   return nested ? `(${text})` : text
 }
 
-/** `ใช้จ่าย ≥ 1,500 THB และ (CPM > 200 THB หรือ ผลลัพธ์ < 60)` — `currency` null → `สกุลของบัญชี` */
+/** `Spend ≥ 1,500 THB และ (CPM > 200 THB หรือ Conversions < 60)` — `currency` null → `สกุลของบัญชี` */
 export function formatAdGroupGuardRule(rule: AdGroupGuardRule, currency: string | null): string {
   return formatLooseGroup(rule, currency, false)
 }
 
-/** one condition: `CPM > 200 THB` · `ใช้จ่าย ระหว่าง 1,000–3,000 THB` */
+/** one condition: `CPM > 200 THB` · `Spend ระหว่าง 1,000–3,000 THB` */
 export function formatAdGroupGuardCondition(condition: AdGroupGuardCondition, currency: string | null): string {
   return formatLooseCondition(condition, currency)
 }
@@ -443,7 +448,7 @@ export function formatAggDate(iso: string | null | undefined): string {
 
 /**
  * spec §5 — the metrics the rule uses (catalog order) as `<label> <n><unit>`, a null rate as `<label> —`, then
- * ` · ณ <date>`: `ใช้จ่าย 1,620 THB · CPM 231.03 THB · ผลลัพธ์ 12 · ณ 29 ต.ค. 14:05`
+ * ` · ณ <date>`: `Spend 1,620 THB · CPM 231.03 THB · Conversions 12 · ณ 29 ต.ค. 14:05`
  */
 export function formatAdGroupGuardMetrics(metrics: AdGroupGuardMetrics, rule: AdGroupGuardRule | null, currency: string | null): string {
   const parts = ruleMetrics(rule).map((metric) => {
@@ -480,7 +485,7 @@ function conditionAt(rule: AdGroupGuardRule, path: string): AdGroupGuardConditio
   return isAdGroupGuardGroup(node) ? null : node
 }
 
-/** spec §5 — `เข้าเงื่อนไข: ใช้จ่าย ≥ 1,500 THB · CPM > 200 THB` (path order, no parentheses); `null` = no line */
+/** spec §5 — `เข้าเงื่อนไข: Spend ≥ 1,500 THB · CPM > 200 THB` (path order, no parentheses); `null` = no line */
 export function formatAdGroupGuardHits(rule: AdGroupGuardRule | null, hits: string[] | null | undefined, currency: string | null): string | null {
   if (!rule || !hits?.length) return null
   const parts = [...hits]

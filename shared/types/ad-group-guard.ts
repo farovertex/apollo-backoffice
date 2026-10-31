@@ -7,9 +7,12 @@
  * Every number is in the account / advertiser currency (no FX).
  */
 
-/** FEAT-087 §1.1 — the metric catalog keys (display order = `AGG_METRICS` in `app/utils/ad-group-guard.ts`) */
+/**
+ * FEAT-087 §1.1 — the metric catalog keys (display order = `AGG_METRICS` in `app/utils/ad-group-guard.ts`)
+ * TASK-guard-metric-names (2026-10-31): order = Ads monitor columns, + `conversionRate` (CVR)
+ */
 export type AdGroupGuardMetricKey
-  = | 'spend' | 'cpm' | 'conversions' | 'conversionCost' | 'cpc' | 'ctr' | 'impressions' | 'clicks'
+  = | 'spend' | 'cpc' | 'cpm' | 'impressions' | 'clicks' | 'ctr' | 'conversions' | 'conversionCost' | 'conversionRate'
 
 /** FEAT-087 §1.1 — operators; `between` is inclusive `value ≤ v ≤ value2` */
 export type AdGroupGuardOp = 'gt' | 'gte' | 'lt' | 'lte' | 'between'
@@ -101,7 +104,7 @@ export type BuildAdGroupGuardState = 'off' | 'watching' | 'done'
 /** §6.3 — per ad group state */
 export type BuildAdGroupGuardGroupState = 'watching' | 'queued' | 'paused' | 'failed'
 
-/** FEAT-087 §6.3 — the lifetime numbers the hook decided on (account currency), 9 keys; rates `null` when the divisor is 0 */
+/** FEAT-087 §6.3 — the lifetime numbers the hook decided on (account currency), 10 keys; rates `null` when the divisor is 0 */
 export interface AdGroupGuardMetrics {
   spend: number | null
   impressions: number | null
@@ -111,6 +114,8 @@ export interface AdGroupGuardMetrics {
   ctr: number | null
   conversions: number | null
   conversionCost: number | null
+  /** TASK-guard-metric-names — CVR; `null` on entries written before it */
+  conversionRate: number | null
   /** ISO — `now` of the kpi round that decided */
   asOf: string
 }
