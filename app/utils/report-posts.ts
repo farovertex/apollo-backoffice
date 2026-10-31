@@ -57,6 +57,39 @@ export function formatAdApprovedLine(adsApproved: number, ads: number, rate: num
   return `ad ${formatInt(adsApproved)}/${formatInt(ads)} (${formatPostPercent(rate)})`
 }
 
+/**
+ * `12 ผ่าน · 3 ปฏิเสธ · 1 แบนก่อนตรวจ · 2 ยังรอ · 1 ไม่รู้` — the review-outcome breakdown line shared by
+ * `rp-sum-approved` (`SummaryTiles.vue`) and `rp-card-review` (`LayerCards.vue`), v1.2 (TASK-post-report-drift):
+ * zero-count items are hidden (a build cohort rarely hits all five outcomes at once).
+ */
+export interface ReviewBreakdownCounts {
+  approved: number
+  rejected: number
+  banned: number
+  pending: number
+  unknown: number
+}
+
+export function reviewBreakdownLine(c: ReviewBreakdownCounts): string {
+  const parts = [
+    c.approved > 0 ? `${formatInt(c.approved)} ผ่าน` : null,
+    c.rejected > 0 ? `${formatInt(c.rejected)} ปฏิเสธ` : null,
+    c.banned > 0 ? `${formatInt(c.banned)} แบนก่อนตรวจ` : null,
+    c.pending > 0 ? `${formatInt(c.pending)} ยังรอ` : null,
+    c.unknown > 0 ? `${formatInt(c.unknown)} ไม่รู้` : null
+  ].filter((p): p is string => p !== null)
+  return parts.length > 0 ? parts.join(' · ') : REPORT_DASH
+}
+
+/**
+ * `rp-shared-utm` tooltip (TASK-post-report-drift, finding E) — a UTM key is shared by `withOthers` other
+ * rows/builds in the same cohort, so the Deposit/Dep-Budget/Cost-Dep number shown is the whole key's number,
+ * not this row's alone.
+ */
+export function sharedUtmTooltip(withOthers: number): string {
+  return `ยอดฝากเป็นของ UTM key ทั้ง key ซึ่งอีก ${formatInt(withOthers)} รายการในช่วงนี้ใช้ร่วมกัน — ไม่ใช่ของรายการนี้อย่างเดียว`
+}
+
 export const POST_LENS_LABEL: Record<PostReportLens, string> = {
   post: 'โพสต์',
   adTemplate: 'Ad template',
@@ -84,6 +117,7 @@ export function enoughBadgeTitle(why: PostReportEnoughWhy, gate: PostReportGate)
 export const REVIEW_OUTCOME_LABEL: Record<PostReportReviewOutcome, string> = {
   approved: 'ผ่านตรวจ',
   rejected: 'ปฏิเสธ',
+  banned: 'แบนก่อนตรวจ',
   pending: 'รอตรวจ',
   unknown: 'ไม่ทราบ'
 }
@@ -92,30 +126,49 @@ export interface BuildEndChip {
   key: string
   label: string
   color: ReportColor
+  /** v1.2 (TASK-post-report-drift) — "แบนหลัง n ชม." note when the advertiser was banned after publish but the
+   *  chip's own label already says something else (rejected/pending/unknown/alive/…); never set on the
+   *  `bannedBeforeReview` chip itself (the label already says it). */
+  title?: string
+}
+
+/** v1.2 (TASK-post-report-drift) — "แบนหลัง n ชม." from `publishedAt` to `bannedAt`, or `undefined` when never banned */
+function bannedSuffix(bannedAt: string | null, publishedAt: string): string | undefined {
+  if (!bannedAt) return undefined
+  const hours = (Date.parse(bannedAt) - Date.parse(publishedAt)) / 3_600_000
+  return `แบนหลัง ${formatPostDecimal1(hours)} ชม.`
 }
 
 /**
  * `rp-build-end` chip of one row of `rp-builds` (spec "UI behaviour → /reports/posts/:key", the builds table).
  * `review !== 'approved'` never reached survival, so the chip reflects the review outcome instead.
+ *
+ * v1.2 (TASK-post-report-drift, finding B): `review === 'banned'` (advertiser banned before any approval
+ * signal) gets its own chip; every other outcome that was *also* banned after publish (`bannedAt` set) keeps
+ * its own label but gains the "แบนหลัง n ชม." note in the tooltip, not the label.
  */
 export function buildEndChip(
   review: PostReportReviewOutcome,
   end: PostReportEndOutcome,
   endDay: number | null,
   reviewHours: number | null,
-  reason: string | null
+  reason: string | null,
+  bannedAt: string | null,
+  publishedAt: string
 ): BuildEndChip {
-  if (review === 'pending') return { key: 'pending', label: `รอตรวจ ${formatPostDecimal1(reviewHours)} ชม.`, color: 'warning' }
-  if (review === 'rejected') return { key: 'rejected', label: `ปฏิเสธ · ${reason ?? 'ไม่ระบุ'}`, color: 'error' }
-  if (review === 'unknown' || end === null) return { key: 'unknown', label: 'ไม่ทราบ', color: 'neutral' }
+  const title = review === 'banned' ? undefined : bannedSuffix(bannedAt, publishedAt)
+  if (review === 'pending') return { key: 'pending', label: `รอตรวจ ${formatPostDecimal1(reviewHours)} ชม.`, color: 'warning', title }
+  if (review === 'rejected') return { key: 'rejected', label: `ปฏิเสธ · ${reason ?? 'ไม่ระบุ'}`, color: 'error', title }
+  if (review === 'banned') return { key: 'bannedBeforeReview', label: 'แบนก่อนผ่านตรวจ', color: 'error' }
+  if (review === 'unknown' || end === null) return { key: 'unknown', label: 'ไม่ทราบ', color: 'neutral', title }
   const day = endDay ?? '?'
   switch (end) {
-    case 'alive': return { key: 'alive', label: 'ยังส่งอยู่', color: 'success' }
-    case 'banned': return { key: 'banned', label: `แบน D${day}`, color: 'error' }
-    case 'missing': return { key: 'missing', label: `หายจากลิสต์ D${day}`, color: 'neutral' }
-    case 'deleted': return { key: 'deleted', label: 'ลบแล้ว', color: 'neutral' }
-    case 'paused': return { key: 'paused', label: 'ปิดเอง', color: 'neutral' }
-    default: return { key: 'unknown', label: 'ไม่ทราบ', color: 'neutral' }
+    case 'alive': return { key: 'alive', label: 'ยังส่งอยู่', color: 'success', title }
+    case 'banned': return { key: 'banned', label: `แบน D${day}`, color: 'error', title }
+    case 'missing': return { key: 'missing', label: `หายจากลิสต์ D${day}`, color: 'neutral', title }
+    case 'deleted': return { key: 'deleted', label: 'ลบแล้ว', color: 'neutral', title }
+    case 'paused': return { key: 'paused', label: 'ปิดเอง', color: 'neutral', title }
+    default: return { key: 'unknown', label: 'ไม่ทราบ', color: 'neutral', title }
   }
 }
 

@@ -28,6 +28,8 @@ export interface PostReportBuildCounts {
   total: number
   approved: number
   rejected: number
+  /** v1.2 (TASK-post-report-drift) — review outcome `banned`: advertiser banned after publish before any approval signal */
+  banned: number
   pending: number
   unknown: number
   accounts: number
@@ -36,6 +38,8 @@ export interface PostReportBuildCounts {
   ads: number
   adsApproved: number
   adsRejected: number
+  /** v1.2 — builds of ANY outcome whose advertiser has an `advertiser.banned` audit after their `publishedAt` */
+  advertiserBanned: number
 }
 
 export interface PostReportTopReason {
@@ -115,7 +119,8 @@ export interface PostReportRow {
   enoughWhy: PostReportEnoughWhy
 }
 
-export type PostReportReviewOutcome = 'approved' | 'rejected' | 'pending' | 'unknown'
+/** v1.2 (TASK-post-report-drift) adds `banned` — advertiser banned after publish before any approval signal */
+export type PostReportReviewOutcome = 'approved' | 'rejected' | 'banned' | 'pending' | 'unknown'
 export type PostReportEndOutcome = 'alive' | 'banned' | 'missing' | 'deleted' | 'paused' | null
 
 export interface PostReportOutcome {
@@ -147,6 +152,8 @@ export interface PostReportBuild {
   adTemplateName: string | null
   adGroupTemplateName: string | null
   ads: number
+  /** v1.2 — the `advertiser.banned` audit `at` after `publishedAt` used for review/survival `banned`; null when never banned since publish */
+  bannedAt: string | null
 }
 
 export interface PostReportGate {
@@ -174,6 +181,7 @@ export interface PostReportSummary extends SpendFxRow {
   hoursP90: number | null
   within24h: number | null
   alive: number
+  /** survival `banned` (approved builds whose advertiser was banned after they passed review) */
   banned: number
   missing: number
   deleted: number
@@ -188,6 +196,10 @@ export interface PostReportSummary extends SpendFxRow {
   adsApproved: number
   adsRejected: number
   adApprovedRate: number | null
+  /** v1.2 (TASK-post-report-drift) — cohort builds with review outcome `banned` (distinct from survival `banned` above) */
+  reviewBanned: number
+  /** v1.2 — cohort builds of any outcome whose advertiser has an `advertiser.banned` audit after their `publishedAt` */
+  advertiserBanned: number
 }
 
 /** `GET /reports/posts` 200 (contract §2) */
@@ -211,6 +223,8 @@ export interface PostReportFunnel {
   deposited: number
   survivedD7: number
   alive: number
+  /** v1.2 (TASK-post-report-drift) — builds of this key (any outcome) whose advertiser was banned after publish */
+  advertiserBanned: number
 }
 
 export interface PostReportDayAfterApproval {

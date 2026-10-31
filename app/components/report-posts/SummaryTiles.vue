@@ -37,8 +37,8 @@ const survivedD7Rate = computed(() => ratioOrNull(props.summary.d7.survived, pro
       <span class="truncate text-xl font-semibold tabular-nums text-highlighted" data-testid="rp-sum-approved-value">
         {{ formatPostPercent(summary.approvedRate) }}
       </span>
-      <span class="text-[11px] text-dimmed">
-        {{ formatInt(summary.approved) }} ผ่าน · {{ formatInt(summary.rejected) }} ปฏิเสธ · {{ formatInt(summary.pending) }} ยังรอ
+      <span class="text-[11px] text-dimmed" data-testid="rp-sum-approved-breakdown">
+        {{ reviewBreakdownLine({ approved: summary.approved, rejected: summary.rejected, banned: summary.reviewBanned, pending: summary.pending, unknown: summary.unknown }) }}
       </span>
       <span class="text-[11px] text-dimmed">
         ad {{ formatInt(summary.adsApproved) }}/{{ formatInt(summary.ads) }} · {{ formatPostPercent(summary.adApprovedRate) }}
@@ -67,6 +67,10 @@ const survivedD7Rate = computed(() => ratioOrNull(props.summary.d7.survived, pro
         {{ formatPostPercent(survivedD7Rate) }}
       </span>
       <span class="text-[11px] text-dimmed">{{ formatInt(summary.banned) }} แบน · {{ formatInt(summary.missing) }} หาย</span>
+      <span class="flex items-center gap-1 text-[11px] text-dimmed" data-testid="rp-sum-survival-advertiser-banned">
+        <span>บัญชีโดนแบนหลัง publish {{ formatInt(summary.advertiserBanned) }}/{{ formatInt(summary.builds) }} build</span>
+        <ReportsInfoHint id="rp-sum-survival-advertiser-banned" :text="REPORT_HELP['rp-sum-survival-advertiser-banned']!" />
+      </span>
     </div>
 
     <div class="flex min-w-0 flex-col gap-0.5 rounded-lg border border-default p-3" data-testid="rp-sum-money">

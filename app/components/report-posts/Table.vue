@@ -177,7 +177,12 @@ const COLS: { key: Col, label: string, help?: string }[] = [
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatPostDays(row.survival.aliveDaysMedian) }}
             <div class="text-xs text-dimmed">
-              {{ formatInt(row.survival.banned) }} แบน
+              <template v-if="row.builds.advertiserBanned > row.survival.banned">
+                {{ formatInt(row.survival.banned) }} แบน · {{ formatInt(row.builds.advertiserBanned) }} บัญชีโดนแบน
+              </template>
+              <template v-else>
+                {{ formatInt(row.survival.banned) }} แบน
+              </template>
             </div>
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
@@ -189,7 +194,13 @@ const COLS: { key: Col, label: string, help?: string }[] = [
             />
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
-            {{ formatDecimal(row.money.utm?.depositAmount ?? null) }}
+            <div class="flex items-center justify-end gap-1">
+              <ReportPostsSharedUtmBadge
+                v-if="(row.money.sharedUtm?.withOthers ?? 0) > 0"
+                :with-others="row.money.sharedUtm!.withOthers"
+              />
+              <span>{{ formatDecimal(row.money.utm?.depositAmount ?? null) }}</span>
+            </div>
           </td>
           <td class="px-3 py-2 text-right font-semibold tabular-nums">
             {{ formatDecimal(row.money.depPerBudget) }}
@@ -240,7 +251,12 @@ const COLS: { key: Col, label: string, help?: string }[] = [
           <td class="sticky bottom-0 z-10 border-t border-default bg-elevated px-3 py-2 text-right tabular-nums">
             {{ REPORT_DASH }}
             <div class="text-xs text-dimmed">
-              {{ formatInt(summary.banned) }} แบน
+              <template v-if="summary.advertiserBanned > summary.banned">
+                {{ formatInt(summary.banned) }} แบน · {{ formatInt(summary.advertiserBanned) }} บัญชีโดนแบน
+              </template>
+              <template v-else>
+                {{ formatInt(summary.banned) }} แบน
+              </template>
             </div>
           </td>
           <td class="sticky bottom-0 z-10 border-t border-default bg-elevated px-3 py-2 text-right tabular-nums">
