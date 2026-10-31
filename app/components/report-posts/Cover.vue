@@ -12,16 +12,23 @@
  *   Those must go through `useCoverImage` exactly like `ad-templates/PostCover.vue` does. `checkedAt` is not
  *   known on this row (the list/detail response doesn't carry it here), so it is passed as `null` on every
  *   call — a stable cache key, just never invalidated by a re-verify from this screen.
+ *
+ * v1.1 (AC-24) — `kind` of `adGroupTemplate`/`account` always sends `url: null`: those subjects have no cover
+ * of their own, so this component renders a lens icon instead and never calls `useCoverImage` at all (the
+ * `enabled` guard below is `false` for those kinds even if a stray url were ever present).
  */
 const TEMPLATE_COVER_RE = /^\/ad-templates\/([0-9a-f]{24})\/cover$/
 
 const props = defineProps<{
   url: string | null
   isVideo: boolean | null
+  kind?: 'post' | 'adTemplate' | 'adGroupTemplate' | 'account'
   size?: 'sm' | 'lg'
 }>()
 
-const templateCoverId = computed(() => TEMPLATE_COVER_RE.exec(props.url ?? '')?.[1] ?? null)
+const isLensKind = computed(() => props.kind === 'adGroupTemplate' || props.kind === 'account')
+
+const templateCoverId = computed(() => (isLensKind.value ? null : TEMPLATE_COVER_RE.exec(props.url ?? '')?.[1] ?? null))
 
 const { src: templateSrc, error: templateError, retry: retryTemplateCover } = useCoverImage(
   templateCoverId,
@@ -64,10 +71,27 @@ const effectiveSrc = computed(() => (templateCoverId.value ? templateSrc.value :
 const effectiveFailed = computed(() => (templateCoverId.value ? (templateImgHardFailed.value || !!templateError.value) : failed.value))
 
 const box = computed(() => (props.size === 'lg' ? 'w-24 h-32' : 'w-9 h-12'))
+
+const lensIcon = computed(() => (props.kind === 'account' ? 'i-lucide-user-round' : 'i-lucide-layout-template'))
+const lensDataKind = computed(() => (props.kind === 'account' ? 'account' : 'template'))
 </script>
 
 <template>
   <span
+    v-if="isLensKind"
+    class="relative flex shrink-0 items-center justify-center overflow-hidden rounded-md bg-elevated"
+    :class="box"
+    data-testid="rp-cover"
+    :data-kind="lensDataKind"
+  >
+    <UIcon
+      :name="lensIcon"
+      :class="size === 'lg' ? 'size-8' : 'size-4'"
+      class="text-dimmed"
+    />
+  </span>
+  <span
+    v-else
     class="relative flex shrink-0 items-center justify-center overflow-hidden rounded-md bg-elevated"
     :class="box"
     data-testid="rp-cover"

@@ -25,7 +25,12 @@ const duplicateLink = computed(() => `/ad-templates?q=${encodeURIComponent(props
 
 <template>
   <section class="flex flex-col gap-3 rounded-lg border border-default p-3 sm:flex-row sm:items-start" data-testid="rp-head">
-    <ReportPostsCover :url="row.subject.coverUrl" :is-video="row.subject.isVideo" size="lg" />
+    <ReportPostsCover
+      :url="row.subject.coverUrl"
+      :is-video="row.subject.isVideo"
+      :kind="row.subject.kind"
+      size="lg"
+    />
     <div class="flex min-w-0 flex-1 flex-col gap-2">
       <div>
         <h1 class="truncate text-lg font-semibold text-highlighted" data-testid="rp-head-title">

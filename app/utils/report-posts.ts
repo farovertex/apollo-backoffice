@@ -52,6 +52,11 @@ export function ratioOrNull(a: number | null | undefined, b: number | null | und
   return a / b
 }
 
+/** `ad 54/62 (90%)` — v1.1 per-ad review line (AC-23); `—` for the rate when null */
+export function formatAdApprovedLine(adsApproved: number, ads: number, rate: number | null): string {
+  return `ad ${formatInt(adsApproved)}/${formatInt(ads)} (${formatPostPercent(rate)})`
+}
+
 export const POST_LENS_LABEL: Record<PostReportLens, string> = {
   post: 'โพสต์',
   adTemplate: 'Ad template',
