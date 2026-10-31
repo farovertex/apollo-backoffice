@@ -16,3 +16,10 @@
   --color-green-900: #0A5331;
   --color-green-950: #052E16;
 }
+
+/* FEAT-089 — `rp-row-dim` marks a `/reports/posts` row with `enough: false` while the gate switch is off
+   (spec "UI behaviour", `rp-row-dim`). A Tailwind v4 `@utility` (not a plain selector) so
+   `eslint-plugin-better-tailwindcss` recognises the class name as known. */
+@utility rp-row-dim {
+  opacity: 0.55;
+}

@@ -164,6 +164,14 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-089 — post performance report, directly after Performance; same role gate (spec "UI behaviour")
+      label: 'Posts',
+      icon: 'i-lucide-clapperboard',
+      to: '/reports/posts',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), ...(canSeeCashier.value
   ? [{
