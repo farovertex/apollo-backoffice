@@ -8,8 +8,10 @@
  *
  * Five mutually exclusive states (`data-state`), driven only by what the API sent — the BO never re-derives
  * `campaignBudgetEditable`, same rule as `deletable`/`settable`:
- * 1. **none** — `budget.amount === null` (the "-" rows), `campaignBudgetEditable.reason === 'noBudget'`, or a
- *    row from an older API/stub that carries none of the three FEAT-091 keys at all: value only, no pencil.
+ * 1. **none** — `budget.amount === null` (the "-" rows), `campaignBudgetEditable.reason` equal to the
+ *    `noBudget` Thai sentence (contract v1.1; the bare code `'noBudget'` is accepted too, as a fallback for a
+ *    stub/older-API row), or a row from an older API/stub that carries none of the three FEAT-091 keys at
+ *    all: value only, no pencil.
  * 2. **pending** (`campaignBudgetPending`, from the API or our own accepted 202): spinner + "กำลังแก้งบ… → <amount>
  *    <currency>" (`am-cbudget-pending-<id>`), no pencil. Reload-safe — a row that arrives with the pending key
  *    looks the same.
@@ -54,8 +56,12 @@ const editable = computed(() => props.row.campaignBudgetEditable ?? { ok: false,
 const pending = computed(() => props.row.campaignBudgetPending ?? null)
 const failure = computed(() => (pending.value ? null : props.row.campaignBudgetError ?? null))
 
+/** contract v1.1: `reason` is the Thai sentence (`CAMPAIGN_BUDGET_REASON_TEXT.noBudget`); the bare code is
+ * only accepted as a fallback for a stub/older-API row that still sends it instead of the sentence. */
+const noBudgetReason = computed(() => editable.value.reason === CAMPAIGN_BUDGET_REASON_TEXT.noBudget || editable.value.reason === 'noBudget')
+
 const state = computed(() => {
-  if (amountNull.value || noKeys.value || editable.value.reason === 'noBudget') return 'none'
+  if (amountNull.value || noKeys.value || noBudgetReason.value) return 'none'
   if (pending.value) return 'pending'
   if (failure.value) return 'error'
   return editable.value.ok ? 'ok' : 'blocked'
@@ -124,13 +130,14 @@ function budgetText(row: MonitorRow): string {
       </span>
 
       <UTooltip v-if="state === 'ok' || state === 'blocked'" :text="blockedReason ?? ''" :disabled="!blockedReason">
-        <span class="inline-flex" :title="blockedReason ?? undefined">
+        <span class="inline-flex">
           <UButton
             icon="i-lucide-pencil"
             color="neutral"
             variant="ghost"
             size="xs"
             :aria-label="ariaLabel"
+            :title="blockedReason ?? undefined"
             :disabled="state === 'blocked'"
             :data-testid="`am-cbudget-edit-${row.id}`"
             @click="ask"
