@@ -46,11 +46,15 @@ function heightOf(value: number | null, max: number): number {
         <div class="flex h-full items-end gap-1">
           <div
             class="w-3 rounded-t-sm bg-primary"
+            data-testid="rp-byday-bar"
+            data-series="spend"
             :style="{ height: `${heightOf(d.spendAvg, maxSpend)}%` }"
             :title="`Spend เฉลี่ย ${formatDecimal(d.spendAvg)}`"
           />
           <div
             class="w-3 rounded-t-sm bg-sky-500"
+            data-testid="rp-byday-bar"
+            data-series="deposit"
             :style="{ height: `${heightOf(d.depositAvg, maxDeposit)}%` }"
             :title="`Deposit เฉลี่ย ${formatDecimal(d.depositAvg)}`"
           />

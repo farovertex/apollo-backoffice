@@ -44,7 +44,11 @@ const badEndCaption = computed(() => {
       >
         <span class="truncate text-muted">{{ s.label }}</span>
         <span class="flex min-w-0 items-center gap-2">
-          <span class="h-3 shrink-0 rounded-sm bg-primary/60" :style="{ width: `${s.width}%` }" />
+          <span
+            class="h-3 shrink-0 rounded-sm bg-primary/60"
+            data-testid="rp-funnel-bar"
+            :style="{ width: `${s.width}%` }"
+          />
         </span>
         <span class="text-right tabular-nums text-default">{{ formatInt(s.value) }}</span>
       </li>

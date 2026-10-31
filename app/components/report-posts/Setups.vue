@@ -45,7 +45,7 @@ defineProps<{ setups: PostReportSetup[] }>()
             :key="s.key"
             class="border-b border-default/60 last:border-b-0"
             :class="s.enough ? '' : 'opacity-55'"
-            data-testid="rp-setup-row"
+            data-testid="rp-setups-row"
             :data-key="s.key"
             :data-enough="s.enough ? 'true' : 'false'"
           >
