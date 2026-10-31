@@ -16,9 +16,10 @@
  * 3. **error** (`campaignBudgetError`, no pending): red "แก้งบไม่สำเร็จ: <reason>" + a retry icon
  *    (`am-cbudget-retry-<id>`) that reopens the modal prefilled with the **failed** amount.
  * 4. **ok** — the pencil `am-cbudget-edit-<id>` (enabled) → opens the modal prefilled with the current amount.
- * 5. **blocked** — the same pencil, disabled, tooltip **and** `title` = the reason text (contract §0's Thai
- *    sentences — the API only sends the code, so `CAMPAIGN_BUDGET_REASON_TEXT` mirrors contract §0's
- *    `CAMPAIGN_BUDGET_CONFLICT` table for display; see the file header note on this deviation).
+ * 5. **blocked** — the same pencil, disabled, tooltip **and** `title` = `campaignBudgetEditable.reason`
+ *    (contract v1.1 — the API sends the Thai sentence directly, exactly like `deletable.reason`).
+ *    `CAMPAIGN_BUDGET_REASON_TEXT` is only a fallback for a stub/older-API row whose `reason` is still one of
+ *    the six bare codes of contract §0 (mirrors the API's own `CAMPAIGN_BUDGET_CONFLICT` table).
  *
  * `data-state` ( none · ok · blocked · pending · error ) is the one attribute QA needs to assert on, same
  * spirit as `am-delete`'s `data-state`.
@@ -27,12 +28,11 @@ import type { CampaignBudgetBlockedReason, MonitorRow } from '#shared/types/ads-
 import type { MoneyMode } from '~/utils/money'
 
 /**
- * Deviation note (bo.md T2): contract §0 types `CampaignBudgetEditableView.reason` as the **code** union
- * `CampaignBudgetBlockedReason`, unlike `MonitorDeletable.reason` / `MonitorSwitchable.reason`, which are
- * already Thai sentences from the API. Showing the raw code to an admin would be wrong, so this mirrors
- * contract §0's `CAMPAIGN_BUDGET_CONFLICT` table (the API's own constant, cross-repo, not importable here) to
- * turn the code into the same Thai sentence the 409 body of the same reason carries (AC-2: "reason texts equal
- * the 409 error texts of contract §2").
+ * Contract v1.1 — `campaignBudgetEditable.reason` is the Thai sentence itself (like `deletable.reason`), so
+ * the normal path renders it directly. This map is only a **fallback** for a stub/older-API row whose
+ * `reason` is still one of the six bare codes of contract §0 — it mirrors the API's own
+ * `CAMPAIGN_BUDGET_CONFLICT` table (cross-repo, not importable here) so such a row still reads in Thai rather
+ * than showing a raw code.
  */
 const CAMPAIGN_BUDGET_REASON_TEXT: Record<CampaignBudgetBlockedReason, string> = {
   duplicate: 'กำลังรอ job ของแคมเปญนี้อยู่',
@@ -61,9 +61,12 @@ const state = computed(() => {
   return editable.value.ok ? 'ok' : 'blocked'
 })
 
+/** contract v1.1: `reason` is already the Thai sentence — the code map only covers the six bare codes, for a
+ * stub/older-API row that still sends one of those instead of the sentence. */
 const blockedReason = computed(() => {
   const reason = editable.value.reason
-  return reason ? CAMPAIGN_BUDGET_REASON_TEXT[reason] : null
+  if (!reason) return null
+  return (CAMPAIGN_BUDGET_REASON_TEXT as Record<string, string>)[reason] ?? reason
 })
 
 const currency = computed(() => props.row.budget?.currency ?? props.row.advertiserBudget?.currency ?? '')

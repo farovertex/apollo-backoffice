@@ -159,17 +159,23 @@ export interface CampaignBudgetErrorView {
   reason: string
 }
 
-/** Contract §0 `CampaignBudgetBlockedReason` — the order the API evaluates them in (contract §1 table). */
+/**
+ * Contract §0 `CampaignBudgetBlockedReason` — the six codes the API evaluates in order (contract §1 table).
+ * Contract v1.1: `CampaignBudgetEditableView.reason` carries the **Thai sentence** itself (like
+ * `deletable.reason` / `switchable.reason`), not this code — kept only as the key type of the BO's own
+ * fallback map (`CAMPAIGN_BUDGET_REASON_TEXT` in `CampaignBudgetCell.vue`) for a stub/older-API row that still
+ * sends a bare code.
+ */
 export type CampaignBudgetBlockedReason = 'duplicate' | 'banned' | 'notLoggedIn' | 'deleted' | 'missing' | 'noBudget'
 
 /**
  * Why the campaign's daily budget may not be edited — same spirit as `deletable`/`switchable`: the first
  * failing rule, computed by the API. The BO never re-derives this rule, it only renders what the API decided
- * (contract §1).
+ * (contract §1). Contract v1.1 — `reason` is the Thai sentence itself, exactly like `MonitorDeletable.reason`.
  */
 export interface CampaignBudgetEditableView {
   ok: boolean
-  reason: CampaignBudgetBlockedReason | null
+  reason: string | null
 }
 
 /** `POST /ads-monitor/campaign-budget` body (strict on the API side, contract §2). */
