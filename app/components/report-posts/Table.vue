@@ -131,7 +131,12 @@ const COLS: { key: Col, label: string, help?: string }[] = [
         >
           <td class="sticky left-0 z-[1] max-w-72 bg-default px-3 py-2">
             <div class="flex items-center gap-2">
-              <ReportPostsCover :url="row.subject.coverUrl" :is-video="row.subject.isVideo" size="sm" />
+              <ReportPostsCover
+                :url="row.subject.coverUrl"
+                :is-video="row.subject.isVideo"
+                :kind="row.subject.kind"
+                size="sm"
+              />
               <div class="min-w-0">
                 <div class="truncate font-medium text-highlighted" :title="row.subject.title">
                   {{ row.subject.title }}
@@ -145,13 +150,16 @@ const COLS: { key: Col, label: string, help?: string }[] = [
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(row.builds.total) }}
             <div class="text-xs text-dimmed">
-              {{ formatInt(row.builds.accounts) }} บัญชี
+              {{ formatInt(row.builds.accounts) }} บัญชี · {{ formatInt(row.builds.ads) }} ads
             </div>
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
             {{ formatInt(row.builds.approved) }}
             <div class="text-xs text-dimmed">
               {{ formatPostPercent(row.review.approvedRate) }}
+            </div>
+            <div class="text-xs text-dimmed">
+              {{ formatAdApprovedLine(row.builds.adsApproved, row.builds.ads, row.review.adApprovedRate) }}
             </div>
           </td>
           <td class="px-3 py-2 text-right tabular-nums">
@@ -208,13 +216,16 @@ const COLS: { key: Col, label: string, help?: string }[] = [
           <td class="sticky bottom-0 z-10 border-t border-default bg-elevated px-3 py-2 text-right tabular-nums">
             {{ formatInt(summary.builds) }}
             <div class="text-xs text-dimmed">
-              {{ formatInt(summary.accounts) }} บัญชี
+              {{ formatInt(summary.accounts) }} บัญชี · {{ formatInt(summary.ads) }} ads
             </div>
           </td>
           <td class="sticky bottom-0 z-10 border-t border-default bg-elevated px-3 py-2 text-right tabular-nums">
             {{ formatInt(summary.approved) }}
             <div class="text-xs text-dimmed">
               {{ formatPostPercent(summary.approvedRate) }}
+            </div>
+            <div class="text-xs text-dimmed">
+              {{ formatAdApprovedLine(summary.adsApproved, summary.ads, summary.adApprovedRate) }}
             </div>
           </td>
           <td class="sticky bottom-0 z-10 border-t border-default bg-elevated px-3 py-2 text-right tabular-nums">

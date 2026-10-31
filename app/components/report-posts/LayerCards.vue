@@ -30,6 +30,9 @@ const survivedD7 = computed(() => ratioOrNull(props.row.survival.d7.survived, pr
       <p class="text-xs text-muted">
         ถูกปฏิเสธ {{ formatInt(row.builds.rejected) }} · ยื่นอุทธรณ์ {{ formatInt(row.review.appeals.submitted) }} · อุทธรณ์ผ่าน {{ formatInt(row.review.appeals.approved) }}
       </p>
+      <p class="text-xs text-muted">
+        ad copy ผ่าน {{ formatInt(row.builds.adsApproved) }}/{{ formatInt(row.builds.ads) }} ({{ formatPostPercent(row.review.adApprovedRate) }}) · ปฏิเสธ {{ formatInt(row.builds.adsRejected) }}
+      </p>
     </section>
 
     <section class="flex flex-col gap-1.5 rounded-lg border border-default p-3" data-testid="rp-card-survival">

@@ -32,6 +32,10 @@ export interface PostReportBuildCounts {
   unknown: number
   accounts: number
   advertisers: number
+  /** v1.1 — ad-level (per-creative) counts over every `ads` row of the group's builds */
+  ads: number
+  adsApproved: number
+  adsRejected: number
 }
 
 export interface PostReportTopReason {
@@ -46,6 +50,8 @@ export interface PostReportReview {
   within24h: number | null
   topReason: PostReportTopReason | null
   appeals: { submitted: number, approved: number }
+  /** v1.1 — adsApproved / (adsApproved + adsRejected), null when 0 */
+  adApprovedRate: number | null
 }
 
 export interface PostReportDecided {
@@ -177,6 +183,11 @@ export interface PostReportSummary extends SpendFxRow {
   utm: PostReportUtmTotals
   depPerBudget: number | null
   costPerDep: number | null
+  /** v1.1 — same ad-level counts/rate as `PostReportBuildCounts`/`PostReportReview`, cohort-wide */
+  ads: number
+  adsApproved: number
+  adsRejected: number
+  adApprovedRate: number | null
 }
 
 /** `GET /reports/posts` 200 (contract §2) */

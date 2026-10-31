@@ -40,6 +40,9 @@ const survivedD7Rate = computed(() => ratioOrNull(props.summary.d7.survived, pro
       <span class="text-[11px] text-dimmed">
         {{ formatInt(summary.approved) }} ผ่าน · {{ formatInt(summary.rejected) }} ปฏิเสธ · {{ formatInt(summary.pending) }} ยังรอ
       </span>
+      <span class="text-[11px] text-dimmed">
+        ad {{ formatInt(summary.adsApproved) }}/{{ formatInt(summary.ads) }} · {{ formatPostPercent(summary.adApprovedRate) }}
+      </span>
     </div>
 
     <div class="flex min-w-0 flex-col gap-0.5 rounded-lg border border-default p-3" data-testid="rp-sum-review">
