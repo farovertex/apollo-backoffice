@@ -22,6 +22,7 @@
 import type { MonitorUtm } from '#shared/types/ads-monitor'
 import type { ApiErrorBody } from './auth'
 import type { ThbBlock, TopupFxView, TopupSummary } from './fx'
+import type { FailureScreenshotView } from './tiktok-accounts'
 
 /**
  * `topups.status` — the state machine of one round (spec "สถานะของหนึ่งรอบ").
@@ -123,6 +124,14 @@ export interface TopupHumanTaskRef {
   kind: 'paymentOtp'
   /** ISO — `TOPUP_OTP_WAIT_MS` after the task was created; the OTP modal counts down to it */
   expiresAt: string
+  /**
+   * TASK-otp-shot (2026-10-31, FEAT-051 AC-25 cancelled by the human) — the bank's OTP page as the worker saw it the
+   * moment the (still empty) code box appeared: the `jobScreenshots` row of the `cardPay` job (`stage: 'awaitingOtp'`).
+   * The OTP modal shows it through `GET /tiktok-accounts/:tiktokAccountId/failure-screenshots/:jobId` (FEAT-071).
+   * `null` = the worker could not take the picture (the code can still be typed). Optional on the type so stubs from
+   * before the task keep compiling; the live API always sends the key.
+   */
+  screenshot?: FailureScreenshotView | null
 }
 
 /** FEAT-077 (api-contract v1 §6.3) — where a Telegram round is: decided (`pending`), posted (`sent`), or back in the BO (`failed`) */
