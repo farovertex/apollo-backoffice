@@ -1130,7 +1130,11 @@ function stepState(no: number): 'active' | 'done' | 'todo' {
 
 function canReach(no: number): boolean {
   if (no <= 1) return true
-  if (no === 2) return canLeaveStep1.value
+  // FEAT-090 — the step **tab** also opens step 2 with an **empty** selection: the pickers then explain that the
+  // templates follow the accounts (`la-tpl-none`) and nothing is requested. A non-empty selection still has to
+  // pass `canLeaveStep1` (FEAT-083: a currency-mixed selection keeps step 2 unreachable), and `la-next` on
+  // step 1 keeps its own rule (disabled while nothing is selected, FEAT-062 AC-1).
+  if (no === 2) return selectedCount.value === 0 || canLeaveStep1.value
   return canLeaveStep1.value && canLeaveStep2.value
 }
 
@@ -2017,8 +2021,9 @@ onUnmounted(() => {
                     {{ agtItems.length > 0 && selectionCurrency ? `ไม่มี template สกุล ${selectionCurrency}` : agtEmptyText }}
                   </p>
                   <!-- exactly 5 rows (5 × 52 px + the frame's own 2 px borders), the rest scrolls (AC-13) -->
+                  <!-- FEAT-090 — no selection: no list frame either, the `la-tpl-none` line stands alone -->
                   <div
-                    v-else
+                    v-else-if="!showTemplateNone"
                     class="max-h-[262px] divide-y divide-default overflow-y-auto rounded-lg border border-default"
                     role="radiogroup"
                     aria-label="Ad group template"
@@ -2209,7 +2214,7 @@ onUnmounted(() => {
                     ancestor has a definite height to distribute (see bo.md round 4).
                   -->
                   <div
-                    v-else
+                    v-else-if="!showTemplateNone"
                     class="max-h-[302px] divide-y divide-default overflow-y-auto rounded-lg border border-default
                       lg:h-[calc(100vh-596px)] lg:max-h-none lg:min-h-[302px]"
                     role="radiogroup"
