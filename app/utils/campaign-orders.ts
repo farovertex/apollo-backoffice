@@ -6,7 +6,9 @@
  * reads never depends on the browser locale.
  */
 import type { AdGroupBudget, BudgetStrategy } from '#shared/types/ad-group-templates'
-import type { BuildCounts, BuildPauseState, BuildStatus, OrderStatus } from '#shared/types/campaign-orders'
+import type { AdGroupGuardRule, AdGroupGuardSource } from '#shared/types/ad-group-guard'
+import type { BuildCounts, BuildPauseState, BuildStatus, OrderAdGroupGuardSummary, OrderStatus } from '#shared/types/campaign-orders'
+import { adGroupGuardSourceLabel, formatAdGroupGuardRule } from '~/utils/ad-group-guard'
 
 export type StatusColor = 'neutral' | 'primary' | 'info' | 'success' | 'warning' | 'error'
 
@@ -162,4 +164,80 @@ export function capBasis(source: CapSource | null | undefined, copies: number): 
 export function formatOrderCap(source: CapSource | null | undefined, copies: number, accounts: number): string {
   const basis = capBasis(source, copies)
   return formatBudgetCap(basis.budget, basis.copies, accounts)
+}
+
+/**
+ * TASK-orders-post-guard — `app/pages/orders/index.vue` `ord-guard` cell, derived from one order's
+ * `adGroupGuardSummary` so the template stays thin and this is unit-testable on its own.
+ */
+export interface OrderGuardCell {
+  /** `ord-guard`'s `data-state` */
+  state: 'none' | 'off' | 'watching' | 'done'
+  /** `ord-guard-rule` text; `null` only when `state === 'none'` */
+  ruleText: string | null
+  /** the first `rules[]` entry has `rule: null` (switched off at `order`/`account`) — muted, no badge */
+  ruleMuted: boolean
+  /** `ord-guard-source` badge text; `null` when `ruleMuted` or `state === 'none'` */
+  sourceBadge: string | null
+  /** `ord-guard-more` count; `0` hides it */
+  moreCount: number
+  /** `title` of `ord-guard-more`; `null` when `moreCount === 0` */
+  moreTitle: string | null
+  /** `ord-guard-counts` text; `null` hides the line */
+  countsText: string | null
+}
+
+function isNoGuardRule(entry: { rule: AdGroupGuardRule | null, source: AdGroupGuardSource }): boolean {
+  return entry.rule === null && entry.source === 'none'
+}
+
+/** order of the `adGroups` counts line (api-contract key order, also `BuildAdGroupGuardGroupState`) */
+const GUARD_COUNT_LABEL: { key: keyof OrderAdGroupGuardSummary['adGroups'], label: string }[] = [
+  { key: 'watching', label: 'เฝ้า' },
+  { key: 'queued', label: 'สั่งปิด' },
+  { key: 'paused', label: 'ปิดแล้ว' },
+  { key: 'failed', label: 'ล้มเหลว' }
+]
+
+const GUARD_CELL_NONE: OrderGuardCell = {
+  state: 'none',
+  ruleText: null,
+  ruleMuted: false,
+  sourceBadge: null,
+  moreCount: 0,
+  moreTitle: null,
+  countsText: null
+}
+
+/** api-contract spec §2 "กฎปิด ad group" cell — `null`/absent summary or an all-`none` `rules[]` renders `—`. */
+export function orderGuardCell(summary: OrderAdGroupGuardSummary | null | undefined): OrderGuardCell {
+  const rules = summary?.rules ?? []
+  if (!summary || rules.length === 0 || rules.every(isNoGuardRule)) return GUARD_CELL_NONE
+
+  const first = rules[0]!
+  const ruleBearing = rules.filter(r => r.rule !== null)
+  const moreCount = ruleBearing.length > 1 ? ruleBearing.length - 1 : 0
+  const moreTitle = moreCount > 0
+    ? ruleBearing.slice(1).map(r => formatAdGroupGuardRule(r.rule!, r.currency)).join('\n')
+    : null
+
+  const ruleMuted = first.rule === null
+  const ruleText = ruleMuted
+    ? adGroupGuardSourceLabel(first.source, false)
+    : formatAdGroupGuardRule(first.rule!, first.currency)
+  const sourceBadge = ruleMuted ? null : adGroupGuardSourceLabel(first.source, true)
+
+  const { states, adGroups } = summary
+  const state: OrderGuardCell['state'] = states.watching === 0 && states.done > 0
+    ? 'done'
+    : states.watching > 0
+      ? 'watching'
+      : 'off'
+
+  const countsText = GUARD_COUNT_LABEL
+    .filter(({ key }) => adGroups[key] > 0)
+    .map(({ key, label }) => `${label} ${adGroups[key]}`)
+    .join(' · ') || null
+
+  return { state, ruleText, ruleMuted, sourceBadge, moreCount, moreTitle, countsText }
 }
