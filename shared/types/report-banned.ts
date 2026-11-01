@@ -12,6 +12,12 @@
  * TASK-banned-ad-covers — `cover` on each row (the advertiser's first ad, API contract v1 §1) and the
  * `GET /reports/banned/:advertiserId/ads` shapes (`BannedAd` / `BannedAdsResponse`, contract v1 §2) behind the
  * row's "view all ad images" modal.
+ *
+ * TASK-banned-date-filter — `GET /reports/banned` also takes two optional, independent query keys
+ * `bannedFrom` / `bannedTo` (day `YYYY-MM-DD`, filters rows by `bannedAt`) that are not part of this response
+ * shape at all: no new key here, the filter only shrinks `rows`/`total`/`adCount`/`advertiserCount`/
+ * `accountCount`/`totals` the same way the account/advertiser filters do. Not accepted by
+ * `/reports/banned/:advertiserId/campaigns` or `/ads`.
  */
 import type { AdState, KpiMetrics, ReportRange, ReportRangeInfo } from './reports'
 
