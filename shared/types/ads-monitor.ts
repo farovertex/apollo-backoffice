@@ -139,6 +139,72 @@ export interface MonitorDeletable {
   reason: string | null
 }
 
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// FEAT-091 — campaign daily budget edit from the Ads monitor (api-contract.md v1 §0–§2, §6)
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** View of `ads.campaignBudgetPending` (contract §0 — 4 keys). */
+export interface CampaignBudgetPendingView {
+  amount: number
+  jobId: string
+  requestedAt: string
+  requestedBy: string | null
+}
+
+/** View of `ads.campaignBudgetError` (contract §0 — 4 keys). `reason` is a Thai sentence, safe to show. */
+export interface CampaignBudgetErrorView {
+  amount: number
+  jobId: string | null
+  at: string
+  reason: string
+}
+
+/**
+ * Contract §0 `CampaignBudgetBlockedReason` — the six codes the API evaluates in order (contract §1 table).
+ * Contract v1.1: `CampaignBudgetEditableView.reason` carries the **Thai sentence** itself (like
+ * `deletable.reason` / `switchable.reason`), not this code — kept only as the key type of the BO's own
+ * fallback map (`CAMPAIGN_BUDGET_REASON_TEXT` in `CampaignBudgetCell.vue`) for a stub/older-API row that still
+ * sends a bare code.
+ */
+export type CampaignBudgetBlockedReason = 'duplicate' | 'banned' | 'notLoggedIn' | 'deleted' | 'missing' | 'noBudget'
+
+/**
+ * Why the campaign's daily budget may not be edited — same spirit as `deletable`/`switchable`: the first
+ * failing rule, computed by the API. The BO never re-derives this rule, it only renders what the API decided
+ * (contract §1). Contract v1.1 — `reason` is the Thai sentence itself, exactly like `MonitorDeletable.reason`.
+ */
+export interface CampaignBudgetEditableView {
+  ok: boolean
+  reason: string | null
+}
+
+/** `POST /ads-monitor/campaign-budget` body (strict on the API side, contract §2). */
+export interface CampaignBudgetBody {
+  advertiserId: string
+  tiktokCampaignId: string
+  amount: number
+}
+
+/** `POST /ads-monitor/campaign-budget` 202 body (contract §2). */
+export interface CampaignBudgetAccepted {
+  jobId: string
+  tiktokCampaignId: string
+  campaignName: string | null
+  adCount: number
+  amount: number
+  previousAmount: number
+  currency: string | null
+  campaignBudgetPending: CampaignBudgetPendingView
+}
+
+/** `POST /ads-monitor/campaign-budget` 200 body — the request equalled the current value, no job created. */
+export interface CampaignBudgetUnchanged {
+  unchanged: true
+  tiktokCampaignId: string
+  amount: number
+  currency: string | null
+}
+
 export interface MonitorAdvertiserRef {
   id: string
   name: string | null
@@ -303,6 +369,12 @@ export interface MonitorRow extends SpendThbRow {
   deleteError?: DeleteErrorView | null
   /** campaign tab only — whether the trash button may be pressed, and why not */
   deletable?: MonitorDeletable
+  /** FEAT-091 — campaign tab only: a `campaignBudget` job is queued/running for this campaign */
+  campaignBudgetPending?: CampaignBudgetPendingView | null
+  /** FEAT-091 — campaign tab only: the last `campaignBudget` job failed */
+  campaignBudgetError?: CampaignBudgetErrorView | null
+  /** FEAT-091 — campaign tab only: whether the pencil may be pressed, and why not (contract §1) */
+  campaignBudgetEditable?: CampaignBudgetEditableView
   budget?: MonitorBudget
   /**
    * FEAT-060 — the **advertiser's** spending cap (contract §3.1). Optional so a row from an older API or a

@@ -90,6 +90,8 @@ const emit = defineEmits<{
   'delete': [row: MonitorRow]
   /** FEAT-060 — campaign tab only: the row asks the page to open the budget modal */
   'budget': [row: MonitorRow]
+  /** FEAT-091 — campaign tab only: the row asks the page to open the campaign budget modal, with the prefill amount */
+  'campaign-budget': [row: MonitorRow, amount: number]
   /** FEAT-064 — the `am-name-collapse` header button toggled */
   'update:name-collapsed': [value: boolean]
   /** FEAT-067 — the `am-utm-collapse` header button toggled */
@@ -482,6 +484,13 @@ function scheduleText(row: MonitorRow): string {
               :row="row"
               :mode="mode ?? 'thb'"
               @ask="emit('budget', row)"
+            />
+
+            <AdsMonitorCampaignBudgetCell
+              v-else-if="column.key === 'budget' && level === 'campaign'"
+              :row="row"
+              :mode="mode ?? 'thb'"
+              @ask="(r, amount) => emit('campaign-budget', r, amount)"
             />
 
             <span
