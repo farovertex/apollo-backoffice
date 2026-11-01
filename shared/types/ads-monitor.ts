@@ -460,6 +460,41 @@ export interface DeleteAccepted {
   deletePending: DeletePendingView
 }
 
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// FEAT-093 — delete N ad groups or N ads of one advertiser (api-contract.md v1 §0/§2/§6, job `adsDelete`)
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * FEAT-093 §0 — the two levels this feature can delete. The campaign level keeps its own click-based job and
+ * endpoint (`POST /ads-monitor/delete-campaign`), so it is deliberately **not** part of `DeleteLevel`.
+ */
+export type DeleteLevel = 'adGroup' | 'ad'
+
+/** FEAT-093 §2 — `POST /ads-monitor/delete` body (strict on the API side; one advertiser per request). */
+export interface DeleteBody {
+  advertiserId: string
+  level: DeleteLevel
+  ids: string[]
+}
+
+/**
+ * FEAT-093 §2 — `POST /ads-monitor/delete` 202 body (7 keys). Named `AdsDeleteAccepted` so it never clashes
+ * with the campaign tab's `DeleteAccepted` above. `deletePending` is the value the page lays over every
+ * affected row of that advertiser without a re-read.
+ */
+export interface AdsDeleteAccepted {
+  jobId: string
+  advertiserId: string
+  level: DeleteLevel
+  /** the ids that were accepted, in request order (= table order) */
+  ids: string[]
+  /** `{ id, name }` in `ids` order; `name` of the newest live row (`null` when unknown) */
+  items: { id: string, name: string | null }[]
+  /** number of `ads` rows that received `deletePending` (an ad group with 3 ads counts 3) */
+  adCount: number
+  deletePending: DeletePendingView
+}
+
 /**
  * Why a delete was refused. FEAT-085 (api-contract §2.2/§3): `deletePending` / `optPending` / `buildInProgress`
  * are gone — a delete or switch job of the same campaign answers `duplicate` (with that job's id / position).
