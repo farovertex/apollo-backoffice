@@ -9,7 +9,7 @@
  * writes it into the URL and the new props come back in. There is no local copy of the dates, so a back
  * button, a shared link or a page-side reset is reflected immediately.
  *
- * The `prefix` makes the test ids per page (`rp` / `rs` / `rb` / `ru` / `am`): `<p>-range`,
+ * The `prefix` makes the test ids per page (`rp` / `rs` / `rb` / `ru` / `am` / `rf` / `rd` / `rc`): `<p>-range`,
  * `<p>-range-trigger`, `<p>-range-panel`, `<p>-range-<key>` (×6), `<p>-from`, `<p>-to`,
  * `<p>-range-invalid`. The two inputs are the deterministic surface for specs (spec A1); the `UCalendar` is
  * a convenience bound to the same values (pattern: the template's demo `HomeDateRangePicker`, deleted with the
@@ -22,7 +22,7 @@ import type { ReportRange, ReportRangeKey, ReportRangeState } from '#shared/type
 
 const props = withDefaults(defineProps<{
   /** test-id prefix of the hosting page */
-  prefix: 'rp' | 'rs' | 'rb' | 'ru' | 'am' | 'rf' | 'rd'
+  prefix: 'rp' | 'rs' | 'rb' | 'ru' | 'am' | 'rf' | 'rd' | 'rc'
   range: ReportRange
   /** `''` when absent — only `custom` ever carries a pair */
   from: string

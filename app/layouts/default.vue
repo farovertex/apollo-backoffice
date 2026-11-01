@@ -172,6 +172,14 @@ const links = computed(() => [[{
       onSelect: () => {
         open.value = false
       }
+    }, {
+      // FEAT-094 — admin challenge page, directly after Posts; same role gate (spec "UI behaviour")
+      label: 'Challenge',
+      icon: 'i-lucide-trophy',
+      to: '/reports/challenge',
+      onSelect: () => {
+        open.value = false
+      }
     }]
   : []), ...(canSeeCashier.value
   ? [{
