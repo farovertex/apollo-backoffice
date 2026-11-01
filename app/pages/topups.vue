@@ -168,6 +168,32 @@ onMounted(() => {
   startLive()
   if (tab.value === 'history') void loadHistory()
 })
+
+// FEAT-095 (spec "Deep links", AC-20) — `/topups?roundId=<id>[&otp=1]`: pick the tab by where the round is (the
+// live Active list first, else History), flash the row, and for `otp=1` reuse the row's own "กรอก OTP" button so
+// the exact same modal opens.
+const route = useRoute()
+const deepLink = useRowDeepLink()
+onMounted(async () => {
+  const roundId = typeof route.query.roundId === 'string' ? route.query.roundId : ''
+  if (!roundId) return
+  const wantOtp = route.query.otp === '1'
+  const inActive = await waitForRow('tp-row', roundId, 1800)
+  if (!inActive) {
+    tab.value = 'history'
+    if (!historyLoaded.value) await loadHistory()
+  }
+  void deepLink({
+    rowTestId: 'tp-row',
+    id: roundId,
+    clearKeys: ['roundId', 'otp'],
+    onFound: async (el) => {
+      if (!wantOtp) return
+      await nextTick()
+      el.querySelector<HTMLElement>('[data-testid="tp-row-otp"]')?.click()
+    }
+  })
+})
 onUnmounted(() => {
   historySession++
   stopLive()
@@ -598,6 +624,7 @@ const rangeTo = computed(() => Math.min(historyPage.value * LIMIT, historyTotal.
                   v-for="row in rows"
                   :key="row.id"
                   :data-topup-id="row.id"
+                  :data-id="row.id"
                   :data-status="row.status"
                   data-testid="tp-row"
                 >

@@ -286,6 +286,21 @@ onMounted(() => {
   void load()
 })
 
+// FEAT-095 (spec "Deep links", AC-20) — `/orders/<id>?tab=builds&buildId=<b>`: expand + flash that build row.
+const deepLink = useRowDeepLink()
+onMounted(() => {
+  const buildId = typeof route.query.buildId === 'string' ? route.query.buildId : ''
+  if (!buildId) return
+  void deepLink({
+    rowTestId: 'od-build',
+    id: buildId,
+    clearKeys: ['buildId'],
+    prepare: () => {
+      if (!expanded.value.includes(buildId)) expanded.value = [...expanded.value, buildId]
+    }
+  })
+})
+
 onUnmounted(() => {
   session++
   templateSession++

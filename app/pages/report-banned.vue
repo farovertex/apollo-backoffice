@@ -279,6 +279,26 @@ onMounted(() => {
   void loadAdvertisers()
 })
 
+// FEAT-095 (spec "Deep links", AC-20) — `/reports/banned?advertiserId=<id>`: the page already filters to that
+// advertiser (advertiserId is a real filter here), so the row is on screen; expand + flash it. The query is kept,
+// not cleared, because dropping it would reset the filter and remove the very row we linked to.
+const deepLink = useRowDeepLink()
+onMounted(() => {
+  const target = typeof route.query.advertiserId === 'string' ? route.query.advertiserId : ''
+  if (!target || target === 'all') return
+  void deepLink({
+    rowTestId: 'rb-row',
+    id: target,
+    clearKeys: [],
+    prepare: () => {
+      if (!expanded.value.includes(target)) {
+        expanded.value = [...expanded.value, target]
+        if (!campaigns.value[target]) void loadCampaigns(target)
+      }
+    }
+  })
+})
+
 onUnmounted(() => {
   session++
 })
