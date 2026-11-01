@@ -32,6 +32,14 @@
  * - an expandable per-advertiser campaign table: `rb-expand` → `GET /reports/banned/:id/campaigns` with the
  *   **same** range query, once per (row, range); the cache is dropped and the open rows reload when the range
  *   changes. The state lives here (the page owns `useApi()`), the rendering in `ReportBannedCampaigns`.
+ *
+ * TASK-banned-date-filter — a second, independent filter on the **list** (not the numbers): `bannedFrom` /
+ * `bannedTo` (`rb-banned-from` / `rb-banned-to`, each optional) keep only rows whose `bannedAt` falls inside
+ * the day range; they ride in `bannedQueryKey` and the `/reports/banned` query only, never the campaign/ads
+ * endpoints, and never change the shared range picker above. An invalid pair (bad format, or both present
+ * with `from > to`) renders `rb-banned-invalid` and — exactly like `rangeInvalid` — sends no request at all.
+ * `rb-banned-clear` drops just this pair; `hasFilter`/`rb-clear`/`rb-clear-nomatch` drop it together with the
+ * three selects, keeping `range`/`from`/`to` untouched.
  */
 import type { FetchError } from 'ofetch'
 import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
@@ -82,6 +90,12 @@ const page = computed(() => {
 const workspaceId = computed(() => queryString('workspaceId') ?? 'all')
 const accountId = computed(() => queryString('tiktokAccountId') ?? 'all')
 const advertiserId = computed(() => queryString('advertiserId') ?? 'all')
+
+/** TASK-banned-date-filter — `''` means absent; each side is independent (no `all` sentinel like the selects). */
+const bannedFrom = computed(() => queryString('bannedFrom') ?? '')
+const bannedTo = computed(() => queryString('bannedTo') ?? '')
+/** Thai reason the pair cannot be sent, `null` when fine — mirrors `rangeInvalid` above. */
+const bannedInvalid = computed(() => bannedDateRangeInvalid(bannedFrom.value, bannedTo.value))
 
 function orUndefined(value: string): string | undefined {
   return value === 'all' ? undefined : value
@@ -144,7 +158,8 @@ function rememberFromQuery() {
 
 async function load() {
   // FEAT-056 — an incomplete/impossible custom pair sends nothing at all (AC-25)
-  if (rangeInvalid.value) {
+  // TASK-banned-date-filter — same rule for an invalid bannedFrom/bannedTo pair
+  if (rangeInvalid.value || bannedInvalid.value) {
     session++
     pending.value = false
     return
@@ -163,7 +178,9 @@ async function load() {
         limit: LIMIT,
         workspaceId: workspaceId.value === 'all' ? undefined : workspaceId.value,
         tiktokAccountId: accountId.value === 'all' ? undefined : accountId.value,
-        advertiserId: advertiserId.value === 'all' ? undefined : advertiserId.value
+        advertiserId: advertiserId.value === 'all' ? undefined : advertiserId.value,
+        bannedFrom: bannedFrom.value || undefined,
+        bannedTo: bannedTo.value || undefined
       }
     })
     if (s !== session) return
@@ -213,7 +230,8 @@ async function loadAdvertisers() {
 }
 
 const bannedQueryKey = computed(() => JSON.stringify([
-  range.value, customFrom.value, customTo.value, page.value, workspaceId.value, accountId.value, advertiserId.value
+  range.value, customFrom.value, customTo.value, page.value, workspaceId.value, accountId.value, advertiserId.value,
+  bannedFrom.value, bannedTo.value
 ]))
 
 watch(bannedQueryKey, () => {
@@ -297,10 +315,23 @@ const hasFilter = computed(() =>
   workspaceId.value !== 'all'
   || accountId.value !== 'all'
   || advertiserId.value !== 'all'
+  || bannedFrom.value !== ''
+  || bannedTo.value !== ''
 )
 
 function clearFilters() {
-  setQuery({ workspaceId: undefined, tiktokAccountId: undefined, advertiserId: undefined })
+  setQuery({
+    workspaceId: undefined,
+    tiktokAccountId: undefined,
+    advertiserId: undefined,
+    bannedFrom: undefined,
+    bannedTo: undefined
+  })
+}
+
+/** TASK-banned-date-filter — `rb-banned-clear`: drops only the ban-date pair, keeps the three selects and the range. */
+function clearBannedDates() {
+  setQuery({ bannedFrom: undefined, bannedTo: undefined })
 }
 
 /** an account change also drops `advertiserId` (contract §3.2) */
@@ -433,6 +464,38 @@ function showCovers(row: BannedRow) {
               data-testid="rb-filter-advertiser"
               @update:model-value="(v: string) => setQuery({ advertiserId: orUndefined(v) })"
             />
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs whitespace-nowrap text-muted">วันที่โดนแบน</span>
+              <UInput
+                type="date"
+                :model-value="bannedFrom"
+                size="xs"
+                class="w-36"
+                aria-label="วันที่โดนแบนตั้งแต่"
+                data-testid="rb-banned-from"
+                @update:model-value="(v: string | number) => setQuery({ bannedFrom: String(v) || undefined })"
+              />
+              <span class="text-sm text-muted">→</span>
+              <UInput
+                type="date"
+                :model-value="bannedTo"
+                size="xs"
+                class="w-36"
+                aria-label="วันที่โดนแบนถึง"
+                data-testid="rb-banned-to"
+                @update:model-value="(v: string | number) => setQuery({ bannedTo: String(v) || undefined })"
+              />
+              <UButton
+                v-if="bannedFrom || bannedTo"
+                icon="i-lucide-x"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="ล้างวันที่โดนแบน"
+                data-testid="rb-banned-clear"
+                @click="clearBannedDates"
+              />
+            </div>
             <UButton
               v-if="hasFilter"
               label="ล้างตัวกรอง"
@@ -444,6 +507,14 @@ function showCovers(row: BannedRow) {
               @click="clearFilters"
             />
           </div>
+
+          <p
+            v-if="bannedInvalid"
+            class="text-sm text-error"
+            data-testid="rb-banned-invalid"
+          >
+            {{ bannedInvalid }}
+          </p>
 
           <div v-if="showSkeleton" class="flex flex-col gap-2" data-testid="rb-loading">
             <USkeleton class="h-40 w-full" />

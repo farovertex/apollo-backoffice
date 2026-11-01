@@ -108,6 +108,26 @@ export function rangeUrlPatch(state: ReportRangeState, defaultKey: ReportRange):
   }
 }
 
+/**
+ * TASK-banned-date-filter — the `bannedFrom`/`bannedTo` pair of `/reports/banned` (api-contract v1). Unlike the
+ * `range`/`custom` pair above, each side is **optional and independent** (an open-ended range is valid), so this
+ * is its own function rather than a reuse of `reportRangeInvalid()`. The two error texts are shared with it on
+ * purpose (same Thai wording the picker already uses): a hand-typed, non-`YYYY-MM-DD` value on either side is
+ * `'รูปแบบวันที่ไม่ถูกต้อง'`; both present with `bannedFrom > bannedTo` is `'วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น'`.
+ * `null` means the pair (or the single side, or neither) is fine to send.
+ */
+export function bannedDateRangeInvalid(from: string, to: string): string | null {
+  if (!from && !to) return null
+  if ((from && !ISO_DAY_RE.test(from)) || (to && !ISO_DAY_RE.test(to))) return 'รูปแบบวันที่ไม่ถูกต้อง'
+  if (from && to) {
+    const fromMs = dayMs(from)
+    const toMs = dayMs(to)
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return 'รูปแบบวันที่ไม่ถูกต้อง'
+    if (toMs < fromMs) return 'วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น'
+  }
+  return null
+}
+
 /** `'2026-10-01'` → `'1 ต.ค. 2026'`; an unparsable day is returned unchanged (spec A7). */
 export function formatRangeDay(day: string): string {
   if (!ISO_DAY_RE.test(day)) return day
