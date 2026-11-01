@@ -26,9 +26,14 @@ export function formatDecimal(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? DEC.format(value) : REPORT_DASH
 }
 
-/** `2.81%` — the API already sends percent points; `—` for null/NaN. */
-export function formatPercent(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value) ? `${DEC.format(value)}%` : REPORT_DASH
+/**
+ * `2.81%` — the API already sends percent points; `—` for null/NaN. `decimals` defaults to 2 (every
+ * existing caller); pass `0` for a whole-percent reading (FEAT-094 "คุ้ม" numbers, "ตัวเลขดูเยอะไป" — the
+ * human's reason for the v2 mockup's `NN%`, api-contract.md v1 §4 `gapText`).
+ */
+export function formatPercent(value: number | null | undefined, decimals = 2): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return REPORT_DASH
+  return decimals === 0 ? `${INT.format(value)}%` : `${DEC.format(value)}%`
 }
 
 /**

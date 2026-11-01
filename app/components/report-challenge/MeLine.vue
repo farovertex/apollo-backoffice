@@ -49,7 +49,7 @@ const sentence = computed(() => {
 })
 
 const teamRatio = computed(() => depPerBudgetPct(props.team.deposit, props.team.spend))
-const teamText = computed(() => `ทั้งทีม ยิงไป ${formatThb(props.team.spend, 0)} · ได้ยอด ${formatThb(props.team.deposit, 0)} · คุ้ม ${formatPercent(teamRatio.value)}`)
+const teamText = computed(() => `ทั้งทีม ยิงไป ${formatThb(props.team.spend, 0)} · ได้ยอด ${formatThb(props.team.deposit, 0)} · คุ้ม ${formatPercent(teamRatio.value, 0)}`)
 </script>
 
 <template>

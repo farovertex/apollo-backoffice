@@ -48,7 +48,7 @@ const deltaText = computed(() => {
   return `${arrow} ${d.pct}% ${deltaSuffix(props.rangeKey)}`
 })
 
-const heroText = computed(() => (props.by === 'depBudget' ? formatPercent(props.value) : formatThb(props.value, 0)))
+const heroText = computed(() => (props.by === 'depBudget' ? formatPercent(props.value, 0) : formatThb(props.value, 0)))
 const heroCaption = computed(() => (props.by === 'depBudget' ? 'คุ้ม = ได้ยอด ÷ ยิงไป' : 'ได้ยอด (THB)'))
 
 const DOT_CAP = 50
