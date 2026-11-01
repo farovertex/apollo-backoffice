@@ -14,6 +14,9 @@
  * `enoughOnly`'s UI default is **on** (unlike the API's own default `0`): the switch being on omits the key
  * from the URL (back to the page default) and the request always sends `enoughOnly=1` explicitly; off sends
  * `enoughOnly=0` and the not-enough rows stay, dimmed (`rp-row-dim`).
+ *
+ * workspace picker for every role (TASK-post-admin-all · Admins see every workspace on the Post report,
+ * like /reports/challenge).
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
@@ -30,9 +33,6 @@ const EMPTY_TEXT = 'ไม่มี build ที่เผยแพร่ใน�
 const route = useRoute()
 const router = useRouter()
 const api = useApi()
-const auth = useAuth()
-
-const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
 
 function queryString(key: string): string {
   const value = route.query[key]
@@ -51,7 +51,7 @@ function setQuery(patch: Record<string, string | undefined>) {
 // ── url state ────────────────────────────────────────────────────────────────────────────────────────────────────────
 const rangeState = computed(() => parseReportRange(route.query, '30d'))
 const rangeInvalid = computed(() => reportRangeInvalid(rangeState.value))
-const workspaceId = computed(() => (isGod.value ? parseWorkspaceId(route.query) : ''))
+const workspaceId = computed(() => parseWorkspaceId(route.query))
 const by = computed<PostReportLens>(() => {
   const raw = queryString('by')
   return (POST_LENS_ORDER as string[]).includes(raw) ? (raw as PostReportLens) : 'post'
@@ -207,7 +207,6 @@ function openRow(key: string) {
         <ReportPostsToolbar
           :range="rangeState"
           :pending="pending"
-          :is-god="isGod"
           :workspaces="workspaces"
           :workspace-id="workspaceId"
           :prefixes="prefixes"

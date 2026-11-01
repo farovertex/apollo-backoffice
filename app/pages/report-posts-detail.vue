@@ -8,6 +8,9 @@
  * URL = `:key` (route param) + `range/from/to/workspaceId/by` (query, same semantics as the list page, no
  * `prefix`/`enoughOnly` per contract §3). The back link (`rp-back`) keeps the whole query so the list page
  * reopens exactly where it was left.
+ *
+ * workspace picker for every role (TASK-post-admin-all · Admins see every workspace on the Post report,
+ * like /reports/challenge).
  */
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
@@ -15,9 +18,6 @@ import type { PostReportLens, PostsDetailResponse } from '#shared/types/report-p
 
 const route = useRoute()
 const api = useApi()
-const auth = useAuth()
-
-const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
 
 const key = computed(() => String(route.params.key ?? ''))
 
@@ -35,7 +35,7 @@ function queryString(k: string): string {
 
 const rangeState = computed(() => parseReportRange(route.query, '30d'))
 const rangeInvalid = computed(() => reportRangeInvalid(rangeState.value))
-const workspaceId = computed(() => (isGod.value ? parseWorkspaceId(route.query) : ''))
+const workspaceId = computed(() => parseWorkspaceId(route.query))
 const by = computed<PostReportLens>(() => {
   const raw = queryString('by')
   return (POST_LENS_ORDER as string[]).includes(raw) ? (raw as PostReportLens) : 'post'

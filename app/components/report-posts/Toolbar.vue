@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * FEAT-089 — the header controls of `/reports/posts`: `ReportsDateRange` (`rp-range`) · GOD-only workspace
+ * FEAT-089 — the header controls of `/reports/posts`: `ReportsDateRange` (`rp-range`) · workspace picker for
+ * every role (TASK-post-admin-all · Admins see every workspace on the Post report, like /reports/challenge)
  * `USelect` (`rp-workspace`) · prefix `USelect` (`rp-prefix`, options from the response's `prefixes[]`,
  * "ทั้งหมด" = no param) · the "เฉพาะแถวที่ข้อมูลพอ" switch (`rp-enough-only`) · the `rp-updated` status line.
  * Controlled — the page owns the URL, this component only emits (same contract as
@@ -12,7 +13,6 @@ import type { ReportRange, ReportRangeState } from '#shared/types/reports'
 const props = defineProps<{
   range: ReportRangeState
   pending: boolean
-  isGod: boolean
   workspaces: PerfScopeWorkspace[]
   workspaceId: string
   prefixes: string[]
@@ -74,7 +74,7 @@ const updatedText = computed(() => perfUpdatedText(props.lastLoadedAt))
       @update="(patch) => emit('range', patch)"
     />
 
-    <div v-if="isGod" data-testid="rp-workspace" :data-value="workspaceId">
+    <div data-testid="rp-workspace" :data-value="workspaceId">
       <USelect
         v-model="selectedWorkspace"
         :items="workspaceItems"
