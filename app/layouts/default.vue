@@ -7,6 +7,19 @@ const auth = useAuth()
 const open = ref(false)
 
 /**
+ * FEAT-095 — the shared notifications state (bell, slideover, toasts, sound). Started once when an admin is known
+ * and stopped on logout. Client-only: `EventSource` and the timers do not exist during SSR.
+ */
+const notifications = useNotifications()
+// string template ref → this setup ref (the composable's audio handle), so `play()` has a real element
+const ntAudio = notifications.audioRef
+watch(() => auth.admin.value?.id ?? null, (adminId) => {
+  if (!import.meta.client) return
+  if (adminId) notifications.start()
+  else notifications.stop()
+}, { immediate: true })
+
+/**
  * FEAT-008 — display-only role filter for the nav (the API is the authority; a Payment-only admin that
  * types the URL still gets the 403 state on the page). Items without a role rule are always visible.
  */
@@ -293,6 +306,8 @@ onMounted(async () => {
       </template>
 
       <template #default="{ collapsed }">
+        <NotificationsBell :collapsed="collapsed" />
+
         <UDashboardSearchButton :collapsed="collapsed" class="bg-transparent ring-default" />
 
         <UNavigationMenu
@@ -314,5 +329,25 @@ onMounted(async () => {
     <slot />
 
     <NotificationsSlideover />
+
+    <!-- FEAT-095 — the single hidden audio + the QA observation point for the live/toast/sound mechanism -->
+    <span
+      data-testid="nt-root"
+      class="sr-only"
+      aria-hidden="true"
+      :data-nt-stream="notifications.streamState.value"
+      :data-nt-events="notifications.events.value"
+      :data-nt-toasts="notifications.toasts.value"
+      :data-nt-sound-played="notifications.soundPlayed.value"
+      :data-nt-sound-blocked="notifications.soundBlocked.value ? '1' : '0'"
+      :data-nt-prefs="notifications.prefs.loaded ? 'ready' : 'loading'"
+    >
+      <audio
+        ref="ntAudio"
+        data-testid="nt-audio"
+        :src="NT_SOUND_SRC"
+        preload="auto"
+      />
+    </span>
   </UDashboardGroup>
 </template>

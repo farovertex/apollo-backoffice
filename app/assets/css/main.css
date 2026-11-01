@@ -23,3 +23,14 @@
 @utility rp-row-dim {
   opacity: 0.55;
 }
+
+/* FEAT-095 — a deep-linked row (ta-row / tp-row / od-build / rb-row) flashes for ~4 s when opened from a
+   notification. Driven by the `data-highlight="1"` attribute that `useRowDeepLink` sets and then clears; a
+   plain attribute selector (not a class), so it needs no `@utility`. */
+[data-highlight="1"] {
+  animation: nt-row-flash 1s ease-in-out 0s 3;
+}
+@keyframes nt-row-flash {
+  0%, 100% { background-color: transparent; }
+  40% { background-color: color-mix(in oklch, var(--ui-primary) 16%, transparent); }
+}
