@@ -327,8 +327,9 @@ async function onCheck() {
                 size="sm"
               />
               <span class="flex min-w-0 flex-col">
-                <span class="truncate font-medium text-highlighted">{{ bcTtAccountName(tt) }}</span>
-                <span class="truncate text-xs text-muted">
+                <!-- TASK-bc-tt-fullname — full name, wrapped instead of truncated -->
+                <span class="break-words font-medium text-highlighted">{{ bcTtAccountName(tt) }}</span>
+                <span class="break-words text-xs text-muted">
                   {{ bcTtAccountHandle(tt) }}
                   <template v-if="bcTtRelationText(tt.relationStatus)">
                     · {{ bcTtRelationText(tt.relationStatus) }}

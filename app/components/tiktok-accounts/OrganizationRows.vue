@@ -264,7 +264,8 @@ const CELL = 'block sm:table-cell sm:px-3'
         <UIcon name="i-lucide-network" class="size-4 shrink-0 text-primary" />
         <span class="font-medium text-highlighted">Business Center</span>
         <span class="text-muted">·</span>
-        <span class="min-w-0 truncate text-muted" :title="accountName">{{ accountName }}</span>
+        <!-- TASK-bc-tt-fullname — the owning TikTok account's full name, wrapped instead of truncated -->
+        <span class="min-w-0 break-words text-muted" data-testid="ta-org-panel-account">{{ accountName }}</span>
         <UBadge
           v-if="!loading && !error"
           color="neutral"
@@ -437,7 +438,9 @@ const CELL = 'block sm:table-cell sm:px-3'
                       @click="ttState(org)?.error ? emit('tt-accounts-retry', org) : undefined"
                     />
                     <template #content>
-                      <div class="max-h-80 w-72 overflow-y-auto p-2 text-sm">
+                      <!-- TASK-bc-tt-fullname — names are shown in full (wrap, never truncate): the popover is wide enough for
+                           most names and long ones break onto a second line -->
+                      <div class="max-h-80 w-96 max-w-[calc(100vw-2rem)] overflow-y-auto p-2 text-sm">
                         <p
                           v-if="ttState(org)?.error"
                           class="px-1 py-2 text-xs text-error"
@@ -466,9 +469,14 @@ const CELL = 'block sm:table-cell sm:px-3'
                             data-testid="ta-tt-count-row"
                             :data-asset-id="tt.assetId"
                           >
-                            <UAvatar :src="tt.avatar ?? undefined" :alt="bcTtAccountName(tt)" size="2xs" />
+                            <UAvatar
+                              :src="tt.avatar ?? undefined"
+                              :alt="bcTtAccountName(tt)"
+                              size="2xs"
+                              class="shrink-0"
+                            />
                             <span class="flex min-w-0 flex-col">
-                              <span class="truncate text-highlighted">{{ bcTtAccountName(tt) }}</span>
+                              <span class="break-words text-highlighted" data-testid="ta-tt-count-name">{{ bcTtAccountName(tt) }}</span>
                               <span class="text-xs break-words text-muted" :title="bcTtRolesTitle(tt.roles)">
                                 {{ bcTtAccountHandle(tt) }} · {{ bcTtRolesText(tt.roles) }}
                                 <template v-if="bcTtRelationText(tt.relationStatus)">
