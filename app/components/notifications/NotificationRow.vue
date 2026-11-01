@@ -1,9 +1,12 @@
 <script setup lang="ts">
 /**
- * FEAT-095 (spec "UI behaviour", AC-15) — one notification row in the slideover. Level icon (colour by level),
- * title, body, a meta line ("โดย <displayName>" when there is an actor, else "ระบบ") + relative time, and an
- * unread dot. Read rows are dimmed. Click or Enter/Space activates it (mark read + navigate), handled by the
- * parent through `open`.
+ * FEAT-095 (spec "UI behaviour", AC-15; actor label A19) — one notification row in the slideover. Level icon
+ * (colour by level), title, body, a meta line + relative time, and an unread dot. Read rows are dimmed. Click
+ * or Enter/Space activates it (mark read + navigate), handled by the parent through `open`.
+ *
+ * Meta line (A19): GOD sees "โดย <displayName>" when `actor` ≠ null, else "ระบบ". A non-GOD viewer only ever
+ * receives rows where the actor is themselves (requester rows) or nobody (system events) — never another
+ * person's name — so the meta reads "คุณ" when `actor` ≠ null and "ระบบ" when it is null.
  */
 import type { NotificationView } from '#shared/types/notifications'
 
@@ -16,13 +19,16 @@ const props = defineProps<{
 const emit = defineEmits<{ open: [notification: NotificationView] }>()
 
 const auth = useAuth()
-/** only GOD sees who triggered an event (AC-15); everyone else reads "ระบบ" */
+/** only GOD sees who triggered an event (AC-15); everyone else reads "คุณ"/"ระบบ" (A19) */
 const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
 
 const n = computed(() => props.notification)
 const unread = computed(() => n.value.readAt === null)
 const time = computed(() => notificationTime(n.value.createdAt, props.now ?? new Date()))
-const meta = computed(() => (isGod.value && n.value.actor ? `โดย ${n.value.actor.displayName}` : 'ระบบ'))
+const meta = computed(() => {
+  if (!n.value.actor) return 'ระบบ'
+  return isGod.value ? `โดย ${n.value.actor.displayName}` : 'คุณ'
+})
 
 function activate() {
   emit('open', n.value)

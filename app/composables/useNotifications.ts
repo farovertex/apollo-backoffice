@@ -16,7 +16,9 @@ import type {
  *
  * Live, exactly like `useTopupsLive`:
  *   `EventSource('/backend/notifications/stream')` (the Nitro proxy) →
- *     `event: ready`        → mode `live`, refresh the unread count + the first page once (no missed-event gap)
+ *     `event: ready`        → mode `live`; first connection of the session: silent `loadFirst()` seed; every
+ *                             reconnect after that: `refreshFirstPageDiff()` so a gap during the retry still
+ *                             toasts (fix1/T2b, "stream reconnect swallows arrivals")
  *     `event: notification` → prepend, count+1, run the toast/sound rule
  *     `event: read`         → update `readAt` locally, count−1 when it was unread (multi-tab sync)
  *     `onerror`             → close, poll `unread-count` every 15 s (refresh page 1 when it grows), retry the
@@ -83,6 +85,11 @@ const _useNotifications = () => {
   let session = 0
   /** ids the UI already knows (seeded on first load → never toast; stream/poll adds toast-eligible ids) */
   const knownIds = new Set<string>()
+  /** fix1/T2b: only the stream's very first `ready` seeds silently; every reconnect `ready` after it must
+   * diff (refreshFirstPageDiff) so rows that arrived during the 30 s retry gap (NT_STREAM_RETRY_MS) still run
+   * the toast rule — see "stream reconnect swallows arrivals" below. Reset on stop() so a fresh session is
+   * silent again. */
+  let seenReady = false
   let lastPlayAt = 0
   // sliding-window burst tracker for toast coalescing
   let burstStart = 0
@@ -416,7 +423,15 @@ const _useNotifications = () => {
       if (source !== es) return
       streamState.value = 'live'
       clearTimers()
-      void loadFirst()
+      if (!seenReady) {
+        // the very first connection of this session: nothing has toasted yet, so a silent seed is correct
+        seenReady = true
+        void loadFirst()
+      } else {
+        // reconnect (stream retried every NT_STREAM_RETRY_MS after an onerror): rows that arrived while the
+        // stream was down must still run the toast rule, so diff against knownIds instead of re-seeding them
+        void refreshFirstPageDiff()
+      }
     })
 
     es.addEventListener('notification', (ev) => {
@@ -478,6 +493,7 @@ const _useNotifications = () => {
     unreadCount.value = 0
     nextCursor.value = null
     knownIds.clear()
+    seenReady = false
     tab.value = 'unread'
     prefs.loaded = false
   }
