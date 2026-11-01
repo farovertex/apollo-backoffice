@@ -202,6 +202,13 @@
  * `GET /backend/browser-profiles/<id>` (2.7 + `deleting`), cap 120 s, ids exposed as
  * `ta-page[data-delete-polling]`, one toast per outcome (deleted · failed + `provisionError` · did not happen ·
  * taking longer) with an "Open browser profiles" action for the three that are not a success.
+ * TASK-ta-workspace-filter (2026-11-01, human request) — toolbar filter **Workspace** (`ta-filter-workspace`,
+ * `data-value` = `all` | workspace id) right after the prefix filter: `ทุก workspace` + one item per workspace of
+ * one `GET /backend/workspaces` per page load (plus any workspace id seen in the rows that the list lacks). It is
+ * **client-side** (the list endpoint has no workspace param; every row carries `workspaceId`), composes with the
+ * search and sits on top of the server-side launching / prefix filters, so switching it issues no request. No
+ * match → `ta-empty-workspace` with a reset button (`ta-filter-workspace-off`); the GOD select-all checkbox and
+ * the Balance total already read the visible rows, so both follow the filter. Not persisted.
  */
 import type { VNode } from 'vue'
 import type { Row } from '@tanstack/table-core'
@@ -245,6 +252,7 @@ import type { ProfileDeleteState, ProxyModalProfile } from '#shared/types/browse
 import type { CheckProxyResponse, ProxyLastCheck } from '#shared/types/proxies'
 import type { TopupViewer } from '~/utils/topup'
 import type { PrefixView, PrefixesResponse } from '#shared/types/prefixes'
+import type { WorkspaceView, WorkspacesResponse } from '#shared/types/workspaces'
 
 useSeoMeta({ title: 'TikTok accounts' })
 
@@ -312,6 +320,37 @@ const prefixFilterItems = computed(() => [
   ...filterPrefixes.value.map(p => ({ id: p.id, label: prefixLabel(p) }))
 ])
 
+// TASK-ta-workspace-filter (2026-11-01) — workspace filter, **client-side**: the list endpoint has no workspace
+// param and every row already carries `workspaceId` + `workspaceName` (FEAT-070), so picking a workspace filters
+// the rows on screen without a request. Items: one `GET /workspaces` per page load (`listMine`: GOD = every
+// workspace, others = the ones they can access) plus any `workspaceId` that occurs in the rows but is missing from
+// that list (a workspace row that no longer exists, or the request failed), so a row is never unreachable.
+const WORKSPACE_FILTER_ALL = 'all'
+const workspaceFilter = ref<string>(WORKSPACE_FILTER_ALL)
+const filterWorkspaces = ref<WorkspaceView[]>([])
+async function loadFilterWorkspaces() {
+  try {
+    const res = await api<WorkspacesResponse>('/workspaces', { retry: 0 })
+    filterWorkspaces.value = res.workspaces ?? []
+  } catch {
+    filterWorkspaces.value = []
+  }
+}
+onMounted(() => {
+  void loadFilterWorkspaces()
+})
+const workspaceFilterItems = computed(() => {
+  const items = new Map<string, string>()
+  for (const ws of filterWorkspaces.value) items.set(ws.id, ws.name)
+  for (const a of data.value?.accounts ?? []) {
+    if (!items.has(a.workspaceId)) items.set(a.workspaceId, a.workspaceName ?? a.workspaceId)
+  }
+  return [
+    { id: WORKSPACE_FILTER_ALL, label: 'ทุก workspace' },
+    ...[...items].map(([id, label]) => ({ id, label }))
+  ]
+})
+
 // `idle` = SSR HTML / before the client fetch starts (server: false) — show it as loading, never as "no data"
 const pending = computed(() => status.value === 'idle' || status.value === 'pending')
 const accounts = computed<TikTokAccount[]>(() =>
@@ -322,13 +361,20 @@ const accounts = computed<TikTokAccount[]>(() =>
 const search = ref('')
 const searchDebounced = refDebounced(search, 250)
 
+/** TASK-ta-workspace-filter — the rows of the selected workspace (every row while the filter is `all`) */
+const inWorkspace = computed<TikTokAccount[]>(() => {
+  const ws = workspaceFilter.value
+  if (ws === WORKSPACE_FILTER_ALL) return accounts.value
+  return accounts.value.filter(a => a.workspaceId === ws)
+})
+
 const filtered = computed<TikTokAccount[]>(() => {
   const needle = searchDebounced.value.trim().toLowerCase()
-  if (!needle) return accounts.value
+  if (!needle) return inWorkspace.value
   // 2026-10-16: the browser-profile **name** is no longer rendered anywhere in the table, but it is still
   // searchable on purpose (people know their profiles as `faro-01`). A row can therefore match for a reason the
   // eye cannot see in the result — intended, do not "fix" by dropping the name here.
-  return accounts.value.filter(a =>
+  return inWorkspace.value.filter(a =>
     (a.label ?? '').toLowerCase().includes(needle)
     || a.loginEmail.toLowerCase().includes(needle)
     || (a.browserProfile?.name ?? '').toLowerCase().includes(needle)
@@ -2663,7 +2709,13 @@ const isEmpty = computed(() => status.value === 'success' && !error.value && acc
 const isLaunchingEmpty = computed(() => isEmpty.value && launchingOnly.value)
 // FEAT-076 — empty because of the prefix filter (the launching state wins when both filters are on)
 const isPrefixEmpty = computed(() => isEmpty.value && !launchingOnly.value && prefixFilter.value !== PREFIX_FILTER_ALL)
-const showTable = computed(() => !error.value && !isEmpty.value)
+// TASK-ta-workspace-filter — the list has rows, but none in the selected workspace (client-side, so `isEmpty` is
+// untouched: the server-side states above keep their meaning)
+const isWorkspaceEmpty = computed(() =>
+  status.value === 'success' && !error.value && accounts.value.length > 0
+  && workspaceFilter.value !== WORKSPACE_FILTER_ALL && inWorkspace.value.length === 0
+)
+const showTable = computed(() => !error.value && !isEmpty.value && !isWorkspaceEmpty.value)
 </script>
 
 <template>
@@ -2745,6 +2797,18 @@ const showTable = computed(() => !error.value && !isEmpty.value)
             :data-value="prefixFilter"
             data-testid="ta-filter-prefix"
           />
+          <!-- TASK-ta-workspace-filter — client-side filter by workspace (no request; the rows carry workspaceId) -->
+          <USelectMenu
+            v-model="workspaceFilter"
+            :items="workspaceFilterItems"
+            value-key="id"
+            :search-input="{ placeholder: 'Search workspace' }"
+            icon="i-lucide-building-2"
+            class="w-full sm:w-56"
+            aria-label="Filter by workspace"
+            :data-value="workspaceFilter"
+            data-testid="ta-filter-workspace"
+          />
           <!-- FEAT-076 — GOD only: bind the selected rows to a prefix -->
           <UButton
             v-if="isGod"
@@ -2821,6 +2885,25 @@ const showTable = computed(() => !error.value && !isEmpty.value)
               color="primary"
               data-testid="ta-filter-prefix-off"
               @click="prefixFilter = PREFIX_FILTER_ALL"
+            />
+          </template>
+        </UEmpty>
+
+        <!-- TASK-ta-workspace-filter — no account in the selected workspace; the button resets it -->
+        <UEmpty
+          v-else-if="isWorkspaceEmpty"
+          icon="i-lucide-building-2"
+          title="No account in this workspace"
+          description="Pick another workspace or show every account."
+          data-testid="ta-empty-workspace"
+        >
+          <template #actions>
+            <UButton
+              label="ทุก workspace"
+              icon="i-lucide-list"
+              color="primary"
+              data-testid="ta-filter-workspace-off"
+              @click="workspaceFilter = WORKSPACE_FILTER_ALL"
             />
           </template>
         </UEmpty>
