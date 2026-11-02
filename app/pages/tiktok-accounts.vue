@@ -339,6 +339,27 @@ async function loadFilterWorkspaces() {
 onMounted(() => {
   void loadFilterWorkspaces()
 })
+
+// FEAT-095 (spec "Deep links", AC-20) — a notification can open `/tiktok-accounts?accountId=<id>`: scroll to and
+// flash the row, dropping the workspace/prefix filter once if it is what hides the row.
+const route = useRoute()
+const deepLink = useRowDeepLink()
+onMounted(() => {
+  const accountId = typeof route.query.accountId === 'string' ? route.query.accountId : ''
+  if (!accountId) return
+  void deepLink({
+    rowTestId: 'ta-row',
+    id: accountId,
+    clearKeys: ['accountId'],
+    prepare: async () => {
+      const found = await waitForRow('ta-row', accountId, 2000)
+      if (!found && (workspaceFilter.value !== WORKSPACE_FILTER_ALL || prefixFilter.value !== PREFIX_FILTER_ALL)) {
+        workspaceFilter.value = WORKSPACE_FILTER_ALL
+        prefixFilter.value = PREFIX_FILTER_ALL
+      }
+    }
+  })
+})
 const workspaceFilterItems = computed(() => {
   const items = new Map<string, string>()
   for (const ws of filterWorkspaces.value) items.set(ws.id, ws.name)

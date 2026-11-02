@@ -28,11 +28,22 @@ export interface AuthContext {
 export interface AdminPreferences {
   /** play `/sounds/topup-sound.mp3` on the `/topups` page when a round gets its QR (`readyToPay`) */
   topupQrSound: boolean
+  /** FEAT-063 — the account ids this admin starred on `/tiktok-accounts` */
+  favoriteAccountIds?: string[]
+  /** FEAT-095 — show the corner toast for a new admin notification (missing key reads as `true`) */
+  notifyToast: boolean
+  /** FEAT-095 — play the notification sound for a new admin notification (missing key reads as `true`) */
+  notifySound: boolean
 }
 
 /** PATCH /auth/me/preferences body — only the keys to change (strict on the API: an unknown key is a 400) */
 export interface AdminPreferencesBody {
   topupQrSound?: boolean
+  favoriteAccountIds?: string[]
+  /** FEAT-095 */
+  notifyToast?: boolean
+  /** FEAT-095 */
+  notifySound?: boolean
 }
 
 /**

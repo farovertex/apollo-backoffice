@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { VNode } from 'vue'
 import type { DropdownMenuItem } from '@nuxt/ui'
 
 defineProps<{
@@ -8,6 +9,21 @@ defineProps<{
 const colorMode = useColorMode()
 const appConfig = useAppConfig()
 const auth = useAuth()
+
+// FEAT-095 — the two notification switches also live here, after Appearance, bound to the shared composable
+const { prefs, setPref } = useNotifications()
+
+/**
+ * Nuxt UI 4 forwards only `class` / `ui` from an item object to the DOM, so a `data-testid` written on the item
+ * would land nowhere. The `item-label` slot stamps it onto the rendered menu item element (`[data-slot="item"]`).
+ */
+function stampMenuItem(testid: string) {
+  return (vnode: VNode) => {
+    const el = vnode.el as HTMLElement | null
+    const target = el?.closest('[data-slot="item"]') ?? el
+    target?.setAttribute('data-testid', testid)
+  }
+}
 
 // TASK-theme-cbo-cap — one list with `plugins/theme-colors.client.ts`, which remembers the choice in `localStorage`
 const colors = THEME_PRIMARY_COLORS
@@ -23,7 +39,9 @@ async function onLogout() {
   await navigateTo('/login', { replace: true })
 }
 
-const items = computed<DropdownMenuItem[][]>(() => ([[{
+type UserMenuItem = DropdownMenuItem & { testid?: string }
+
+const items = computed<UserMenuItem[][]>(() => ([[{
   type: 'label',
   label: displayName.value,
   avatar: avatar.value
@@ -103,11 +121,43 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
       e.preventDefault()
     }
   }]
+}, {
+  // FEAT-095 — notification toast switch, after Appearance (same optimistic composable the slideover gear uses)
+  label: 'เด้ง toast แจ้งเตือน',
+  icon: 'i-lucide-bell',
+  type: 'checkbox',
+  checked: prefs.notifyToast,
+  testid: 'um-notify-toast',
+  onUpdateChecked(checked: boolean) {
+    void setPref('notifyToast', checked)
+  },
+  onSelect(e: Event) {
+    e.preventDefault()
+  }
+}, {
+  // FEAT-095 — notification sound switch
+  label: 'เสียงแจ้งเตือน',
+  icon: 'i-lucide-volume-2',
+  type: 'checkbox',
+  checked: prefs.notifySound,
+  testid: 'um-notify-sound',
+  onUpdateChecked(checked: boolean) {
+    void setPref('notifySound', checked)
+  },
+  onSelect(e: Event) {
+    e.preventDefault()
+  }
 }], [{
   label: 'Log out',
   icon: 'i-lucide-log-out',
   onSelect: onLogout
 }]]))
+
+/** stamp the two notification items' test ids onto the rendered menu element (item objects don't carry attrs) */
+function onItemLabelMounted(vnode: VNode, item: UserMenuItem) {
+  if (!item.testid) return
+  stampMenuItem(item.testid)(vnode)
+}
 </script>
 
 <template>
@@ -132,6 +182,10 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
       }"
       data-testid="user-menu"
     />
+
+    <template #item-label="{ item }">
+      <span @vue:mounted="(vnode: VNode) => onItemLabelMounted(vnode, item as UserMenuItem)">{{ item.label }}</span>
+    </template>
 
     <template #chip-leading="{ item }">
       <div class="inline-flex items-center justify-center shrink-0 size-5">

@@ -7,9 +7,8 @@ const _useDashboard = () => {
 
   defineShortcuts({
     'g-h': () => router.push('/'),
-    'g-i': () => router.push('/inbox'),
-    'g-c': () => router.push('/customers'),
     'g-s': () => router.push('/settings'),
+    // FEAT-095 — the inbox/customers template demo (and their `g-i` / `g-c` shortcuts) were removed
     'n': () => isNotificationsSlideoverOpen.value = !isNotificationsSlideoverOpen.value
   })
 
