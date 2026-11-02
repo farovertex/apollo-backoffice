@@ -247,6 +247,16 @@ import type {
   TikTokAccount
 } from '#shared/types/tiktok-accounts'
 import { FAILURE_SCREENSHOT_TYPE_LABEL } from '#shared/types/tiktok-accounts'
+import type {
+  BcAutogenActiveResponse,
+  BcAutogenConflictBody,
+  BcAutogenLatestResponse,
+  BcAutogenRunResponse,
+  BcAutogenRunStatus,
+  BcAutogenRunSummary,
+  BcAutogenRunView,
+  BcAutogenSuggest
+} from '#shared/types/bc-autogen'
 import type { AccountBalanceResponse, TopupView } from '#shared/types/topups'
 import type { ProfileDeleteState, ProxyModalProfile } from '#shared/types/browser-profiles'
 import type { CheckProxyResponse, ProxyLastCheck } from '#shared/types/proxies'
@@ -1395,6 +1405,9 @@ function setSubCreateFailed(id: string, text: string | null) {
  * FEAT-085: another job of the account never disables it any more — the new job simply queues behind it.
  */
 function subCreateBlockedReason(account: TikTokAccount): string | null {
+  // FEAT-097 (A15) — a followed auto-gen run of this account blocks its manual sub-create button client-side
+  const autogen = autogenActiveReason(account)
+  if (autogen) return autogen
   if (subCreatePending.value.has(account.id)) return 'กำลังสร้าง Sub BC อยู่'
   if (!account.bcOrgId) return 'Sync first'
   if (!account.isActive) return 'Account is disabled'
@@ -1516,6 +1529,9 @@ onUnmounted(() => {
 
 /** pending / failed chip of the BC org cell; `null` → that cell keeps its FEAT-059 DOM byte for byte */
 function subCreateChip(a: TikTokAccount): VNode | null {
+  // FEAT-097 — while an auto-gen run of this account is followed/shown, its chip takes the same slot
+  const autogenRun = autogenRuns.value.get(a.id)
+  if (autogenRun) return autogenChip(a, autogenRun)
   if (subCreatePending.value.has(a.id)) {
     return h('span', {
       'class': 'flex items-center gap-1 whitespace-nowrap text-xs text-muted',
@@ -1538,6 +1554,359 @@ function subCreateChip(a: TikTokAccount): VNode | null {
     'data-testid': `ta-sub-create-failed-${a.id}`,
     'data-id': a.id
   }, () => 'สร้าง Sub BC ไม่สำเร็จ'))
+}
+
+// ── FEAT-097 — auto-gen Sub BC + advertisers (api-contract.md v1 §2/§5/§6) ──────────────────────────────────────────
+/**
+ * One chain of child jobs per account (`sub` → `discover` → `adv × N` → `discoverOrg`, one row per sub BC). The
+ * page owns every request: the row action's one `GET …/bc-autogen/suggest`, the create POST (in the modal), the
+ * 2 s `GET …/bc-autogen/latest` poll while a run is `running|stopping`, the panel's stop/resume/retry POSTs and
+ * one `GET /bc-autogen/active` after the account list (mount + every list reload) to re-attach after a reload.
+ * The chip in the BC org cell and the `AutogenPanel` are pure renderers — they read `autogenRuns`, which the poll
+ * keeps fresh, and emit actions back here (the `OrganizationRows` pattern). While a run of an account is
+ * `running|stopping` the account's manual sub-create / adv-create / tt-link buttons are blocked client-side (A15).
+ */
+const autogenOpen = ref(false)
+const autogenTarget = ref<TikTokAccount | null>(null)
+/** answer of the one `GET …/bc-autogen/suggest` made for the open modal (the modal itself requests nothing) */
+const autogenSuggest = ref<BcAutogenSuggest | null>(null)
+/** account id whose suggest request is in flight (button spinner + no double click) */
+const autogenAsking = ref<string | null>(null)
+/** accountId → the latest known run (chip + panel read this); the poll / actions keep it fresh */
+const autogenRuns = ref(new Map<string, BcAutogenRunView>())
+/** accountId → the status the poll last saw, so a transition toast fires exactly once */
+const autogenPrevStatus = new Map<string, BcAutogenRunStatus>()
+/** panel */
+const autogenPanelOpen = ref(false)
+const autogenPanelAccountId = ref<string | null>(null)
+const autogenPanelLoading = ref(false)
+const autogenPanelError = ref<string | null>(null)
+const autogenActionBusy = ref(false)
+
+function setAutogenRun(id: string, run: BcAutogenRunView | null) {
+  const next = new Map(autogenRuns.value)
+  if (run) next.set(id, run)
+  else next.delete(id)
+  autogenRuns.value = next
+}
+
+function autogenRunFor(id: string): BcAutogenRunView | null {
+  return autogenRuns.value.get(id) ?? null
+}
+
+/** "กำลังสร้างอัตโนมัติอยู่" while a run of this account is `running|stopping`, else `null` (A15 blocking) */
+function autogenActiveReason(account: TikTokAccount): string | null {
+  const run = autogenRuns.value.get(account.id)
+  if (run && (run.status === 'running' || run.status === 'stopping')) return 'กำลังสร้างอัตโนมัติอยู่'
+  return null
+}
+
+/** why the row action `ta-autogen-<id>` is disabled, `null` = enabled (spec AC-13) */
+function autogenRowBlockedReason(account: TikTokAccount): string | null {
+  const active = autogenActiveReason(account)
+  if (active) return active
+  if (!account.bcOrgId) return 'Sync first'
+  if (!account.isActive) return 'Account is disabled'
+  return null
+}
+
+/** click → one suggest request → the modal opens on 200 only (any error is a toast and no modal) */
+async function onAskAutogen(account: TikTokAccount) {
+  if (autogenAsking.value || autogenRowBlockedReason(account)) return
+  autogenAsking.value = account.id
+  try {
+    // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
+    const suggest = await api<BcAutogenSuggest>(
+      `/tiktok-accounts/${encodeURIComponent(account.id)}/bc-autogen/suggest`,
+      { retry: 0 }
+    )
+    autogenTarget.value = account
+    autogenSuggest.value = suggest
+    autogenOpen.value = true
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    toast.add({
+      title: 'เปิดฟอร์มสร้างอัตโนมัติไม่ได้',
+      description: err.data?.error ?? err.message ?? 'Unexpected error',
+      color: 'error'
+    })
+  } finally {
+    autogenAsking.value = null
+  }
+}
+
+// ── following a run (2 s poll of `latest`, one loop per account, the sub-create pattern) ─────────────────────────────
+const autogenPolls = new Map<string, ReturnType<typeof setInterval>>()
+const autogenInFlight = new Set<string>()
+
+function stopAutogenPoll(id: string) {
+  const timer = autogenPolls.get(id)
+  if (timer) clearInterval(timer)
+  autogenPolls.delete(id)
+  autogenInFlight.delete(id)
+}
+
+function autogenSummaryText(run: Pick<BcAutogenRunView, 'rows' | 'counts'>): string {
+  const adv = run.rows.reduce((sum, r) => sum + (r.adv ? r.adv.count : 0), 0)
+  return `รวม ${run.rows.length} Sub BC · ${adv} บัญชีโฆษณา · ${run.counts.total} งาน`
+}
+
+function onAutogenCompleted(id: string, run: BcAutogenRunView) {
+  const { done, failed, skipped, total } = run.counts
+  const warn = failed + skipped > 0
+  toast.add({
+    title: `สร้างอัตโนมัติเสร็จแล้ว · ${done}/${total}`,
+    description: warn ? `ล้ม ${failed} · ข้าม ${skipped}` : undefined,
+    color: warn ? 'warning' : 'success'
+  })
+  // the chain created discover jobs for the whole login and per org: refresh and let the discover poll follow them
+  void refreshAndFollowDiscovers()
+  if (orgsById.value[id]) void loadOrgs(id, true)
+}
+
+function onAutogenStopped(run: BcAutogenRunView) {
+  toast.add({
+    title: 'หยุดงานสร้างอัตโนมัติแล้ว',
+    description: bcAutogenStopText(run.stopReason) || undefined,
+    color: 'warning'
+  })
+}
+
+async function pollAutogen(id: string) {
+  if (!autogenPolls.has(id) || autogenInFlight.has(id)) return
+  autogenInFlight.add(id)
+  try {
+    // retry: 0 — one request per tick
+    const res = await api<BcAutogenLatestResponse>(
+      `/tiktok-accounts/${encodeURIComponent(id)}/bc-autogen/latest`,
+      { retry: 0 }
+    )
+    if (!autogenPolls.has(id)) return // stopped meanwhile
+    const run = res.run
+    if (!run) {
+      // never ran / cleared
+      stopAutogenPoll(id)
+      setAutogenRun(id, null)
+      return
+    }
+    setAutogenRun(id, run)
+    const prev = autogenPrevStatus.get(id)
+    if (run.status === 'running' || run.status === 'stopping') {
+      autogenPrevStatus.set(id, run.status)
+      return // keep polling
+    }
+    // terminal — stop the loop and toast the transition once
+    stopAutogenPoll(id)
+    autogenPrevStatus.set(id, run.status)
+    if (run.status === 'completed' && prev !== 'completed') onAutogenCompleted(id, run)
+    else if (run.status === 'stopped' && prev !== 'stopped') onAutogenStopped(run)
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    // the account (or the run) is gone → nothing left to follow; clear the chip (spec: a `latest` 404 stops it)
+    if (err.statusCode === 404) {
+      stopAutogenPoll(id)
+      setAutogenRun(id, null)
+      if (autogenPanelAccountId.value === id) autogenPanelError.value = err.data?.error ?? 'ไม่พบงานสร้างอัตโนมัติ'
+    }
+  } finally {
+    autogenInFlight.delete(id)
+  }
+}
+
+/** start / keep the 2 s loop for one account; idempotent (never two loops, like `startSubCreatePoll`) */
+function startAutogenPoll(id: string, _runId?: string) {
+  if (autogenPolls.has(id)) return
+  autogenPolls.set(id, setInterval(() => void pollAutogen(id), POLL_MS))
+  void pollAutogen(id)
+}
+
+/** one-shot `latest` read (no loop) — re-attaching a `stopped` run, or re-reading after a 409 */
+async function fetchAutogenLatest(id: string) {
+  try {
+    const res = await api<BcAutogenLatestResponse>(
+      `/tiktok-accounts/${encodeURIComponent(id)}/bc-autogen/latest`,
+      { retry: 0 }
+    )
+    if (res.run) {
+      setAutogenRun(id, res.run)
+      autogenPrevStatus.set(id, res.run.status)
+      // a run that is still open must keep being followed
+      if (res.run.status === 'running' || res.run.status === 'stopping') startAutogenPoll(id, res.run.id)
+    } else {
+      setAutogenRun(id, null)
+    }
+    autogenPanelError.value = null
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    if (autogenPanelAccountId.value === id) autogenPanelError.value = err.data?.error ?? err.message ?? 'โหลดไม่สำเร็จ'
+  } finally {
+    autogenPanelLoading.value = false
+  }
+}
+
+/** 202 of the modal's POST: the modal closed itself, the row takes over and follows the run */
+function onAutogenCreated(run: BcAutogenRunView) {
+  const id = run.accountId
+  setAutogenRun(id, run)
+  autogenPrevStatus.set(id, run.status)
+  toast.add({ title: 'เริ่มสร้างอัตโนมัติแล้ว', description: autogenSummaryText(run), color: 'info' })
+  if (run.status === 'running' || run.status === 'stopping') startAutogenPoll(id, run.id)
+}
+
+/** the modal's "เปิดดู" link on the superseded warning: open the stopped run's panel instead of starting a new one */
+function onAutogenOpenRun(run: BcAutogenRunSummary) {
+  autogenOpen.value = false
+  void fetchAutogenLatest(run.accountId)
+  openAutogenPanel(run.accountId)
+}
+
+// ── panel ────────────────────────────────────────────────────────────────────────────────────────────────────────
+const autogenPanelRun = computed<BcAutogenRunView | null>(() =>
+  autogenPanelAccountId.value ? autogenRunFor(autogenPanelAccountId.value) : null
+)
+const autogenPanelAccount = computed<TikTokAccount | null>(() => {
+  const id = autogenPanelAccountId.value
+  if (!id) return null
+  return rows.value.find(a => a.id === id) ?? polledById.value.get(id) ?? null
+})
+const autogenPanelLabel = computed<string | null>(() => {
+  const a = autogenPanelAccount.value
+  return a ? (a.label ?? a.loginEmail) : null
+})
+
+function openAutogenPanel(id: string) {
+  autogenPanelAccountId.value = id
+  autogenPanelError.value = null
+  autogenPanelOpen.value = true
+  if (!autogenRunFor(id)) {
+    autogenPanelLoading.value = true
+    void fetchAutogenLatest(id)
+  } else {
+    autogenPanelLoading.value = false
+  }
+}
+
+function onAutogenPanelReload() {
+  const id = autogenPanelAccountId.value
+  if (!id) return
+  autogenPanelLoading.value = true
+  autogenPanelError.value = null
+  void fetchAutogenLatest(id)
+}
+
+async function autogenAction(path: 'stop' | 'resume' | 'retry', body?: Record<string, unknown>) {
+  const id = autogenPanelAccountId.value
+  const run = id ? autogenRunFor(id) : null
+  if (!id || !run || autogenActionBusy.value) return
+  autogenActionBusy.value = true
+  try {
+    // retry: 0 — exactly one POST per click
+    const res = await api<BcAutogenRunResponse>(
+      `/tiktok-accounts/${encodeURIComponent(id)}/bc-autogen/${encodeURIComponent(run.id)}/${path}`,
+      { method: 'POST', retry: 0, body: body ?? {} }
+    )
+    setAutogenRun(id, res.run)
+    autogenPrevStatus.set(id, res.run.status)
+    if (res.run.status === 'running' || res.run.status === 'stopping') startAutogenPoll(id, res.run.id)
+  } catch (e) {
+    const err = e as FetchError<Partial<BcAutogenConflictBody & ApiErrorBody>>
+    toast.add({
+      title: err.data?.error ?? err.message ?? 'ทำคำสั่งไม่สำเร็จ',
+      color: err.statusCode === 409 ? 'warning' : 'error'
+    })
+    // the run moved under us — re-read the real state
+    await fetchAutogenLatest(id)
+  } finally {
+    autogenActionBusy.value = false
+  }
+}
+
+function onAutogenStop() {
+  void autogenAction('stop')
+}
+function onAutogenResume() {
+  void autogenAction('resume')
+}
+function onAutogenRetry() {
+  void autogenAction('retry', {})
+}
+function onAutogenRetryRow(rowIdx: number) {
+  void autogenAction('retry', { rowIdx })
+}
+
+// ── re-attach: one `GET /bc-autogen/active` after the account list (mount + every list reload) ───────────────────────
+const autogenReattachInFlight = ref(false)
+async function reattachAutogen() {
+  if (autogenReattachInFlight.value) return
+  const onPage = new Set((data.value?.accounts ?? []).map(a => a.id))
+  if (!onPage.size) return
+  autogenReattachInFlight.value = true
+  try {
+    // retry: 0 — one request per list load
+    const res = await api<BcAutogenActiveResponse>('/bc-autogen/active', { retry: 0 })
+    for (const summary of res.runs) {
+      if (!onPage.has(summary.accountId)) continue // ignore runs of accounts not on the page
+      if (summary.status === 'running' || summary.status === 'stopping') {
+        startAutogenPoll(summary.accountId, summary.id) // idempotent; its first tick loads the full RunView
+      } else if (summary.status === 'stopped' && !autogenPolls.has(summary.accountId) && !autogenRunFor(summary.accountId)) {
+        void fetchAutogenLatest(summary.accountId) // show the chip, no loop
+      }
+    }
+  } catch {
+    // transient — the next list load tries again
+  } finally {
+    autogenReattachInFlight.value = false
+  }
+}
+// `data` changes exactly when the list (re)loads (mount + every `refresh()`); per-row polls merge into
+// `polledById`, not `data`, so this fires once per list load — the re-attach the spec asks for (AC-17).
+watch(data, () => {
+  void reattachAutogen()
+})
+
+onUnmounted(() => {
+  for (const id of [...autogenPolls.keys()]) stopAutogenPoll(id)
+})
+
+/** chip of the BC org cell while a run is followed (rendered instead of the sub-create chips); a button → panel */
+function autogenChip(a: TikTokAccount, run: BcAutogenRunView): VNode {
+  const c = run.counts
+  const donePlus = c.done + c.failed + c.skipped
+  const running = run.status === 'running' || run.status === 'stopping'
+  let text: string
+  let num: number
+  if (running) {
+    text = `สร้างอัตโนมัติ ${donePlus}/${c.total} · ${stepText(run)}`
+    if (run.status === 'stopping') text += ' · กำลังหยุด'
+    num = donePlus
+  } else if (run.status === 'stopped') {
+    text = `หยุดแล้ว ${c.done}/${c.total}`
+    num = c.done
+  } else {
+    text = `เสร็จ ${c.done}/${c.total}`
+    if (c.failed > 0) text += ` · ล้ม ${c.failed}`
+    if (c.skipped > 0) text += ` · ข้าม ${c.skipped}`
+    num = c.done
+  }
+  const color = running ? 'text-primary' : run.status === 'stopped' ? 'text-warning' : 'text-success'
+  const icon = running
+    ? h(UIcon, { name: 'i-lucide-loader-circle', class: 'size-3.5 shrink-0 animate-spin text-primary' })
+    : h(UIcon, {
+        name: run.status === 'completed' ? 'i-lucide-check-circle-2' : 'i-lucide-pause-circle',
+        class: `size-3.5 shrink-0 ${color}`
+      })
+  return h('button', {
+    'type': 'button',
+    'class': `flex max-w-56 items-center gap-1 truncate whitespace-nowrap text-xs ${color} hover:underline`,
+    'title': text,
+    'data-testid': `ta-autogen-chip-${a.id}`,
+    'data-id': a.id,
+    'data-status': run.status,
+    'data-done': num,
+    'data-total': c.total,
+    'data-run-id': run.id,
+    'onClick': () => openAutogenPanel(a.id)
+  }, [icon, h('span', { class: 'truncate' }, text)])
 }
 
 // ── TASK-bc-adv-create — create an advertiser under one Business Center org ──────────────────────────────────────────
@@ -1599,6 +1968,9 @@ function advCreateFailedFor(accountId: string): Record<string, string> {
  * sync, a login, …) no longer disables it — the API queues the new job behind it; only a disabled account does.
  */
 function advCreateBlockedReason(account: TikTokAccount): string | null {
+  // FEAT-097 (A15) — a followed auto-gen run blocks this account's adv-create (and tt-link, which delegates here)
+  const autogen = autogenActiveReason(account)
+  if (autogen) return autogen
   if (!account.isActive) return 'Account is disabled'
   return null
 }
@@ -2680,6 +3052,21 @@ const columns = computed<TableColumn<TikTokAccount>[]>(() => [
             'onClick': () => onAskSubCreate(row.original)
           })
         ])),
+        // FEAT-097 — สร้างอัตโนมัติ (icon-only like สร้าง Sub BC); tooltip names the action or why it is disabled
+        h(UTooltip, { text: autogenRowBlockedReason(row.original) ?? 'สร้างอัตโนมัติ' }, () => h('span', { class: 'inline-flex' }, [
+          h(UButton, {
+            'icon': 'i-lucide-sparkles',
+            'color': 'neutral',
+            'variant': 'outline',
+            'size': 'xs',
+            'disabled': !!autogenRowBlockedReason(row.original),
+            'loading': autogenAsking.value === row.original.id,
+            'aria-label': 'สร้างอัตโนมัติ',
+            'data-testid': `ta-autogen-${row.original.id}`,
+            'data-id': row.original.id,
+            'onClick': () => onAskAutogen(row.original)
+          })
+        ])),
         h(UTooltip, { text: loginHint ?? 'Login', disabled: wide && !loginHint }, () => h('span', { class: 'inline-flex' }, [
           h(UButton, {
             'label': 'Login',
@@ -3113,6 +3500,27 @@ const showTable = computed(() => !error.value && !isEmpty.value && !isWorkspaceE
         :account="advCreateTarget"
         :suggest="advCreateSuggest"
         @created="onAdvCreated"
+      />
+      <!-- FEAT-097 — auto-gen Sub BC + advertisers -->
+      <TiktokAccountsAutogenModal
+        v-model:open="autogenOpen"
+        :account="autogenTarget"
+        :suggest="autogenSuggest"
+        @created="onAutogenCreated"
+        @open-run="onAutogenOpenRun"
+      />
+      <TiktokAccountsAutogenPanel
+        v-model:open="autogenPanelOpen"
+        :account-label="autogenPanelLabel"
+        :run="autogenPanelRun"
+        :loading="autogenPanelLoading"
+        :load-error="autogenPanelError"
+        :action-busy="autogenActionBusy"
+        @stop="onAutogenStop"
+        @resume="onAutogenResume"
+        @retry="onAutogenRetry"
+        @retry-row="onAutogenRetryRow"
+        @reload="onAutogenPanelReload"
       />
       <TiktokAccountsTtLinkModal
         v-model:open="ttLinkOpen"
