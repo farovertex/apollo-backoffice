@@ -229,7 +229,7 @@ export interface OpenHumanTask {
 export type JobType
   = 'login' | 'discover' | 'build' | 'kpiFetch' | 'topup' | 'provider'
     | 'utmFetch' | 'postInfoWarmup' | 'optToggle' | 'budget' | 'campaignDelete' | 'bcSubCreate'
-    | 'bcAdvCreate' | 'bcTtLink'
+    | 'bcAdvCreate' | 'bcTtLink' | 'bcTtUnlink'
 
 /**
  * FEAT-085 (api-contract §1) — job status of an open job. `pending` = in the browser profile's waiting list (the
@@ -699,7 +699,7 @@ export interface BcAdvCreateLatestResponse {
  * (FEAT-085: `running` / `needsHuman` are gone). Human texts: `app/utils/bc-tt-link.ts` (copied from the API's `BC_TT_LINK_CONFLICT`).
  */
 export type BcTtLinkConflictReason
-  = 'noOrg' | 'orgMissing' | 'noProfile' | 'inactive' | 'duplicate'
+  = 'noOrg' | 'orgMissing' | 'noProfile' | 'inactive' | 'unlinkRunning' | 'duplicate'
 
 /** TASK-bc-tt-link — 202 body of `POST …/organizations/:orgId/bc-tt-link` (no request body at all). */
 export interface BcTtLinkAccepted {
@@ -711,6 +711,10 @@ export interface BcTtLinkAccepted {
 export interface BcTtLinkConflictBody {
   error: string
   reason: BcTtLinkConflictReason
+  /** FEAT-098 — only on `unlinkRunning`: the open `bcTtUnlink` job of this org that blocks a new QR */
+  jobId?: string
+  status?: string
+  assetIdLast4?: string
 }
 
 /**
@@ -779,6 +783,35 @@ export interface BcTikTokAccount {
   missingSince: string | null
   createdAt: string
   updatedAt: string
+  /** FEAT-098 — linked into this org itself and positively identified as such; fail-closed on the API */
+  canUnlink: boolean
+  /** FEAT-098 — the `pending` / `waiting` / `active` `bcTtUnlink` job of this asset, `null` when none */
+  openUnlinkJobId: string | null
+}
+
+/**
+ * FEAT-098 (contract "Changes to the existing bc-tt-link routes") — where else a scanned account is linked, as far
+ * as **this system** has synced it (spec A7). `count` includes workspaces the caller can't access; `orgs` names only
+ * the ones it can, so `count - orgs.length` is the "และอีก N org" of the warning.
+ */
+export interface BcTtLinkedElsewhere {
+  count: number
+  orgs: { name: string | null, orgIdLast4: string }[]
+  lastSeenAt: string | null
+}
+
+/** FEAT-098 — a `linked` row of `bc-tt-link/latest`; the list route's rows do not carry `linkedElsewhere`. */
+export interface BcTtLinkedAccount extends BcTikTokAccount {
+  linkedElsewhere: BcTtLinkedElsewhere
+}
+
+/** FEAT-098 — one open `bcTtUnlink` job of the org; while any exists a QR must not be scanned. */
+export interface BcTtLinkUnlinking {
+  assetId: string
+  name: string | null
+  username: string | null
+  jobId: string
+  status: string
 }
 
 /**
@@ -788,7 +821,73 @@ export interface BcTikTokAccount {
  */
 export interface BcTtLinkLatestResponse {
   job: BcTtLinkJob | null
-  linked: BcTikTokAccount[]
+  linked: BcTtLinkedAccount[]
+  /** FEAT-098 — present even when `job` is null */
+  unlinking: BcTtLinkUnlinking[]
+}
+
+/**
+ * FEAT-098 — **unlink** one TikTok account from one org: `POST …/tiktok-accounts/:assetId/unlink` (no body → 202
+ * `BcTtUnlinkAccepted`, 404/409 `BcTtUnlinkConflictBody`) orders a `bcTtUnlink` job which clicks through the real
+ * Business Center page and proves the result from the asset list; `GET …/unlink/latest` follows it. Texts of every
+ * code: `app/utils/bc-tt-unlink.ts`.
+ */
+export type BcTtUnlinkConflictReason
+  = 'noOrg' | 'noAsset' | 'orgMissing' | 'assetMissing' | 'notOwned' | 'noProfile' | 'inactive' | 'duplicate'
+
+export interface BcTtUnlinkAccepted {
+  jobId: string
+  orgId: string
+  assetId: string
+}
+
+export interface BcTtUnlinkConflictBody {
+  error: string
+  reason: BcTtUnlinkConflictReason
+  /** only on `duplicate`: the job already open for this asset */
+  jobId?: string
+  status?: string
+  queuePosition?: number | null
+}
+
+export type BcTtUnlinkOutcome = 'unlinked' | 'alreadyGone' | 'dryRun'
+
+export interface BcTtUnlinkResult {
+  outcome: BcTtUnlinkOutcome
+  assetsBefore: number | null
+  assetsAfter: number | null
+  proofMs: number | null
+  /** the page's own POST, evidence only: it never decides success */
+  deleteApiCode: number | null
+}
+
+/** FEAT-098 — newest job of this account + org + asset, any status; `result` is null until it finishes. */
+export interface BcTtUnlinkJob extends JobQueueFields {
+  id: string
+  status: BcTtLinkJobStatus
+  error: string | null
+  step: string | null
+  orgId: string
+  assetId: string
+  result: BcTtUnlinkResult | null
+  lastLog: string | null
+  createdAt: string
+  finishedAt: string | null
+}
+
+export interface BcTtUnlinkLatestResponse {
+  job: BcTtUnlinkJob | null
+}
+
+/**
+ * FEAT-098 — what the page knows about the unlink of one account + org + asset, kept after the job ended so the
+ * modal can show the outcome. `job: null` = accepted, first `latest` not read yet. `error` = `latest` answered 404,
+ * so there is nothing left to follow.
+ */
+export interface BcTtUnlinkFollow {
+  jobId: string
+  job: BcTtUnlinkJob | null
+  error: string | null
 }
 
 /** TASK-bc-tt-link — `missing` query of `GET …/organizations/:orgId/tiktok-accounts` (default `false`). */
