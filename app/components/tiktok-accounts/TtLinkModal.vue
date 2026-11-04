@@ -27,6 +27,9 @@
  *     (the POST gate never sees that one), and the loop runs until the list empties;
  *   · a `linked` row with `linkedElsewhere.count > 0` carries a warning; the link already happened;
  *   · a check that found nothing lists the accounts this org already has, because scanning one of those is not new.
+ *
+ * AC-26 — the page never opens this on a stale QR, but an unlink can finish while it is open. Then `qrStale` holds the
+ * QR back for good and leaves only "ออก QR ใหม่", and `linked` of that job does not count as a success.
  */
 import type { FetchError } from 'ofetch'
 import type { ModalProps } from '@nuxt/ui'
@@ -91,7 +94,8 @@ const seenLinkedIds = ref(new Set<string>())
 const actionError = ref<string | null>(null)
 
 const job = computed(() => latest.value?.job ?? null)
-const linked = computed<BcTtLinkedAccount[]>(() => latest.value?.linked ?? [])
+const stale = computed(() => latest.value?.qrStale === true)
+const linked = computed<BcTtLinkedAccount[]>(() => (stale.value ? [] : latest.value?.linked ?? []))
 /** FEAT-098 — names of the open unlink jobs of this org; not empty = no QR may be scanned right now */
 const unlinkingNames = computed(() => (latest.value?.unlinking ?? []).map(row => bcTtAccountName(row)))
 const qrImage = computed<string | null>(() => job.value?.result?.qrImage ?? null)
@@ -152,11 +156,15 @@ async function pollLatest() {
     if (wasIssuing && !issuing.value) emit('settled')
     // only rows this open has not seen yet are "the scan worked": an org that was already linked once keeps its
     // old rows in `linked` forever, and pressing ตรวจสอบ again must not celebrate them a second time
-    const fresh = res.linked.filter(row => !seenLinkedIds.value.has(row.id))
+    const rows = res.qrStale ? [] : res.linked
+    const fresh = rows.filter(row => !seenLinkedIds.value.has(row.id))
     // FEAT-098 — exactly what is listed now, not a growing set: a row unlinked meanwhile leaves `linked`, and when it
     // is scanned back it comes back with the same id and has to count as new
-    seenLinkedIds.value = new Set(res.linked.map(a => a.id))
-    if (fresh.length) {
+    seenLinkedIds.value = new Set(rows.map(a => a.id))
+    if (res.qrStale) {
+      checking.value = false // nothing this QR's check finds counts any more
+      checkedOnce.value = false
+    } else if (fresh.length) {
       checking.value = false
       checkedOnce.value = false
       emit('linked', fresh)
@@ -232,7 +240,7 @@ async function onRequest() {
       { method: 'POST', retry: 0 }
     )
     // drop the old job so the screen goes back to "กำลังเปิด Business Center…" until `latest` carries the new one
-    latest.value = { job: null, linked: [], unlinking: [] }
+    latest.value = { job: null, linked: [], unlinking: [], qrStale: false }
     checking.value = false
     checkedOnce.value = false
     emit('requested', res)
@@ -378,8 +386,18 @@ async function onCheck() {
           </ul>
         </div>
 
+        <!-- FEAT-098 AC-26 — an unlink finished while this was open: this QR is not to be scanned any more -->
+        <UAlert
+          v-if="qrImage && stale && !unlinkingNames.length"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-qr-code"
+          title="QR นี้ออกก่อนการยกเลิกการเชื่อมโยง กด ออก QR ใหม่ ก่อนสแกน"
+          data-testid="ta-tt-link-stale"
+        />
+
         <!-- 4. the QR itself — stays on screen while a check runs and after a success: the invitation is valid for months -->
-        <div v-if="qrImage && !unlinkingNames.length" class="flex flex-col items-center gap-3">
+        <div v-if="qrImage && !stale && !unlinkingNames.length" class="flex flex-col items-center gap-3">
           <img
             :src="qrImage"
             alt="QR เพิ่มบัญชี TikTok"
@@ -469,6 +487,7 @@ async function onCheck() {
         />
         <template v-if="qrImage && !unlinkingNames.length">
           <UButton
+            v-if="!stale"
             label="ดาวน์โหลด QR"
             icon="i-lucide-download"
             color="neutral"
@@ -489,6 +508,7 @@ async function onCheck() {
             @click="onRequest"
           />
           <UButton
+            v-if="!stale"
             label="สแกนแล้ว ตรวจสอบ"
             icon="i-lucide-scan-line"
             color="primary"

@@ -824,6 +824,8 @@ export interface BcTtLinkLatestResponse {
   linked: BcTtLinkedAccount[]
   /** FEAT-098 — present even when `job` is null */
   unlinking: BcTtLinkUnlinking[]
+  /** FEAT-098 AC-26 — an unlink with outcome `unlinked` finished after `job.createdAt`, so this QR and its `linked` are not reused */
+  qrStale: boolean
 }
 
 /**
@@ -859,6 +861,8 @@ export interface BcTtUnlinkResult {
   proofMs: number | null
   /** the page's own POST, evidence only: it never decides success */
   deleteApiCode: number | null
+  /** the per-org discover submitted after success; `null` for a dry run or when submitting failed */
+  resyncJobId: string | null
 }
 
 /** FEAT-098 — newest job of this account + org + asset, any status; `result` is null until it finishes. */

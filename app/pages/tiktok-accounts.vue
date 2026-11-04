@@ -2153,7 +2153,8 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
     // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
     let latest = await api<BcTtLinkLatestResponse>(`${base}/latest`, { retry: 0 })
     const job = latest.job
-    const reusable = !!job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
+    // FEAT-098 AC-26 — after an unlink the next scan starts clean: a stale QR counts as no QR at all
+    const reusable = !latest.qrStale && !!job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
     if (!reusable) {
       // retry: 0 — exactly one POST per click (ofetch would otherwise queue a second job on 5xx)
       const res = await api<BcTtLinkAccepted>(base, { method: 'POST', retry: 0 })
@@ -2161,7 +2162,7 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
       // `res.orgId` is the id as the API normalised it — the same one its `latest` answers will carry
       setTtLinkPending(advKey(account.id, res.orgId), true)
       // the new job has no state yet: the modal starts at "กำลังเปิด Business Center…" and polls from there
-      latest = { job: null, linked: [], unlinking: [] }
+      latest = { job: null, linked: [], unlinking: [], qrStale: false }
       void refresh()
     } else if (job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active')) {
       setTtLinkPending(advKey(account.id, org.orgId), true)
@@ -2380,6 +2381,15 @@ function followTtUnlink(accountId: string, orgId: string, assetId: string, jobId
 
 onUnmounted(() => {
   for (const key of [...ttUnlinkLoops.keys()]) stopTtUnlinkLoop(key)
+})
+
+// Re-attach for a collapsed row: `openUnlinkJobId` only comes from the list route, which is read when the drill-down
+// opens, so an unlink job named by the account row reads the same memoised requests now. `runningJob` names only the
+// newest job, so an unlink queued behind a newer job of the account still waits for the row to be opened.
+watch(data, () => {
+  for (const account of data.value?.accounts ?? []) {
+    if (account.runningJob?.type === 'bcTtUnlink' && !orgsById.value[account.id]) void loadOrgs(account.id)
+  }
 })
 
 /** `<orgId>:<assetId>` of this account's unlinks that have not ended (prop of `OrganizationRows`) */
