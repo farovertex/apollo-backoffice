@@ -3,7 +3,7 @@
  * own `error` of a 404/409 is what gets shown; `BC_TT_UNLINK_REASON_TEXT` is only its fallback. A job's `error` is a
  * code, so the sentence shown for it lives here. Codes the table has no sentence for print `lastLog`, then the code.
  */
-import type { BcTtUnlinkConflictReason, BcTtUnlinkJob } from '#shared/types/tiktok-accounts'
+import type { BcTtUnlinkConflictReason, BcTtUnlinkFollow, BcTtUnlinkJob } from '#shared/types/tiktok-accounts'
 
 export const BC_TT_UNLINK_REASON_TEXT: Record<BcTtUnlinkConflictReason, string> = {
   noOrg: 'ไม่พบ org',
@@ -35,6 +35,12 @@ export const BC_TT_UNLINK_NOT_PROVEN_HINT = 'ลองใหม่ได้ ร�
 
 export function bcTtUnlinkIsOpen(job: Pick<BcTtUnlinkJob, 'status'>): boolean {
   return job.status === 'pending' || job.status === 'waiting' || job.status === 'active'
+}
+
+/** Is the page still waiting for this unlink? Same answer for the row's pending state and the modal. */
+export function bcTtUnlinkFollowIsOpen(follow: BcTtUnlinkFollow): boolean {
+  if (follow.error) return false
+  return !follow.job || bcTtUnlinkIsOpen(follow.job)
 }
 
 /** The only success: `completed` **and** a known good outcome. A `dryRun` or unknown outcome changed nothing we can prove. */

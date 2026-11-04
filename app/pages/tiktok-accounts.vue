@@ -2385,9 +2385,9 @@ onUnmounted(() => {
 /** `<orgId>:<assetId>` of this account's unlinks that have not ended (prop of `OrganizationRows`) */
 function ttUnlinkPendingFor(accountId: string): string[] {
   const prefix = `${accountId}:`
-  return Object.keys(ttUnlinks.value)
-    .filter(key => key.startsWith(prefix) && ttUnlinkLoops.has(key))
-    .map(key => key.slice(prefix.length))
+  return Object.entries(ttUnlinks.value)
+    .filter(([key, follow]) => key.startsWith(prefix) && bcTtUnlinkFollowIsOpen(follow))
+    .map(([key]) => key.slice(prefix.length))
 }
 
 const ttUnlinkFollow = computed<BcTtUnlinkFollow | null>(() => {
@@ -2413,6 +2413,9 @@ function onTtUnlinkOrdered(jobId: string) {
   const org = ttUnlinkOrg.value
   const tt = ttUnlinkTt.value
   if (!account || !org || !tt) return
+  // the API just said this job is open, so the outcome of an earlier attempt no longer applies
+  ttUnlinkEndedJobs.delete(jobId)
+  setTtUnlink(ttUnlinkKey(account.id, org.orgId, tt.assetId), null)
   followTtUnlink(account.id, org.orgId, tt.assetId, jobId, bcTtAccountName(tt))
   void refresh()
 }

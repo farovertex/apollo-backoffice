@@ -59,9 +59,8 @@ const job = computed(() => props.follow?.job ?? null)
 
 const view = computed<'confirm' | 'running' | 'success' | 'failed'>(() => {
   if (!ordered.value) return 'confirm'
-  if (props.follow?.error) return 'failed'
-  if (!job.value || bcTtUnlinkIsOpen(job.value)) return 'running'
-  return bcTtUnlinkSucceeded(job.value) ? 'success' : 'failed'
+  if (!props.follow || bcTtUnlinkFollowIsOpen(props.follow)) return 'running'
+  return job.value && !props.follow.error && bcTtUnlinkSucceeded(job.value) ? 'success' : 'failed'
 })
 
 const orgLabel = computed(() => {
@@ -115,6 +114,7 @@ async function onSubmit() {
     title="ยกเลิกการเชื่อมโยงบัญชี TikTok"
     :description="description"
     :dismissible="!requesting"
+    :close="!requesting"
     :ui="{ content: 'max-w-lg' }"
     :content="modalContent"
   >
@@ -245,7 +245,7 @@ async function onSubmit() {
           icon="i-lucide-unlink"
           color="error"
           :loading="requesting"
-          :disabled="!!follow && !follow.error && (!job || bcTtUnlinkIsOpen(job))"
+          :disabled="!!follow && bcTtUnlinkFollowIsOpen(follow)"
           data-testid="ta-tt-unlink-confirm"
           @click="onSubmit"
         />
