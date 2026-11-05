@@ -1207,7 +1207,8 @@ function onLeaseExpired() {
 const RUNNING_JOB_REASON: Partial<Record<JobType, string>> = {
   discover: 'Sync in progress',
   login: 'Login in progress',
-  bcSubCreate: 'กำลังสร้าง Sub BC'
+  bcSubCreate: 'กำลังสร้าง Sub BC',
+  bcTtUnlink: 'กำลังยกเลิกการเชื่อมโยงบัญชี'
 }
 function runningJobReason(type: JobType): string {
   return RUNNING_JOB_REASON[type] ?? 'Job in progress'
@@ -2344,6 +2345,8 @@ async function pollTtUnlink(key: string, accountId: string, orgId: string, asset
     if (bcTtUnlinkSucceeded(job)) {
       toast.add({ title: 'ยกเลิกการเชื่อมโยงแล้ว', description: name, color: 'success' })
       void loadTtAccounts(accountId, orgId, true)
+      // the API queued a Sync of this org: nothing else follows it, and without this the row keeps its old badge and counts
+      if (job.result?.resyncJobId) startDiscoverPoll(accountId)
     } else {
       toast.add({ title: bcTtUnlinkFailureTitle(job), description: `${name}: ${bcTtUnlinkFailureText(job)}`, color: 'error' })
     }
