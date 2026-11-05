@@ -21,6 +21,15 @@
  * unmount. The check gives up after `CHECK_TIMEOUT_MS` and says so — the QR stays valid, so "ตรวจสอบ" can be
  * pressed again (the brief's "ยังไม่พบบัญชีใหม่" state); `account.runningJob` is a snapshot of the moment the
  * modal opened, so the timeout — not that field — is what ends the wait.
+ *
+ * FEAT-098 (spec UI §7) — the QR can't know who will scan it, so the re-scan checks happen at three moments:
+ *   · while `latest.unlinking` is not empty the QR and everything that acts on it is held back, also for a reused QR
+ *     (the POST gate never sees that one), and the loop runs until the list empties;
+ *   · a `linked` row with `linkedElsewhere.count > 0` carries a warning; the link already happened;
+ *   · a check that found nothing lists the accounts this org already has, because scanning one of those is not new.
+ *
+ * AC-26 — the page never opens this on a stale QR, but an unlink can finish while it is open. Then `qrStale` holds the
+ * QR back for good and leaves only "ออก QR ใหม่", and `linked` of that job does not count as a success.
  */
 import type { FetchError } from 'ofetch'
 import type { ModalProps } from '@nuxt/ui'
@@ -31,6 +40,7 @@ import type {
   BcTtLinkAccepted,
   BcTtLinkConflictBody,
   BcTtLinkLatestResponse,
+  BcTtLinkedAccount,
   DiscoverOrgBody,
   TikTokAccount
 } from '#shared/types/tiktok-accounts'
@@ -42,15 +52,19 @@ const props = defineProps<{
   org: BcOrganization | null
   /** answer of the one `GET …/bc-tt-link/latest` the page made for this open (after its POST, if it made one) */
   initial: BcTtLinkLatestResponse | null
+  /** FEAT-098 — this org's accounts as the page knows them; the list of a check that found nothing */
+  existing?: readonly BcTikTokAccount[]
 }>()
 
 const emit = defineEmits<{
   /** a new QR was ordered from in here ("ออก QR ใหม่" / "ลองใหม่") — the page toasts and follows the org */
-  requested: [job: BcTtLinkAccepted]
+  'requested': [job: BcTtLinkAccepted]
   /** the followed job reached a terminal status → the page may re-read the account row */
-  settled: []
+  'settled': []
   /** `linked.length > 0`: the scan is proven and the rows are in the DB → the page re-reads org + counts */
-  linked: [accounts: BcTikTokAccount[]]
+  'linked': [accounts: BcTikTokAccount[]]
+  /** FEAT-098 — a check found nothing new → the page re-reads `existing`, the check's discover just synced it */
+  'nothing-found': []
 }>()
 
 const open = defineModel<boolean>('open', { default: false })
@@ -80,7 +94,10 @@ const seenLinkedIds = ref(new Set<string>())
 const actionError = ref<string | null>(null)
 
 const job = computed(() => latest.value?.job ?? null)
-const linked = computed<BcTikTokAccount[]>(() => latest.value?.linked ?? [])
+const stale = computed(() => latest.value?.qrStale === true)
+const linked = computed<BcTtLinkedAccount[]>(() => (stale.value ? [] : latest.value?.linked ?? []))
+/** FEAT-098 — names of the open unlink jobs of this org; not empty = no QR may be scanned right now */
+const unlinkingNames = computed(() => (latest.value?.unlinking ?? []).map(row => bcTtAccountName(row)))
 const qrImage = computed<string | null>(() => job.value?.result?.qrImage ?? null)
 const qrText = computed<string | null>(() => job.value?.result?.qrText ?? null)
 const orgLabel = computed<string>(() => {
@@ -119,8 +136,8 @@ function stopPoll() {
   inFlight = false
 }
 
-/** poll while the job is not terminal or while a check waits for its row — nothing else needs a loop */
-const shouldPoll = computed(() => open.value && (issuing.value || checking.value))
+/** poll while the job is not terminal, while a check waits for its row, or until an unlink of this org ends */
+const shouldPoll = computed(() => open.value && (issuing.value || checking.value || unlinkingNames.value.length > 0))
 
 async function pollLatest() {
   const account = props.account
@@ -139,9 +156,15 @@ async function pollLatest() {
     if (wasIssuing && !issuing.value) emit('settled')
     // only rows this open has not seen yet are "the scan worked": an org that was already linked once keeps its
     // old rows in `linked` forever, and pressing ตรวจสอบ again must not celebrate them a second time
-    const fresh = res.linked.filter(row => !seenLinkedIds.value.has(row.id))
-    if (fresh.length) {
-      seenLinkedIds.value = new Set([...seenLinkedIds.value, ...res.linked.map(a => a.id)])
+    const rows = res.qrStale ? [] : res.linked
+    const fresh = rows.filter(row => !seenLinkedIds.value.has(row.id))
+    // FEAT-098 — exactly what is listed now, not a growing set: a row unlinked meanwhile leaves `linked`, and when it
+    // is scanned back it comes back with the same id and has to count as new
+    seenLinkedIds.value = new Set(rows.map(a => a.id))
+    if (res.qrStale) {
+      checking.value = false // nothing this QR's check finds counts any more
+      checkedOnce.value = false
+    } else if (fresh.length) {
       checking.value = false
       checkedOnce.value = false
       emit('linked', fresh)
@@ -149,6 +172,7 @@ async function pollLatest() {
       // the discover job is the one doing the work; after the budget the modal stops asking and offers a retry
       checking.value = false
       checkedOnce.value = true
+      emit('nothing-found')
     }
   } catch (e) {
     const err = e as FetchError<Partial<ApiErrorBody>>
@@ -216,7 +240,7 @@ async function onRequest() {
       { method: 'POST', retry: 0 }
     )
     // drop the old job so the screen goes back to "กำลังเปิด Business Center…" until `latest` carries the new one
-    latest.value = { job: null, linked: [] }
+    latest.value = { job: null, linked: [], unlinking: [], qrStale: false }
     checking.value = false
     checkedOnce.value = false
     emit('requested', res)
@@ -273,9 +297,20 @@ async function onCheck() {
           </span>
         </p>
 
+        <!-- FEAT-098 — an unlink of this org runs: nothing may be scanned until it ends, the loop brings the QR back -->
+        <UAlert
+          v-if="unlinkingNames.length"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-loader-circle"
+          :title="`กำลังยกเลิกการเชื่อมโยง ${unlinkingNames.join(', ')} อยู่ รอให้เสร็จก่อนจึงจะสแกนได้`"
+          :ui="{ icon: 'animate-spin' }"
+          data-testid="ta-tt-link-unlinking"
+        />
+
         <!-- 1. the job is still working inside the Business Center -->
         <div
-          v-if="issuing"
+          v-else-if="issuing"
           class="flex flex-col items-center gap-2 py-6 text-center"
           data-testid="ta-tt-link-waiting"
         >
@@ -317,7 +352,7 @@ async function onCheck() {
             <li
               v-for="tt in linked"
               :key="tt.id"
-              class="flex items-center gap-2 px-3 py-2"
+              class="flex flex-wrap items-center gap-2 px-3 py-2"
               data-testid="ta-tt-link-linked-row"
               :data-asset-id="tt.assetId"
             >
@@ -336,12 +371,33 @@ async function onCheck() {
                   </template>
                 </span>
               </span>
+              <UAlert
+                v-if="bcTtElsewhereText(tt.linkedElsewhere)"
+                color="warning"
+                variant="subtle"
+                icon="i-lucide-triangle-alert"
+                :title="bcTtElsewhereText(tt.linkedElsewhere) ?? ''"
+                class="basis-full"
+                data-testid="ta-tt-link-elsewhere"
+                :data-asset-id="tt.assetId"
+                :data-last-seen-at="tt.linkedElsewhere.lastSeenAt ?? ''"
+              />
             </li>
           </ul>
         </div>
 
+        <!-- FEAT-098 AC-26 — an unlink finished while this was open: this QR is not to be scanned any more -->
+        <UAlert
+          v-if="qrImage && stale && !unlinkingNames.length"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-qr-code"
+          title="QR นี้ออกก่อนการยกเลิกการเชื่อมโยง กด ออก QR ใหม่ ก่อนสแกน"
+          data-testid="ta-tt-link-stale"
+        />
+
         <!-- 4. the QR itself — stays on screen while a check runs and after a success: the invitation is valid for months -->
-        <div v-if="qrImage" class="flex flex-col items-center gap-3">
+        <div v-if="qrImage && !stale && !unlinkingNames.length" class="flex flex-col items-center gap-3">
           <img
             :src="qrImage"
             alt="QR เพิ่มบัญชี TikTok"
@@ -367,13 +423,36 @@ async function onCheck() {
             <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin text-primary" />
             กำลังตรวจสอบกับ Business Center…
           </p>
-          <p
-            v-else-if="checkedOnce"
-            class="text-center text-xs text-warning"
-            data-testid="ta-tt-link-none"
-          >
-            ยังไม่พบบัญชีใหม่ — สแกนแล้วหรือยัง? กดตรวจสอบอีกครั้งได้
-          </p>
+          <template v-else-if="checkedOnce">
+            <p
+              class="text-center text-xs text-warning"
+              data-testid="ta-tt-link-none"
+            >
+              ยังไม่พบบัญชีใหม่ — สแกนแล้วหรือยัง? กดตรวจสอบอีกครั้งได้
+            </p>
+            <UAlert
+              v-if="existing?.length"
+              color="neutral"
+              variant="subtle"
+              icon="i-lucide-info"
+              title="บัญชีเหล่านี้เชื่อมกับ org นี้อยู่แล้ว ถ้าสแกนด้วยบัญชีเหล่านี้จะไม่นับเป็นบัญชีใหม่"
+              data-testid="ta-tt-link-existing"
+            >
+              <template #description>
+                <ul class="mt-1 flex flex-col gap-0.5">
+                  <li
+                    v-for="tt in existing"
+                    :key="tt.id"
+                    class="break-words"
+                    data-testid="ta-tt-link-existing-row"
+                    :data-asset-id="tt.assetId"
+                  >
+                    {{ bcTtAccountName(tt) }} · {{ bcTtAccountHandle(tt) }}
+                  </li>
+                </ul>
+              </template>
+            </UAlert>
+          </template>
         </div>
 
         <UAlert
@@ -398,7 +477,7 @@ async function onCheck() {
           @click="open = false"
         />
         <UButton
-          v-if="failed"
+          v-if="failed && !unlinkingNames.length"
           label="ลองใหม่"
           icon="i-lucide-refresh-cw"
           color="primary"
@@ -406,8 +485,9 @@ async function onCheck() {
           data-testid="ta-tt-link-retry"
           @click="onRequest"
         />
-        <template v-if="qrImage">
+        <template v-if="qrImage && !unlinkingNames.length">
           <UButton
+            v-if="!stale"
             label="ดาวน์โหลด QR"
             icon="i-lucide-download"
             color="neutral"
@@ -428,6 +508,7 @@ async function onCheck() {
             @click="onRequest"
           />
           <UButton
+            v-if="!stale"
             label="สแกนแล้ว ตรวจสอบ"
             icon="i-lucide-scan-line"
             color="primary"

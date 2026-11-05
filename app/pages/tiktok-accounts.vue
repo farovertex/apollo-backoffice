@@ -152,6 +152,9 @@
  * `ta-tt-count-<orgId>` ("บัญชี TikTok N" + a popover listing them) from one
  * `GET …/organizations/<orgId>/tiktok-accounts` per org, read when the drill-down opens and re-read on Refresh,
  * after a discover and after a proven scan.
+ * FEAT-098 — each account of that popover gains `ta-tt-unlink-<assetId>`, which opens `TiktokAccountsTtUnlinkModal`
+ * (`ta-tt-unlink-modal`). The page owns the 2 s poll of `…/unlink/latest`, per account + org + asset, because the job
+ * outlives the modal; a row with `openUnlinkJobId` re-attaches it after a reload.
  * 2026-10-20 (human request, TASK-ta-org-redesign) — two things, both to make the table narrower and the
  * drill-down readable:
  *   · **Label** merged into **Account** (8 columns now). The cell is label (bold, `ta-label`, absent when the
@@ -233,6 +236,9 @@ import type {
   BcTtLinkAccepted,
   BcTtLinkConflictBody,
   BcTtLinkLatestResponse,
+  BcTtUnlinkAccepted,
+  BcTtUnlinkFollow,
+  BcTtUnlinkLatestResponse,
   CancelJobConflict,
   CancelJobResponse,
   DiscoverOrgBody,
@@ -2147,7 +2153,8 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
     // retry: 0 — one GET per click, ofetch must not re-issue it on 5xx
     let latest = await api<BcTtLinkLatestResponse>(`${base}/latest`, { retry: 0 })
     const job = latest.job
-    const reusable = !!job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
+    // FEAT-098 AC-26 — after an unlink the next scan starts clean: a stale QR counts as no QR at all
+    const reusable = !latest.qrStale && !!job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active' || !!job.result?.qrImage)
     if (!reusable) {
       // retry: 0 — exactly one POST per click (ofetch would otherwise queue a second job on 5xx)
       const res = await api<BcTtLinkAccepted>(base, { method: 'POST', retry: 0 })
@@ -2155,7 +2162,7 @@ async function onAskTtLink(account: TikTokAccount, org: BcOrganization) {
       // `res.orgId` is the id as the API normalised it — the same one its `latest` answers will carry
       setTtLinkPending(advKey(account.id, res.orgId), true)
       // the new job has no state yet: the modal starts at "กำลังเปิด Business Center…" and polls from there
-      latest = { job: null, linked: [] }
+      latest = { job: null, linked: [], unlinking: [], qrStale: false }
       void refresh()
     } else if (job && (job.status === 'pending' || job.status === 'waiting' || job.status === 'active')) {
       setTtLinkPending(advKey(account.id, org.orgId), true)
@@ -2235,6 +2242,10 @@ async function loadTtAccounts(accountId: string, orgId: string, force = false) {
       { retry: 0 }
     )
     setTtAccountsState(key, { pending: false, error: null, data: res.accounts })
+    // FEAT-098 (spec UI §6) — the list is what tells a fresh page about a job it did not start
+    for (const tt of res.accounts) {
+      if (tt.openUnlinkJobId) followTtUnlink(accountId, orgId, tt.assetId, tt.openUnlinkJobId, bcTtAccountName(tt))
+    }
   } catch (e) {
     const err = e as FetchError<Partial<ApiErrorBody>>
     setTtAccountsState(key, { pending: false, error: err.data?.error ?? err.message ?? 'Unexpected error', data: cached?.data ?? null })
@@ -2256,6 +2267,167 @@ function ttAccountsFor(accountId: string): Record<string, BcTikTokAccountsState>
     if (key.startsWith(prefix)) out[key.slice(prefix.length)] = state
   }
   return out
+}
+
+/**
+ * FEAT-098 — this org's accounts, for the "already linked" list of `TtLinkModal`: the list route, because `linked` of
+ * `bc-tt-link/latest` only holds what appeared after that QR was issued.
+ */
+const ttLinkExisting = computed<BcTikTokAccount[]>(() => {
+  const account = ttLinkAccount.value
+  const org = ttLinkOrg.value
+  return account && org ? ttAccountsByKey.value[advKey(account.id, org.orgId)]?.data ?? [] : []
+})
+
+function onTtLinkNothingFound() {
+  const account = ttLinkAccount.value
+  const org = ttLinkOrg.value
+  if (account && org) void loadTtAccounts(account.id, org.orgId, true)
+}
+
+// ── FEAT-098 — unlink a TikTok account from one Business Center org ──────────────────────────────────────────────────
+/**
+ * The page owns the poll, since the job goes on after `TtUnlinkModal` closes. One loop per account + org + asset, so
+ * several unlinks can run at once: every 2 s, never two requests of one loop at a time, stopped on a terminal status
+ * and on unmount. `ttUnlinks` keeps the last state after a job ended, because the modal shows the outcome from it.
+ * It is dropped when the button is pressed again.
+ */
+const ttUnlinkOpen = ref(false)
+const ttUnlinkAccount = ref<TikTokAccount | null>(null)
+const ttUnlinkOrg = ref<BcOrganization | null>(null)
+const ttUnlinkTt = ref<BcTikTokAccount | null>(null)
+const ttUnlinks = ref<Record<string, BcTtUnlinkFollow>>({})
+
+interface TtUnlinkLoop {
+  timer: ReturnType<typeof setInterval>
+  inFlight: boolean
+}
+const ttUnlinkLoops = new Map<string, TtUnlinkLoop>()
+/** jobs seen ending: a list read that started before the end still names one as open, and must not re-attach it */
+const ttUnlinkEndedJobs = new Set<string>()
+
+function ttUnlinkKey(accountId: string, orgId: string, assetId: string): string {
+  return `${advKey(accountId, orgId)}:${assetId}`
+}
+
+function setTtUnlink(key: string, state: BcTtUnlinkFollow | null) {
+  ttUnlinks.value = state
+    ? { ...ttUnlinks.value, [key]: state }
+    : Object.fromEntries(Object.entries(ttUnlinks.value).filter(([k]) => k !== key))
+}
+
+function stopTtUnlinkLoop(key: string) {
+  const loop = ttUnlinkLoops.get(key)
+  if (loop) clearInterval(loop.timer)
+  ttUnlinkLoops.delete(key)
+}
+
+async function pollTtUnlink(key: string, accountId: string, orgId: string, assetId: string, name: string) {
+  const loop = ttUnlinkLoops.get(key)
+  if (!loop || loop.inFlight) return
+  loop.inFlight = true
+  try {
+    // retry: 0 — one request per tick
+    const res = await api<BcTtUnlinkLatestResponse>(
+      `/tiktok-accounts/${encodeURIComponent(accountId)}/organizations/${encodeURIComponent(orgId)}/tiktok-accounts/${encodeURIComponent(assetId)}/unlink/latest`,
+      { retry: 0 }
+    )
+    if (ttUnlinkLoops.get(key) !== loop) return // stopped meanwhile
+    const job = res.job
+    // nothing yet, or an answer about an attempt that already ended: the next tick looks again
+    if (!job || ttUnlinkEndedJobs.has(job.id)) return
+    // a different id is a newer job of this asset (another admin's retry): that one is the state of the row now
+    setTtUnlink(key, { jobId: job.id, job, error: null })
+    if (bcTtUnlinkIsOpen(job)) return
+    stopTtUnlinkLoop(key)
+    ttUnlinkEndedJobs.add(job.id)
+    if (bcTtUnlinkSucceeded(job)) {
+      toast.add({ title: 'ยกเลิกการเชื่อมโยงแล้ว', description: name, color: 'success' })
+      void loadTtAccounts(accountId, orgId, true)
+    } else {
+      toast.add({ title: bcTtUnlinkFailureTitle(job), description: `${name}: ${bcTtUnlinkFailureText(job)}`, color: 'error' })
+    }
+    void refresh() // `runningJob` of the account row
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    // the account / org is gone → nothing left to follow; any other error is transient
+    if (err.statusCode === 404 && ttUnlinkLoops.get(key) === loop) {
+      stopTtUnlinkLoop(key)
+      const jobId = ttUnlinks.value[key]?.jobId
+      if (jobId) {
+        ttUnlinkEndedJobs.add(jobId)
+        setTtUnlink(key, { jobId, job: ttUnlinks.value[key]?.job ?? null, error: err.data?.error ?? 'ไม่พบ org' })
+      }
+    }
+  } finally {
+    loop.inFlight = false
+  }
+}
+
+function followTtUnlink(accountId: string, orgId: string, assetId: string, jobId: string, name: string) {
+  if (ttUnlinkEndedJobs.has(jobId)) return
+  const key = ttUnlinkKey(accountId, orgId, assetId)
+  const current = ttUnlinks.value[key]
+  setTtUnlink(key, { jobId, job: current?.jobId === jobId ? current.job : null, error: null })
+  if (ttUnlinkLoops.has(key)) return
+  ttUnlinkLoops.set(key, {
+    timer: setInterval(() => {
+      void pollTtUnlink(key, accountId, orgId, assetId, name)
+    }, POLL_MS),
+    inFlight: false
+  })
+  void pollTtUnlink(key, accountId, orgId, assetId, name)
+}
+
+onUnmounted(() => {
+  for (const key of [...ttUnlinkLoops.keys()]) stopTtUnlinkLoop(key)
+})
+
+// Re-attach for a collapsed row: `openUnlinkJobId` only comes from the list route, which is read when the drill-down
+// opens, so an unlink job named by the account row reads the same memoised requests now. `runningJob` names only the
+// newest job, so an unlink queued behind a newer job of the account still waits for the row to be opened.
+watch(data, () => {
+  for (const account of data.value?.accounts ?? []) {
+    if (account.runningJob?.type === 'bcTtUnlink' && !orgsById.value[account.id]) void loadOrgs(account.id)
+  }
+})
+
+/** `<orgId>:<assetId>` of this account's unlinks that have not ended (prop of `OrganizationRows`) */
+function ttUnlinkPendingFor(accountId: string): string[] {
+  const prefix = `${accountId}:`
+  return Object.entries(ttUnlinks.value)
+    .filter(([key, follow]) => key.startsWith(prefix) && bcTtUnlinkFollowIsOpen(follow))
+    .map(([key]) => key.slice(prefix.length))
+}
+
+const ttUnlinkFollow = computed<BcTtUnlinkFollow | null>(() => {
+  const account = ttUnlinkAccount.value
+  const org = ttUnlinkOrg.value
+  const tt = ttUnlinkTt.value
+  return account && org && tt ? ttUnlinks.value[ttUnlinkKey(account.id, org.orgId, tt.assetId)] ?? null : null
+})
+
+function onAskTtUnlink(account: TikTokAccount, org: BcOrganization, tt: BcTikTokAccount) {
+  const key = ttUnlinkKey(account.id, org.orgId, tt.assetId)
+  if (ttLinkBlockedReason(account) || ttUnlinkLoops.has(key)) return
+  setTtUnlink(key, null) // the outcome of an earlier attempt is not this one's
+  ttUnlinkAccount.value = account
+  ttUnlinkOrg.value = org
+  ttUnlinkTt.value = tt
+  ttUnlinkOpen.value = true
+}
+
+/** 202 or 409 `duplicate` of the modal's POST: either way there is a job to follow */
+function onTtUnlinkOrdered(jobId: string) {
+  const account = ttUnlinkAccount.value
+  const org = ttUnlinkOrg.value
+  const tt = ttUnlinkTt.value
+  if (!account || !org || !tt) return
+  // the API just said this job is open, so the outcome of an earlier attempt no longer applies
+  ttUnlinkEndedJobs.delete(jobId)
+  setTtUnlink(ttUnlinkKey(account.id, org.orgId, tt.assetId), null)
+  followTtUnlink(account.id, org.orgId, tt.assetId, jobId, bcTtAccountName(tt))
+  void refresh()
 }
 
 // ── advertisers slideover (FEAT-005) ─────────────────────────────────────────────────────────────────────────────────
@@ -3381,6 +3553,7 @@ const showTable = computed(() => !error.value && !isEmpty.value && !isWorkspaceE
                 :tt-link-asking="ttLinkAsking"
                 :tt-link-pending="ttLinkPendingOrgs(row.original.id)"
                 :tt-accounts="ttAccountsFor(row.original.id)"
+                :tt-unlink-pending="ttUnlinkPendingFor(row.original.id)"
                 @retry="loadOrgs(row.original.id, true)"
                 @sync="org => onSync(row.original, org.orgId)"
                 @advertisers="org => openAdvertisers(row.original, org)"
@@ -3389,6 +3562,7 @@ const showTable = computed(() => !error.value && !isEmpty.value && !isWorkspaceE
                 @adv-create="org => onAskAdvCreate(row.original, org)"
                 @tt-link="org => onAskTtLink(row.original, org)"
                 @tt-accounts-retry="org => loadTtAccounts(row.original.id, org.orgId, true)"
+                @tt-unlink="({ org, tt }) => onAskTtUnlink(row.original, org, tt)"
               />
             </template>
           </UTable>
@@ -3527,9 +3701,20 @@ const showTable = computed(() => !error.value && !isEmpty.value && !isWorkspaceE
         :account="ttLinkAccount"
         :org="ttLinkOrg"
         :initial="ttLinkInitial"
+        :existing="ttLinkExisting"
+        @nothing-found="onTtLinkNothingFound"
         @requested="onTtLinkRequested"
         @settled="onTtLinkSettled"
         @linked="onTtLinked"
+      />
+      <TiktokAccountsTtUnlinkModal
+        v-model:open="ttUnlinkOpen"
+        :account="ttUnlinkAccount"
+        :org="ttUnlinkOrg"
+        :tt="ttUnlinkTt"
+        :follow="ttUnlinkFollow"
+        @requested="(job: BcTtUnlinkAccepted) => onTtUnlinkOrdered(job.jobId)"
+        @duplicate="onTtUnlinkOrdered"
       />
       <BrowserProfilesProxyModal
         v-model:open="proxyModalOpen"

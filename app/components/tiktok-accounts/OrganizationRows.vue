@@ -53,9 +53,14 @@
  * link-QR actions below). Nothing here changed to support that: a single root org renders as a one-row tree
  * exactly like any other root, with every button reachable; only the title-strip badge switches to the
  * singular "1 org" instead of "1 orgs".
+ *
+ * FEAT-098 — each row of the chip's popover gains the icon button **ยกเลิกการเชื่อมโยง** (`ta-tt-unlink-<assetId>`),
+ * only with `canUnlink` or while a job of that asset is open. It emits `tt-unlink` and closes the popover, whose
+ * content would otherwise stay on top of the modal; the page owns the rest, this component only renders.
  */
 import type {
   BcOrganization,
+  BcTikTokAccount,
   BcTikTokAccountsState,
   OrganizationsState,
   TikTokAccount
@@ -88,6 +93,8 @@ const props = defineProps<{
   ttLinkPending?: readonly string[]
   /** `orgId` → linked TikTok accounts of that org (count chip + popover list); missing key = not loaded yet */
   ttAccounts?: Record<string, BcTikTokAccountsState>
+  /** FEAT-098 — `<orgId>:<assetId>` of every unlink job the page is following → pending row */
+  ttUnlinkPending?: readonly string[]
 }>()
 
 const emit = defineEmits<{
@@ -103,6 +110,8 @@ const emit = defineEmits<{
   'tt-link': [org: BcOrganization]
   /** TASK-bc-tt-link — the chip's popover was opened on an org whose count request failed: read it again */
   'tt-accounts-retry': [org: BcOrganization]
+  /** FEAT-098 — the page opens `TtUnlinkModal` for this account of this org */
+  'tt-unlink': [payload: { org: BcOrganization, tt: BcTikTokAccount }]
 }>()
 
 /** the relative "synced" text follows the clock like the Advertisers column of the account row */
@@ -240,6 +249,23 @@ function ttCountLabel(org: BcOrganization): string {
   if (state?.data) return String(state.data.length)
   if (state?.error) return '?'
   return '…'
+}
+
+/** FEAT-098 — which org's popover is open; controlled so that pressing unlink can close it */
+const ttPopoverOrgId = ref<string | null>(null)
+
+function isTtUnlinkPending(org: BcOrganization, tt: BcTikTokAccount): boolean {
+  return props.ttUnlinkPending?.includes(`${org.orgId}:${tt.assetId}`) ?? false
+}
+
+function ttUnlinkTooltip(org: BcOrganization, tt: BcTikTokAccount): string {
+  if (isTtUnlinkPending(org, tt)) return 'กำลังยกเลิกการเชื่อมโยง…'
+  return props.ttLinkBlocked ?? 'ยกเลิกการเชื่อมโยง'
+}
+
+function onTtUnlink(org: BcOrganization, tt: BcTikTokAccount) {
+  ttPopoverOrgId.value = null
+  emit('tt-unlink', { org, tt })
 }
 
 /** cell chrome shared by the caption row and the data rows (one place, so the two can never drift apart) */
@@ -423,7 +449,12 @@ const CELL = 'block sm:table-cell sm:px-3'
                     under this org; the popover lists them. The chip is a button so it is reachable by keyboard,
                     and it is hidden on a missing org (nothing is read for those rows).
                   -->
-                  <UPopover v-if="!org.missingSince" :content="{ align: 'start' }">
+                  <UPopover
+                    v-if="!org.missingSince"
+                    :open="ttPopoverOrgId === org.orgId"
+                    :content="{ align: 'start' }"
+                    @update:open="(isOpen: boolean) => ttPopoverOrgId = isOpen ? org.orgId : null"
+                  >
                     <UButton
                       :label="`บัญชี TikTok ${ttCountLabel(org)}`"
                       icon="i-lucide-at-sign"
@@ -475,7 +506,7 @@ const CELL = 'block sm:table-cell sm:px-3'
                               size="2xs"
                               class="shrink-0"
                             />
-                            <span class="flex min-w-0 flex-col">
+                            <span class="flex min-w-0 flex-1 flex-col">
                               <span class="break-words text-highlighted" data-testid="ta-tt-count-name">{{ bcTtAccountName(tt) }}</span>
                               <span class="text-xs break-words text-muted" :title="bcTtRolesTitle(tt.roles)">
                                 {{ bcTtAccountHandle(tt) }} · {{ bcTtRolesText(tt.roles) }}
@@ -483,7 +514,37 @@ const CELL = 'block sm:table-cell sm:px-3'
                                   · {{ bcTtRelationText(tt.relationStatus) }}
                                 </template>
                               </span>
+                              <span
+                                v-if="isTtUnlinkPending(org, tt)"
+                                class="text-xs break-words text-muted"
+                                :data-testid="`ta-tt-unlink-pending-${tt.assetId}`"
+                              >
+                                กำลังยกเลิกการเชื่อมโยง…
+                              </span>
+                              <span
+                                v-else-if="!tt.canUnlink && tt.ownerName"
+                                class="text-xs break-words text-muted"
+                                :data-testid="`ta-tt-unlink-shared-${tt.assetId}`"
+                              >
+                                แชร์มาจาก BC อื่น: {{ tt.ownerName }}
+                              </span>
                             </span>
+                            <UTooltip v-if="tt.canUnlink || isTtUnlinkPending(org, tt)" :text="ttUnlinkTooltip(org, tt)">
+                              <span class="inline-flex shrink-0">
+                                <UButton
+                                  icon="i-lucide-unlink"
+                                  :color="isTtUnlinkPending(org, tt) ? 'neutral' : 'error'"
+                                  variant="outline"
+                                  size="xs"
+                                  :disabled="isTtUnlinkPending(org, tt) || !!ttLinkBlocked"
+                                  :loading="isTtUnlinkPending(org, tt)"
+                                  aria-label="ยกเลิกการเชื่อมโยง"
+                                  :data-testid="`ta-tt-unlink-${tt.assetId}`"
+                                  :data-asset-id="tt.assetId"
+                                  @click="onTtUnlink(org, tt)"
+                                />
+                              </span>
+                            </UTooltip>
                           </li>
                         </ul>
                       </div>

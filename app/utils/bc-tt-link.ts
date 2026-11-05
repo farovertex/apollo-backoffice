@@ -8,13 +8,15 @@
  * TikTok's own numeric codes and only the ones the brief pinned down are translated — anything else is printed as
  * its code instead of being guessed at.
  */
-import type { BcTikTokAccount, BcTtLinkConflictReason } from '#shared/types/tiktok-accounts'
+import type { BcTikTokAccount, BcTtLinkConflictReason, BcTtLinkedElsewhere } from '#shared/types/tiktok-accounts'
 
 export const BC_TT_LINK_REASON_TEXT: Record<BcTtLinkConflictReason, string> = {
   noOrg: 'ไม่พบ org',
   orgMissing: 'org นี้ไม่อยู่ใน Business Center แล้ว',
   noProfile: 'บัญชีนี้ยังไม่มีโปรไฟล์ที่พร้อมใช้',
   inactive: 'account ถูกปิดใช้งาน',
+  // FEAT-098 — an open bcTtUnlink job of this org: a scan now would leave its outcome ambiguous
+  unlinkRunning: 'กำลังยกเลิกการเชื่อมโยงบัญชีใน org นี้อยู่ รอให้เสร็จก่อน',
   // FEAT-085 — a bcTtLink job of this org is already pending/waiting/active (busy codes `running`/`needsHuman` are gone)
   duplicate: 'มีงานนี้รออยู่แล้ว'
 }
@@ -52,13 +54,25 @@ export function bcTtRelationText(status: number | null | undefined): string | nu
 }
 
 /** What to call a linked account: its name, else its @username, else the tail of its asset id (never the full id). */
-export function bcTtAccountName(account: BcTikTokAccount): string {
+export function bcTtAccountName(account: Pick<BcTikTokAccount, 'name' | 'username' | 'assetId'>): string {
   return account.name || account.username || `…${account.assetId.slice(-4)}`
 }
 
 /** `@username` for display, `'—'` when the row has none (the API may deliver one without the other). */
 export function bcTtAccountHandle(account: BcTikTokAccount): string {
   return account.username ? `@${account.username}` : REPORT_DASH
+}
+
+/**
+ * FEAT-098 — the warning on a scanned account that is also linked elsewhere; `null` unless there is a positive match
+ * (spec A7: "not found" must never read as "not linked anywhere"). Orgs the admin can't access are only counted.
+ */
+export function bcTtElsewhereText(elsewhere: BcTtLinkedElsewhere | null | undefined): string | null {
+  if (!elsewhere || elsewhere.count <= 0) return null
+  const names = elsewhere.orgs.map(org => org.name || `…${org.orgIdLast4}`).join(', ')
+  const hidden = elsewhere.count - elsewhere.orgs.length
+  const more = hidden > 0 ? `และอีก ${hidden} org` : ''
+  return `บัญชีนี้ผูกกับ BC อื่นในระบบด้วย: ${[names, more].filter(Boolean).join(' ')}`
 }
 
 /**
