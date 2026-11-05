@@ -195,6 +195,13 @@ async function onSubmit() {
           <p class="text-xs text-muted">
             ตรวจกับ Business Center แล้ว ไม่พบบัญชีนี้ใน org นี้อีก
           </p>
+          <p
+            v-if="job?.result?.resyncJobId"
+            class="text-xs text-muted"
+            data-testid="ta-tt-unlink-resync"
+          >
+            กำลัง Sync ข้อมูลของ org นี้ ปิดหน้านี้ได้ ดูสถานะได้ที่แถวบัญชี
+          </p>
         </div>
 
         <template v-else>
