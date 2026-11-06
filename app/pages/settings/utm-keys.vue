@@ -95,7 +95,6 @@ async function load() {
   pending.value = true
   loadError.value = null
   releaseError.value = null
-  releaseError.value = null
   const query: Record<string, string> = {}
   if (ownerFilter.value !== ALL_OWNERS) query.ownerAdminId = ownerFilter.value
   if (prefixFilter.value !== ALL_PREFIXES) query.prefix = prefixFilter.value

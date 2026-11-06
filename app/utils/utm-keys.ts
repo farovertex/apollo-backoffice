@@ -3,7 +3,6 @@
  * `UTM_TIMEZONE`); they are only ever moved with UTC calendar arithmetic on the string's own parts, never through
  * a local-time `Date`, so a day cannot slip by one in the browser's timezone.
  */
-// `bangkokToday()` is the auto-imported helper of `useReportScopeState`
 import type { UtmKeyReleaseReason, UtmKeyView } from '#shared/types/utm-keys'
 
 const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
@@ -14,15 +13,6 @@ export function shiftDay(day: string, delta: number): string {
   if (!m) return day
   const t = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + delta))
   return t.toISOString().slice(0, 10)
-}
-
-/**
- * The day a handover made now takes effect (api-contract §0): today when the key has no fact for today, tomorrow
- * otherwise. Derived from `lastFactDay` (the API does not hand the day over); the API's `owners[]` in the answer
- * is the truth (a second handover on the same day lands on the next free day).
- */
-export function handoverEffectiveDay(key: Pick<UtmKeyView, 'lastFactDay'>, today: string = bangkokToday()): string {
-  return key.lastFactDay && key.lastFactDay >= today ? shiftDay(today, 1) : today
 }
 
 export interface UtmTimelineRow {

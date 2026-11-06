@@ -6,8 +6,8 @@
  * FEAT-099 — the submit is a **handover**: it appends an entry to the key's ownership timeline, effective today
  * (the key has no fact for today yet) or tomorrow (it has), so the money up to that day stays with the current
  * holder. The read-only timeline `st-uk-modal-timeline` (newest first) lists who owned the key and for which days;
- * the effective day (`st-uk-modal-effective`) is derived from `lastFactDay` vs. today in Asia/Bangkok (the API
- * does not hand it over) and the response's `owners[]` is what the modal shows afterwards.
+ * the effective day (`st-uk-modal-effective`) is the API's `nextHandoverFrom` (v1.1), rendered as is and never
+ * recomputed; the response's `owners[]` is what the modal shows afterwards.
  *
  * GOD only (the page itself is). It shows the key read-only (prefix / source / medium / campaign) with its
  * current owner and sends exactly one `PATCH /utm-keys/:id { ownerAdminId }` per submit (`retry: 0`). Success →
@@ -52,7 +52,7 @@ const items = computed(() => {
 })
 
 const timeline = computed(() => timelineRows(props.utmKey))
-const effectiveDay = computed(() => props.utmKey ? handoverEffectiveDay(props.utmKey) : '')
+const effectiveDay = computed(() => props.utmKey?.nextHandoverFrom ?? '')
 
 const currentOwnerText = computed(() => props.utmKey?.owner?.displayName ?? REPORT_DASH)
 

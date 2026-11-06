@@ -36,7 +36,7 @@ export interface UtmKeyReleased {
   reason: UtmKeyReleaseReason
 }
 
-/** `UtmKeyView` — exactly these 16 keys, in this order (§1.1; `owners` and `released` are last) */
+/** `UtmKeyView` — exactly these 17 keys, in this order (§1.1 v1.1; `owners`, `released`, `nextHandoverFrom` are last) */
 export interface UtmKeyView {
   id: string
   prefix: string
@@ -60,6 +60,8 @@ export interface UtmKeyView {
   owners: UtmKeyOwnerEntry[]
   /** `null` while the key is held */
   released: UtmKeyReleased | null
+  /** the day a handover to another admin takes effect if done now — computed by the API, render it, never recompute */
+  nextHandoverFrom: string
 }
 
 /** `GET /utm-keys[?ownerAdminId=&prefix=]` 200 — sorted `prefix, source, medium, campaign`, no pagination */
