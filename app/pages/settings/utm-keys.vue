@@ -7,9 +7,14 @@
  * sign-ups / deposits for that owner. This page is the only place where a key changes hands — there is no create
  * and no delete.
  *
+ * FEAT-099: the owner cell is the **holder** (`st-uk-owner`), a muted `st-uk-released` badge marks a key whose holder
+ * stepped back (another admin may claim it; the holder keeps earning until then), and the row action
+ * `st-uk-release` (enabled only while held) → confirm (`st-uk-release-modal`) → one `POST /utm-keys/:id/release`.
+ * The modal shows the ownership timeline and `PATCH` there is a handover.
+ *
  * Requests (`useApi`, `retry: 0`): `GET /utm-keys[?ownerAdminId=&prefix=]` on mount, on every filter change, on
  * Refresh and after a successful move · `GET /admins` + `GET /prefixes?status=all` once per page load (they fill
- * the two filters and the modal's select) · `PATCH /utm-keys/:id { ownerAdminId }` from `UtmKeysOwnerModal`.
+ * the two filters and the modal's select) · `PATCH /utm-keys/:id { ownerAdminId }` from `UtmKeysOwnerModal` · `POST /utm-keys/:id/release` from here.
  *
  * The **URL is the filter state** (`?owner=&prefix=`, the report-page pattern): a select writes it with
  * `router.replace`, and the query change issues exactly one list request (a session counter drops the answer of
@@ -17,6 +22,7 @@
  * home, both with the "Not allowed" toast); the API (`@Roles('GOD')`) is the authority.
  */
 import type { FetchError } from 'ofetch'
+import type { ModalProps } from '@nuxt/ui'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { AdminsResponse } from '#shared/types/admins'
 import type { PrefixesResponse } from '#shared/types/prefixes'
@@ -35,6 +41,7 @@ const ALL_OWNERS = 'all'
 const ALL_PREFIXES = 'all'
 
 const api = useApi()
+const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 
@@ -74,6 +81,7 @@ const count = ref(0)
 const pending = ref(true)
 const loadError = ref<string | null>(null)
 let session = 0
+const releaseError = ref<string | null>(null)
 
 const keys = computed<UtmKeyView[]>(() => list.value ?? [])
 const pageState = computed<PageState>(() => {
@@ -86,6 +94,8 @@ async function load() {
   const s = ++session
   pending.value = true
   loadError.value = null
+  releaseError.value = null
+  releaseError.value = null
   const query: Record<string, string> = {}
   if (ownerFilter.value !== ALL_OWNERS) query.ownerAdminId = ownerFilter.value
   if (prefixFilter.value !== ALL_PREFIXES) query.prefix = prefixFilter.value
@@ -183,7 +193,53 @@ function openEdit(row: UtmKeyView) {
  * counts and `lastFactDay` are the API's) */
 function onMoved(row: UtmKeyView) {
   list.value = keys.value.map(k => (k.id === row.id ? row : k))
+  if (editing.value?.id === row.id) editing.value = row
   void load()
+}
+
+// ── release (FEAT-099) ──────────────────────────────────────────────────────────────────────────────────────────────
+const RELEASE_FALLBACK = 'ปล่อย key ไม่สำเร็จ'
+const releaseOpen = ref(false)
+const releasing = ref<UtmKeyView | null>(null)
+const releaseBusy = ref(false)
+const releaseModalContent = { 'data-testid': 'st-uk-release-modal' } as ModalProps['content']
+
+function askRelease(row: UtmKeyView) {
+  releasing.value = row
+  releaseOpen.value = true
+}
+
+function releaseTitle(row: UtmKeyView): string {
+  return row.released ? 'ปล่อยแล้ว — ไม่มีอะไรต้องทำ' : 'ปล่อย key นี้ให้แอดมินคนอื่นรับไปใช้'
+}
+
+function releasedTitle(row: UtmKeyView): string {
+  const r = row.released
+  if (!r) return ''
+  const by = r.by ? ` · โดย ${r.by.displayName}` : ''
+  return `${RELEASE_REASON_TEXT[r.reason] ?? r.reason}${by} · ยอดยังเข้าผู้ถือ key จนกว่าจะมีคนรับไปใช้`
+}
+
+async function confirmRelease() {
+  const row = releasing.value
+  if (!row || releaseBusy.value) return
+  releaseBusy.value = true
+  releaseError.value = null
+  try {
+    // retry: 0 — exactly one POST per confirm
+    const res = await api<UtmKeyView>(`/utm-keys/${encodeURIComponent(row.id)}/release`, { method: 'POST', body: {}, retry: 0 })
+    list.value = keys.value.map(k => (k.id === res.id ? res : k))
+    releaseOpen.value = false
+    toast.add({ title: 'ปล่อย key แล้ว', icon: 'i-lucide-check', color: 'success' })
+  } catch (e) {
+    const err = e as FetchError<Partial<ApiErrorBody>>
+    const issues = err.data?.issues?.map(i => i.message).filter(Boolean) ?? []
+    // a 4xx shows the API's message verbatim in the page's error element; the row is not touched
+    releaseError.value = issues.length ? issues.join(' · ') : (err.data?.error ?? err.message ?? RELEASE_FALLBACK)
+    releaseOpen.value = false
+  } finally {
+    releaseBusy.value = false
+  }
 }
 
 const footerText = computed(() => `ทั้งหมด ${formatInt(count.value)} key`)
@@ -238,6 +294,22 @@ const footerText = computed(() => `ทั้งหมด ${formatInt(count.value
         />
       </UFormField>
     </div>
+
+    <UAlert
+      v-if="releaseError"
+      color="error"
+      variant="subtle"
+      icon="i-lucide-triangle-alert"
+      title="ปล่อย key ไม่สำเร็จ"
+      role="alert"
+      data-testid="st-uk-error"
+      :close="true"
+      @update:open="releaseError = null"
+    >
+      <template #description>
+        <span class="break-words">{{ releaseError }}</span>
+      </template>
+    </UAlert>
 
     <p v-if="adminsError || prefixesError" class="text-xs text-warning" data-testid="st-uk-options-error">
       {{ [adminsError, prefixesError].filter(Boolean).join(' · ') }}
@@ -342,7 +414,18 @@ const footerText = computed(() => `ทั้งหมด ${formatInt(count.value
                   :class="row.owner ? 'text-highlighted' : 'text-muted'"
                   data-testid="st-uk-owner"
                 >
-                  {{ row.owner?.displayName ?? REPORT_DASH }}
+                  <span class="break-words">{{ row.owner?.displayName ?? REPORT_DASH }}</span>
+                  <UBadge
+                    v-if="row.released"
+                    label="ปล่อยแล้ว"
+                    color="neutral"
+                    variant="subtle"
+                    size="sm"
+                    class="ms-1.5 align-middle"
+                    :title="releasedTitle(row)"
+                    :data-reason="row.released.reason"
+                    data-testid="st-uk-released"
+                  />
                 </td>
                 <td class="px-3 py-2 text-right tabular-nums" data-testid="st-uk-templates">
                   {{ formatInt(row.templateCount) }}
@@ -357,9 +440,21 @@ const footerText = computed(() => `ทั้งหมด ${formatInt(count.value
                 >
                   {{ row.lastFactDay ?? REPORT_DASH }}
                 </td>
-                <td class="px-3 py-1.5 text-right">
+                <td class="px-3 py-1.5 text-right whitespace-nowrap">
                   <UButton
-                    label="เปลี่ยนเจ้าของ"
+                    label="ปล่อย"
+                    icon="i-lucide-unlock"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    class="whitespace-nowrap"
+                    :disabled="row.released != null"
+                    :title="releaseTitle(row)"
+                    data-testid="st-uk-release"
+                    @click="askRelease(row)"
+                  />
+                  <UButton
+                    label="ส่งต่อเจ้าของ"
                     icon="i-lucide-user-cog"
                     color="neutral"
                     variant="ghost"
@@ -379,6 +474,58 @@ const footerText = computed(() => `ทั้งหมด ${formatInt(count.value
         {{ footerText }}
       </p>
     </template>
+
+    <UModal
+      v-model:open="releaseOpen"
+      title="ปล่อย UTM key นี้?"
+      description="แอดมินคนอื่นจะ save template ที่ผูก key นี้ได้ · ผู้ถือ key ปัจจุบันยังได้ยอดของ key นี้ต่อจนกว่าจะมีคนรับไปใช้"
+      :dismissible="!releaseBusy"
+      :ui="{ content: 'max-w-md' }"
+      :content="releaseModalContent"
+    >
+      <template #body>
+        <div class="flex flex-col gap-4">
+          <dl v-if="releasing" class="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+            <dt class="text-muted">
+              Prefix
+            </dt>
+            <dd class="font-mono break-all text-highlighted">
+              {{ releasing.prefix }}
+            </dd>
+            <dt class="text-muted">
+              Campaign
+            </dt>
+            <dd class="break-all text-highlighted">
+              {{ releasing.campaign || REPORT_DASH }}
+            </dd>
+            <dt class="text-muted">
+              ผู้ถือ key
+            </dt>
+            <dd class="break-words text-highlighted">
+              {{ releasing.owner?.displayName ?? REPORT_DASH }}
+            </dd>
+          </dl>
+          <div class="flex flex-wrap justify-end gap-2">
+            <UButton
+              label="ยกเลิก"
+              color="neutral"
+              variant="subtle"
+              :disabled="releaseBusy"
+              data-testid="st-uk-release-cancel"
+              @click="releaseOpen = false"
+            />
+            <UButton
+              label="ปล่อย key"
+              icon="i-lucide-unlock"
+              color="primary"
+              :loading="releaseBusy"
+              data-testid="st-uk-release-confirm"
+              @click="confirmRelease()"
+            />
+          </div>
+        </div>
+      </template>
+    </UModal>
 
     <UtmKeysOwnerModal
       v-model:open="modalOpen"
