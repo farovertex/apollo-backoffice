@@ -266,10 +266,21 @@ const syncAllRequesting = ref(false)
 
 const connectedAccounts = computed(() => accounts.value.filter(a => a.status === 'connected'))
 /**
- * "กำลังดึงข้อมูลจาก mssg…" + the page button disabled while a job of the area is followed or a POST is in flight.
- * Followed, not merely open: a job whose 15 min follow-up gave up no longer blocks the button (its card says so).
+ * Page "ดึงข้อมูลใหม่" targets (spec AC-17, Lead decision round 1): `connected` accounts with no open job and no POST of
+ * their own in flight. An account that is `connecting` / `disconnecting` / `expired` / `error`, or already syncing, is
+ * left alone and does not block the others.
+ */
+const syncableAccounts = computed(() => connectedAccounts.value.filter(a => !mssgNeedsPoll(a) && !requestingIds.value.includes(a.id)))
+/**
+ * "กำลังดึงข้อมูลจาก mssg…" shows (and `data-syncing`) while any job of the area is followed or a POST is in flight.
+ * Followed, not merely open: a job whose 15 min follow-up gave up no longer counts (its card says so).
+ * It is only the progress text now — the page button has its own rule (`syncableAccounts`).
  */
 const anyJobOpen = computed(() => poll.polling.value.length > 0 || syncAllRequesting.value || requestingIds.value.length > 0)
+const syncButtonTitle = computed(() => {
+  if (syncableAccounts.value.length) return undefined
+  return connectedAccounts.value.length === 0 ? 'ไม่มีบัญชีที่เชื่อมแล้วในพื้นที่นี้' : 'บัญชีที่เชื่อมแล้วกำลังทำงานอยู่ รอให้งานเสร็จก่อน'
+})
 const siteTotal = computed(() => accounts.value.reduce((n, a) => n + a.sites.length, 0))
 
 async function postSync(acc: MssgAccountView): Promise<string | null> {
@@ -299,10 +310,14 @@ async function syncOne(acc: MssgAccountView) {
   }
 }
 
-/** spec AC-17 — one `POST …/sync` per `connected` account of the shown area, none for any other status (v2: so never a `disconnecting` one) */
+/**
+ * spec AC-17 — one `POST …/sync` per `connected` account of the shown area that has no open job, none for any other
+ * status (so never `connecting` / `disconnecting` / `expired` / `error`). A refusal of one account (409 …) is reported
+ * and never stops the others (`postSync` does not throw).
+ */
 async function syncAll() {
-  if (anyJobOpen.value || isAll.value) return
-  const targets = connectedAccounts.value
+  if (syncAllRequesting.value || isAll.value) return
+  const targets = syncableAccounts.value
   if (!targets.length) return
   syncAllRequesting.value = true
   try {
@@ -378,6 +393,12 @@ const pageState = computed<'loading' | 'error' | 'empty' | 'ready'>(() => {
   if (listError.value && !listLoaded.value) return 'error'
   if (!listLoaded.value) return 'loading'
   return accounts.value.length ? 'ready' : 'empty'
+})
+/** "all": the Thai/API text of the failure; with an overview already on screen it also says the data below is old */
+const overviewAlertDescription = computed(() => {
+  const text = overviewError.value && overviewError.value !== 'โหลดภาพรวมทุกผู้ใช้ไม่สำเร็จ' ? overviewError.value : ''
+  if (!overview.value) return text || undefined
+  return [text, 'ข้อมูลด้านล่างเป็นของการโหลดครั้งก่อน อาจไม่เป็นปัจจุบัน'].filter(Boolean).join(' · ')
 })
 const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' : 'other'))
 </script>
@@ -570,8 +591,8 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
                 variant="outline"
                 size="sm"
                 :loading="syncAllRequesting"
-                :disabled="anyJobOpen || connectedAccounts.length === 0"
-                :title="connectedAccounts.length === 0 ? 'ไม่มีบัญชีที่เชื่อมแล้วในพื้นที่นี้' : undefined"
+                :disabled="syncAllRequesting || syncableAccounts.length === 0"
+                :title="syncButtonTitle"
                 data-testid="mp-sync-all"
                 @click="syncAll"
               />
@@ -606,13 +627,15 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
 
         <!-- ── GOD overview "ทุกผู้ใช้" (read-only) ───────────────────────────────────────────────────────────────── -->
         <template v-else>
+          <!-- first load failed (nothing to show) or a re-read failed (the stale overview stays below the alert) -->
           <UAlert
-            v-if="pageState === 'error'"
+            v-if="overviewError"
             color="error"
             variant="subtle"
             icon="i-lucide-triangle-alert"
             title="โหลดภาพรวมทุกผู้ใช้ไม่สำเร็จ"
-            :description="overviewError && overviewError !== 'โหลดภาพรวมทุกผู้ใช้ไม่สำเร็จ' ? overviewError : undefined"
+            :description="overviewAlertDescription"
+            :data-stale="overview ? 'true' : 'false'"
             data-testid="mp-error"
           >
             <template #actions>
@@ -629,11 +652,11 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
             </template>
           </UAlert>
 
-          <div v-else-if="pageState === 'loading'" class="grid grid-cols-1 gap-3 xl:grid-cols-2" data-testid="mp-loading">
+          <div v-if="pageState === 'loading'" class="grid grid-cols-1 gap-3 xl:grid-cols-2" data-testid="mp-loading">
             <USkeleton v-for="n in 2" :key="n" class="h-40 w-full rounded-lg" />
           </div>
 
-          <div v-else class="flex flex-col gap-4" data-testid="mp-overview">
+          <div v-else-if="pageState !== 'error'" class="flex flex-col gap-4" data-testid="mp-overview">
             <p v-if="overview" class="text-xs text-muted" data-testid="mp-overview-totals">
               {{ overview.totals.workspaces }} พื้นที่ · {{ overview.totals.accounts }} บัญชี mssg · {{ overview.totals.sites }} เว็บ
             </p>
