@@ -52,6 +52,18 @@ export interface BoundAccountRef {
  */
 export type ProfileRunState = 'closed' | 'opening' | 'open' | 'closing' | 'provisioning' | 'error'
 
+/**
+ * FEAT-099 (api-contract v2) — the mssg slot of a profile, independent of the TikTok `boundAccountId`.
+ * `bound` = in use by a mssg account (`email` is `null` when the caller may not see that account's area) · `free` =
+ * a mssg profile with no account and no leftover session (reused by the next connect) · `stale` = unlinked but the
+ * logout failed, a mssg session may remain (never reused automatically).
+ */
+export interface ProfileMssgRef {
+  state: 'bound' | 'free' | 'stale'
+  accountId: string | null
+  email: string | null
+}
+
 export interface AvailableProfile {
   /** BROWSER_PROFILES._id — every listed profile is in the DB after the sync */
   id: string
@@ -97,6 +109,11 @@ export interface AvailableProfile {
    * three row actions are disabled; `runState` is **not** touched by that job, so the row stays `closed`.
    */
   proxyUpdating: boolean
+  /**
+   * FEAT-099 (api-contract v2) — `null` for a profile mssg does not use. Optional: an older API sends no key, which
+   * reads as `null` (no badge).
+   */
+  mssg?: ProfileMssgRef | null
 }
 
 /**

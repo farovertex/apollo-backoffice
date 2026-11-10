@@ -53,7 +53,7 @@ import type { FetchError } from 'ofetch'
 import { getPaginationRowModel } from '@tanstack/table-core'
 import { formatTimeAgo } from '@vueuse/core'
 import type { UseTimeAgoMessages } from '@vueuse/core'
-import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, DeleteProfileResponse, ForceCloseResponse, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
+import type { AvailableProfile, AvailableProfileStatus, AvailableResponse, DeleteProfileResponse, ForceCloseResponse, ProfileMssgRef, ProviderErrorBody, SyncResponse } from '#shared/types/browser-profiles'
 import type { ProviderNodeView, ProviderNodesResponse } from '#shared/types/provider-nodes'
 import type { ProfilesPollReason } from '~/composables/useProfilesPoll'
 
@@ -164,6 +164,34 @@ watch(filtered, (rows) => {
 // proxy exactly like this column does; only the "nothing" rendering differs (`—` here, "No proxy" there)
 function formatProxy(proxy: AvailableProfile['proxy']): string {
   return formatProxySnapshot(proxy) ?? '—'
+}
+
+/**
+ * FEAT-099 (api-contract v2, spec H6) — the mssg badge of the Status column (`bp-mssg-<profileId>`, `data-state` =
+ * `bound|free|stale`); nothing for a profile mssg does not use, nor for an older API without the `mssg` key. Rendered
+ * from the same client-side table data as the Free/Bound badge, no SSR-only path (BUG-049).
+ */
+const MSSG_BADGE: Record<ProfileMssgRef['state'], { color: 'info' | 'success' | 'warning', title: string }> = {
+  bound: { color: 'info', title: 'ใช้กับบัญชี mssg อยู่ ยกเลิกการเชื่อมที่หน้า mssg Pages ก่อนลบโปรไฟล์' },
+  free: { color: 'success', title: 'โปรไฟล์ mssg ที่ว่าง จะถูกใช้กับบัญชี mssg ถัดไปของพื้นที่นี้' },
+  stale: { color: 'warning', title: 'ยกเลิกการเชื่อมแล้วแต่ออกจากระบบ mssg ไม่สำเร็จ อาจยังล็อกอินค้างอยู่ ระบบจะไม่นำไปใช้ซ้ำเอง' }
+}
+
+function mssgBadge(p: AvailableProfile) {
+  const mssg = p.mssg ?? null
+  if (!mssg) return null
+  const label = mssg.state === 'bound'
+    ? `mssg: ${mssg.email ?? 'ใช้งานอยู่'}`
+    : mssg.state === 'free' ? 'mssg: ว่าง' : 'mssg: อาจมี session ค้าง'
+  const style = MSSG_BADGE[mssg.state] ?? MSSG_BADGE.stale
+  return h(UBadge, {
+    'color': style.color,
+    'variant': 'subtle',
+    'class': 'max-w-full break-all',
+    'title': style.title,
+    'data-testid': `bp-mssg-${p.id}`,
+    'data-state': mssg.state
+  }, () => label)
 }
 
 function boundLabel(p: AvailableProfile): string {
@@ -555,7 +583,13 @@ async function runDelete() {
     const err = e as FetchError<Partial<ProviderErrorBody>>
     const status = err.response?.status ?? err.statusCode
     deleteConfirmOpen.value = false
-    toast.add({ title: 'Could not delete', description: err.data?.error ?? err.message, color: status === 409 ? 'warning' : 'error' })
+    // FEAT-099 (contract v2) — a profile bound to a mssg account: say what to do instead of the API's English text
+    const mssgBound = status === 409 && (err.data as { reason?: string } | undefined)?.reason === 'mssgBound'
+    toast.add({
+      title: 'Could not delete',
+      description: mssgBound ? MSSG_PROFILE_BOUND_TEXT : (err.data?.error ?? err.message),
+      color: status === 409 ? 'warning' : 'error'
+    })
     // 409 = a precondition we could not see (lock / pending job / a bind that just happened) → show the real state
     if (status === 409) void refresh()
   } finally {
@@ -782,6 +816,8 @@ const columns: TableColumn<AvailableProfile>[] = [
       ]
       const runState = runStateBadge(p)
       if (runState) children.push(runState)
+      const mssg = mssgBadge(p)
+      if (mssg) children.push(mssg)
       return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
     }
   },
