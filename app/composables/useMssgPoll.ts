@@ -1,7 +1,8 @@
 /**
  * FEAT-099 (spec "UI behaviour → Polling", AC-30) — the job follow-up of `/mssg-pages`.
  *
- * `GET /mssg-accounts/:id` every 2 s while that account's `job.status` is `pending|waiting|active`. Same shape as the
+ * `GET /mssg-accounts/:id` every 2 s while that account's `job.status` is `pending|waiting|active`, and (contract v2)
+ * while its status is `disconnecting`, whose end is the 404 of the deleted account (`onGone`). Same shape as the
  * FEAT-098 unlink loops of `tiktok-accounts.vue`: **one loop per account** (a second `follow()` of the same id is a
  * no-op), never two requests of one loop at a time (`retry: 0` is the caller's), stopped on a terminal job, on a 404
  * (account gone), on `stop()` / `stopAll()` and when the owning scope is disposed (leaving the page). Like
@@ -21,9 +22,9 @@ export interface MssgPollHandlers {
   read: (id: string) => Promise<MssgAccountView>
   /** every answer, open or terminal */
   onUpdate: (view: MssgAccountView) => void
-  /** the answer that ended the loop (terminal job, or no job at all) */
+  /** the answer that ended the loop (terminal job and not `disconnecting`, or no job at all) */
   onEnd?: (view: MssgAccountView) => void
-  /** 404: the account no longer exists (unlinked elsewhere) */
+  /** 404: the account no longer exists — v2: the normal end of an unlink (`disconnecting`), else unlinked elsewhere */
   onGone?: (id: string) => void
   /** the 15 min deadline passed */
   onTimeout?: (id: string) => void
@@ -66,7 +67,7 @@ export function useMssgPoll(handlers: MssgPollHandlers) {
       const view = await handlers.read(id)
       if (loops.get(id) !== loop) return // stopped meanwhile (page left, area switched, unlinked)
       handlers.onUpdate(view)
-      if (!mssgJobIsOpen(view.job)) {
+      if (!mssgNeedsPoll(view)) {
         stop(id)
         handlers.onEnd?.(view)
       }

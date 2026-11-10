@@ -125,7 +125,8 @@ watch(open, () => reset())
 const title = computed(() => (mode.value === 'relogin' ? 'เข้าสู่ระบบ mssg ใหม่' : 'เชื่อมบัญชี mssg'))
 const description = computed(() => {
   if (mode.value === 'relogin' && props.account) return `${mssgAccountName(props.account)} · ใช้โปรไฟล์เบราว์เซอร์เดิมของบัญชีนี้`
-  return 'ระบบจะสร้างโปรไฟล์เบราว์เซอร์ใหม่สำหรับบัญชีนี้ แล้วเข้าสู่ระบบ next.mssg.me ให้'
+  // contract v2: a free mssg profile of the area is reused, else a new dedicated one is created
+  return 'ระบบจะใช้โปรไฟล์เบราว์เซอร์ mssg ที่ว่างของพื้นที่นี้ หรือสร้างใหม่ถ้าไม่มี แล้วเข้าสู่ระบบ next.mssg.me ให้'
 })
 
 // ── follow the ordered job through the page's view ──────────────────────────────────────────────────────────────────

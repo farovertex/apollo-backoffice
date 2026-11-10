@@ -6,6 +6,8 @@
  * Controls (refresh / เข้าสู่ระบบใหม่ / rename / ยกเลิกการเชื่อม) only emit — the page makes every request. The four
  * future buttons are rendered **disabled** with a "เร็ว ๆ นี้" hint and have no handler, so they can never send a
  * request. `readonly` (the GOD overview) renders no control at all, not even the disabled ones.
+ * v2: while `disconnecting` (unlink requested, logout job not finished) the card shows "กำลังออกจากระบบ…" and every
+ * control is disabled; the page removes it when the account answers 404.
  * Test ids inside the card are fixed (`mp-status`, `mp-plan`, …) — QA scopes them by `mp-card-<id>`.
  */
 import type { MssgAccountView } from '#shared/types/mssg-accounts'
@@ -31,11 +33,17 @@ const emit = defineEmits<{
 }>()
 
 const a = computed(() => props.account)
-const busy = computed(() => mssgJobIsOpen(a.value.job))
+const busy = computed(() => mssgNeedsPoll(a.value))
+const disconnecting = computed(() => a.value.status === 'disconnecting')
+const unlinkBlocked = computed(() => disconnecting.value || a.value.job?.status === 'active')
+const progressLabel = computed(() => {
+  if (disconnecting.value || a.value.job?.type === 'mssgLogout') return 'กำลังออกจากระบบ…'
+  return `${a.value.job?.type === 'mssgSync' ? 'กำลังดึง' : 'กำลังเข้าสู่ระบบ'} · ${mssgJobProgressText(a.value.job)}`
+})
 const canRelogin = computed(() => a.value.status === 'expired' || a.value.status === 'error')
 const refreshDisabled = computed(() => a.value.status !== 'connected' || busy.value || props.requesting || props.pageSyncing)
 const refreshHint = computed(() => {
-  if (busy.value) return mssgJobProgressText(a.value.job)
+  if (busy.value) return disconnecting.value ? 'กำลังออกจากระบบ…' : mssgJobProgressText(a.value.job)
   if (a.value.status !== 'connected') return 'ดึงใหม่ได้เมื่อบัญชีเชื่อมแล้วเท่านั้น'
   return 'ดึงใหม่เฉพาะบัญชีนี้'
 })
@@ -50,6 +58,7 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
     :data-job-status="a.job?.status ?? ''"
     :data-job-type="a.job?.type ?? ''"
     :data-busy="busy ? 'true' : 'false'"
+    :aria-busy="disconnecting ? 'true' : undefined"
     class="flex min-w-0 flex-col overflow-hidden rounded-lg border border-default bg-elevated/40"
   >
     <div class="flex flex-wrap items-center gap-2 border-b border-default px-3 py-2">
@@ -103,6 +112,7 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
           size="sm"
           aria-label="ตั้งชื่อเรียกบัญชี"
           title="ตั้งชื่อเรียกบัญชี"
+          :disabled="disconnecting"
           data-testid="mp-rename"
           @click="emit('rename')"
         />
@@ -111,8 +121,8 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
           color="error"
           variant="outline"
           size="sm"
-          :disabled="a.job?.status === 'active'"
-          :title="a.job?.status === 'active' ? 'รอให้งานที่กำลังทำเสร็จก่อน' : undefined"
+          :disabled="unlinkBlocked"
+          :title="unlinkBlocked ? (disconnecting ? 'กำลังออกจากระบบ…' : 'รอให้งานที่กำลังทำเสร็จก่อน') : undefined"
           data-testid="mp-unlink"
           @click="emit('unlink')"
         />
@@ -127,7 +137,7 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
       :data-step="a.job?.step ?? ''"
     >
       <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin" />
-      <span class="min-w-0 break-words">{{ a.job?.type === 'mssgSync' ? 'กำลังดึง' : 'กำลังเข้าสู่ระบบ' }} · {{ mssgJobProgressText(a.job) }}</span>
+      <span class="min-w-0 break-words">{{ progressLabel }}</span>
     </div>
 
     <div

@@ -1,14 +1,16 @@
 /**
- * FEAT-099 — mssg Pages (`/mssg-pages`). Mirrors api-contract.md v1 of the feature: `MssgAccountView`, the list,
+ * FEAT-099 — mssg Pages (`/mssg-pages`). Mirrors api-contract.md v1 + v2 of the feature: `MssgAccountView`, the list,
  * the GOD-only overview, the request bodies and the 409 reasons. The view never carries a password, cookie or token,
  * and none of the bodies below is ever kept after its request (the password lives only in the modal's form field).
  */
 
-export type MssgAccountStatus = 'connecting' | 'connected' | 'expired' | 'error'
+/** v2: `disconnecting` = unlink requested, the `mssgLogout` job has not finished (ends with the account deleted → 404) */
+export type MssgAccountStatus = 'connecting' | 'connected' | 'expired' | 'error' | 'disconnecting'
 
 export type MssgSiteStatus = 'published' | 'unpublished' | 'unknown'
 
-export type MssgJobType = 'mssgConnect' | 'mssgSync'
+/** v2: `mssgLogout` is created by `DELETE /mssg-accounts/:id` only */
+export type MssgJobType = 'mssgConnect' | 'mssgSync' | 'mssgLogout'
 
 export type MssgJobStatus = 'pending' | 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
 
@@ -38,7 +40,7 @@ export interface MssgJobView {
   id: string
   type: MssgJobType
   status: MssgJobStatus
-  /** free short display string: `queued` · `openingProfile` · `loggingIn` · `readingPlan` · `readingSites` · `done` */
+  /** free short display string: `queued` · `openingProfile` · `loggingIn` · `readingPlan` · `readingSites` · `loggingOut` (v2) · `done` */
   step: string | null
   queuedAt: string
   /** null until terminal */
@@ -115,6 +117,11 @@ export interface MssgConnectBody {
 /** `POST /mssg-accounts/:id/relogin` — the password only (spec A4: the email never changes) */
 export interface MssgReloginBody {
   password: string
+}
+
+/** v2 — `DELETE /mssg-accounts/:id` 200, only when the account had no bound profile (deleted at once) */
+export interface MssgUnlinkedBody {
+  ok: true
 }
 
 /** `PATCH /mssg-accounts/:id` — strict: no other key */

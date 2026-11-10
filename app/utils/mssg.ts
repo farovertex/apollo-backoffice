@@ -53,7 +53,7 @@ export function mssgErrorText(code: string | null | undefined): string {
 /** 409 `reason` → Thai */
 export const MSSG_CONFLICT_TEXT: Record<MssgConflictReason, string> = {
   emailAlreadyLinked: 'อีเมลนี้เชื่อมกับระบบอยู่แล้ว',
-  jobInProgress: 'บัญชีนี้มีงานกำลังทำอยู่ รอให้เสร็จก่อน',
+  jobInProgress: 'บัญชีนี้ยังมีงานกำลังทำอยู่ รอให้งานเสร็จก่อนแล้วลองใหม่',
   notConnected: 'บัญชีนี้ยังไม่ได้เชื่อม ให้เข้าสู่ระบบใหม่ก่อน'
 }
 
@@ -61,14 +61,16 @@ export const MSSG_STATUS_TEXT: Record<MssgAccountStatus, string> = {
   connecting: 'กำลังเชื่อม',
   connected: 'เชื่อมแล้ว',
   expired: 'หมดอายุ · ต้องเข้าสู่ระบบใหม่',
-  error: 'เชื่อมไม่สำเร็จ'
+  error: 'เชื่อมไม่สำเร็จ',
+  disconnecting: 'กำลังออกจากระบบ…'
 }
 
-export const MSSG_STATUS_COLOR: Record<MssgAccountStatus, 'info' | 'success' | 'warning' | 'error'> = {
+export const MSSG_STATUS_COLOR: Record<MssgAccountStatus, 'info' | 'success' | 'warning' | 'error' | 'neutral'> = {
   connecting: 'info',
   connected: 'success',
   expired: 'warning',
-  error: 'error'
+  error: 'error',
+  disconnecting: 'neutral'
 }
 
 export function mssgStatusText(status: string): string {
@@ -76,7 +78,7 @@ export function mssgStatusText(status: string): string {
 }
 
 export function mssgStatusColor(status: string): 'info' | 'success' | 'warning' | 'error' | 'neutral' {
-  return (MSSG_STATUS_COLOR as Record<string, 'info' | 'success' | 'warning' | 'error'>)[status] ?? 'neutral'
+  return (MSSG_STATUS_COLOR as Record<string, 'info' | 'success' | 'warning' | 'error' | 'neutral'>)[status] ?? 'neutral'
 }
 
 export const MSSG_SITE_STATUS_TEXT: Record<MssgSiteStatus, string> = {
@@ -96,6 +98,7 @@ export const MSSG_STEP_TEXT: Record<string, string> = {
   loggingIn: 'กำลังเข้าสู่ระบบ mssg',
   readingPlan: 'กำลังอ่านแพ็กเกจและโควตา',
   readingSites: 'กำลังอ่านรายการเว็บ',
+  loggingOut: 'กำลังออกจากระบบ mssg ในโปรไฟล์',
   done: 'เสร็จแล้ว'
 }
 
@@ -104,13 +107,24 @@ export function mssgJobIsOpen(job: Pick<MssgJobView, 'status'> | null | undefine
   return s === 'pending' || s === 'waiting' || s === 'active'
 }
 
-export function mssgAccountBusy(account: Pick<MssgAccountView, 'job'>): boolean {
-  return mssgJobIsOpen(account.job)
+/**
+ * v2 — does the page still follow this account? While its job is open, and while it is `disconnecting` even if the
+ * logout job already reads terminal: the unlink is complete only when `GET /mssg-accounts/:id` answers 404.
+ */
+export function mssgNeedsPoll(account: Pick<MssgAccountView, 'job' | 'status'>): boolean {
+  return mssgJobIsOpen(account.job) || account.status === 'disconnecting'
 }
+
+/** v2 — unlink 409 `jobInProgress`: a job of the account is running (or it is already logging out) */
+export const MSSG_UNLINK_BUSY_TEXT = 'ยกเลิกการเชื่อมตอนนี้ไม่ได้ เพราะยังมีงานของบัญชีนี้ทำอยู่ รอให้งานเสร็จก่อนแล้วลองใหม่'
+
+/** v2 — `DELETE /browser-profiles/:id` 409 `mssgBound` on the Browser profiles page */
+export const MSSG_PROFILE_BOUND_TEXT = 'profile นี้ผูกกับบัญชี mssg อยู่ ให้ยกเลิกการเชื่อมก่อน'
 
 /** one line of progress for an open job: queue state first, then the worker's step */
 export function mssgJobProgressText(job: MssgJobView | null | undefined): string {
   if (!job) return MSSG_STEP_TEXT.queued!
+  if (job.type === 'mssgLogout' && job.status !== 'active') return job.status === 'pending' ? 'รอคิวออกจากระบบ' : 'กำลังออกจากระบบ…'
   if (job.status === 'pending') return 'รอคิว'
   if (job.status === 'waiting') return 'กำลังจะเริ่ม'
   if (job.step && MSSG_STEP_TEXT[job.step]) return MSSG_STEP_TEXT[job.step]!

@@ -16,6 +16,11 @@
  *
  * **Polling** (`useMssgPoll`): one 2 s loop of `GET /mssg-accounts/:id` per account whose job is open, stopped on a
  * terminal job, on an area switch, on leaving the page, or after 15 min with "ยังไม่เสร็จ ลองรีเฟรช".
+ *
+ * **Unlink (contract v2)**: `DELETE` answers 202 with the account `disconnecting` (a `mssgLogout` job logs out of
+ * mssg inside the profile) — the card shows "กำลังออกจากระบบ…" with its controls disabled and is polled like any job;
+ * the 404 of `GET /mssg-accounts/:id` that follows is the success: the card goes and a success toast shows. A 200
+ * `{ ok: true }` (no profile was bound) removes the card at once.
  */
 import type {
   MssgAccountsResponse,
@@ -187,7 +192,14 @@ const poll = useMssgPoll({
   onGone: (id) => {
     const acc = accounts.value.find(a => a.id === id)
     removeAccount(id)
-    if (acc) toast.add({ title: 'บัญชีนี้ถูกยกเลิกการเชื่อมไปแล้ว', description: mssgAccountName(acc), color: 'info' })
+    if (!acc) return
+    if (acc.status === 'disconnecting') {
+      // v2: the logout job ended and the account was deleted — this 404 is the unlink's success
+      toast.add({ title: 'ยกเลิกการเชื่อมแล้ว', description: `${mssgAccountName(acc)} · ออกจากระบบ mssg และปลดโปรไฟล์แล้ว`, color: 'success' })
+      if (isGod.value) void loadOverview()
+    } else {
+      toast.add({ title: 'บัญชีนี้ถูกยกเลิกการเชื่อมไปแล้ว', description: mssgAccountName(acc), color: 'info' })
+    }
   },
   onTimeout: (id) => {
     const acc = accounts.value.find(a => a.id === id)
@@ -195,7 +207,7 @@ const poll = useMssgPoll({
   }
 })
 
-const openIds = computed(() => accounts.value.filter(a => mssgJobIsOpen(a.job)).map(a => a.id))
+const openIds = computed(() => accounts.value.filter(a => mssgNeedsPoll(a)).map(a => a.id))
 watch(openIds, ids => poll.track(ids))
 
 /** a job ended while the page followed it — the modal tells its own story, everything else gets a toast */
@@ -287,7 +299,7 @@ async function syncOne(acc: MssgAccountView) {
   }
 }
 
-/** spec AC-17 — one `POST …/sync` per `connected` account of the shown area, none for any other status */
+/** spec AC-17 — one `POST …/sync` per `connected` account of the shown area, none for any other status (v2: so never a `disconnecting` one) */
 async function syncAll() {
   if (anyJobOpen.value || isAll.value) return
   const targets = connectedAccounts.value
@@ -350,6 +362,10 @@ function openUnlink(acc: MssgAccountView) {
 function onUnlinked(id: string) {
   removeAccount(id)
   if (isGod.value) void loadOverview()
+}
+/** v2 — 202 of the unlink: the card turns `disconnecting` and `openIds` starts its poll, which ends on the 404 */
+function onDisconnecting(view: MssgAccountView) {
+  upsert(view)
 }
 
 // ── page state ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -490,7 +506,7 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
             variant="subtle"
             icon="i-lucide-triangle-alert"
             :title="MSSG_LOAD_FALLBACK"
-            :description="listError ?? undefined"
+            :description="listError && listError !== MSSG_LOAD_FALLBACK ? listError : undefined"
             data-testid="mp-error"
           >
             <template #actions>
@@ -596,7 +612,7 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
             variant="subtle"
             icon="i-lucide-triangle-alert"
             title="โหลดภาพรวมทุกผู้ใช้ไม่สำเร็จ"
-            :description="overviewError ?? undefined"
+            :description="overviewError && overviewError !== 'โหลดภาพรวมทุกผู้ใช้ไม่สำเร็จ' ? overviewError : undefined"
             data-testid="mp-error"
           >
             <template #actions>
@@ -691,6 +707,7 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
         v-model:open="unlinkOpen"
         :account="unlinkAccount"
         @unlinked="onUnlinked"
+        @disconnecting="onDisconnecting"
       />
     </template>
   </UDashboardPanel>
