@@ -75,7 +75,7 @@ async function onConfirm() {
     :description="account ? mssgAccountName(account) : ''"
     :dismissible="!deleting"
     :close="!deleting"
-    :ui="{ content: 'max-w-md' }"
+    :ui="{ content: 'max-w-md', header: 'min-w-0', wrapper: 'min-w-0', title: 'wrap-anywhere', description: 'wrap-anywhere' }"
     :content="modalContent"
   >
     <template #body>

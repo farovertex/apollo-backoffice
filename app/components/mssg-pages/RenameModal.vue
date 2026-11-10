@@ -77,7 +77,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     title="ตั้งชื่อเรียกบัญชี"
     :description="account?.email ?? ''"
     :dismissible="!saving"
-    :ui="{ content: 'max-w-md' }"
+    :ui="{ content: 'max-w-md', header: 'min-w-0', wrapper: 'min-w-0', title: 'wrap-anywhere', description: 'wrap-anywhere' }"
     :content="modalContent"
   >
     <template #body>

@@ -264,7 +264,7 @@ const summary = computed(() => props.account)
     :description="description"
     :dismissible="!requesting && !saving"
     :close="!requesting && !saving"
-    :ui="{ content: 'max-w-md' }"
+    :ui="{ content: 'max-w-md', header: 'min-w-0', wrapper: 'min-w-0', title: 'wrap-anywhere', description: 'wrap-anywhere' }"
     :content="modalContent"
   >
     <template #body>
