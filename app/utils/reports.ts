@@ -205,6 +205,14 @@ export function monitorRowSelectable(
   return row.deletable?.ok === true
 }
 
+/**
+ * Auto-appeal button — only an ad TikTok took offline after review qualifies: raw primary `not_delivery` and raw
+ * detail `creative_offline_audit` (shown to the operator as "Not delivering · ปัญหาในการตรวจสอบ").
+ */
+export function monitorRowAutoAppealEligible(row: Pick<MonitorRow, 'status'>): boolean {
+  return row.status.primary === 'not_delivery' && row.status.detail === 'creative_offline_audit'
+}
+
 /** Freshness of a row's last fetch: `ok` · `late` (older than 2 intervals) · `error` (the advertiser has one). */
 export function updatedLevel(
   lastFetchAt: string | null | undefined,
