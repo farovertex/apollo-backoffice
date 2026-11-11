@@ -3,6 +3,12 @@
  * FEAT-090 — "เปลี่ยนเจ้าของ" modal of `/settings/utm-keys` (`st-uk-modal`; api-contract v1 §3 / §7,
  * spec "UI behaviour" §3).
  *
+ * FEAT-099 — the submit is a **handover**: it appends an entry to the key's ownership timeline, effective today
+ * (the key has no fact for today yet) or tomorrow (it has), so the money up to that day stays with the current
+ * holder. The read-only timeline `st-uk-modal-timeline` (newest first) lists who owned the key and for which days;
+ * the effective day (`st-uk-modal-effective`) is the API's `nextHandoverFrom` (v1.1), rendered as is and never
+ * recomputed; the response's `owners[]` is what the modal shows afterwards.
+ *
  * GOD only (the page itself is). It shows the key read-only (prefix / source / medium / campaign) with its
  * current owner and sends exactly one `PATCH /utm-keys/:id { ownerAdminId }` per submit (`retry: 0`). Success →
  * `moved` (the page re-reads the list) + toast `ย้ายเจ้าของแล้ว`; any 404 / 400 renders verbatim in
@@ -30,7 +36,7 @@ const open = defineModel<boolean>('open', { default: false })
 const api = useApi()
 const toast = useToast()
 
-const FALLBACK = 'ย้ายเจ้าของไม่สำเร็จ'
+const FALLBACK = 'ส่งต่อเจ้าของไม่สำเร็จ'
 
 const modalContent = { 'data-testid': 'st-uk-modal' } as ModalProps['content']
 
@@ -44,6 +50,9 @@ const items = computed(() => {
   if (!current || props.admins.some(a => a.value === current.id)) return props.admins
   return [...props.admins, { value: current.id, label: current.displayName }]
 })
+
+const timeline = computed(() => timelineRows(props.utmKey))
+const effectiveDay = computed(() => props.utmKey?.nextHandoverFrom ?? '')
 
 const currentOwnerText = computed(() => props.utmKey?.owner?.displayName ?? REPORT_DASH)
 
@@ -66,7 +75,7 @@ async function submit() {
     // retry: 0 — exactly one PATCH per click
     const moved = await api<UtmKeyView>(`/utm-keys/${encodeURIComponent(row.id)}`, { method: 'PATCH', body, retry: 0 })
     open.value = false
-    toast.add({ title: 'ย้ายเจ้าของแล้ว', icon: 'i-lucide-check', color: 'success' })
+    toast.add({ title: 'ส่งต่อเจ้าของแล้ว', icon: 'i-lucide-check', color: 'success' })
     emit('moved', moved)
   } catch (e) {
     const err = e as FetchError<Partial<ApiErrorBody>>
@@ -88,8 +97,8 @@ const LINES: { label: string, key: 'prefix' | 'source' | 'medium' | 'campaign' }
 <template>
   <UModal
     v-model:open="open"
-    title="เปลี่ยนเจ้าของ UTM key"
-    description="รายงานของทุกหน้าคิดยอดสมัคร/ฝากของ key นี้ให้เจ้าของใหม่ทันที · template ที่ผูก key นี้ไม่ถูกแก้"
+    title="ส่งต่อเจ้าของ UTM key"
+    description="เจ้าของใหม่รับยอดของ key นี้ตั้งแต่วันที่มีผล · ยอดของวันก่อนหน้าอยู่กับเจ้าของเดิม · template ที่ผูก key นี้ไม่ถูกแก้"
     :dismissible="!submitting"
     :ui="{ content: 'max-w-md' }"
     :content="modalContent"
@@ -106,14 +115,32 @@ const LINES: { label: string, key: 'prefix' | 'source' | 'medium' | 'campaign' }
             </dd>
           </template>
           <dt class="text-muted">
-            เจ้าของ
+            ผู้ถือ key
           </dt>
           <dd class="break-words text-highlighted" data-testid="st-uk-modal-owner">
             {{ currentOwnerText }}
           </dd>
         </dl>
 
-        <UFormField label="เจ้าของใหม่" name="ownerAdminId">
+        <div class="flex flex-col gap-1" data-testid="st-uk-modal-timeline">
+          <p class="text-xs font-medium text-muted">
+            ประวัติเจ้าของ (ใหม่สุดก่อน)
+          </p>
+          <ul class="flex flex-col divide-y divide-default rounded-md border border-default text-sm">
+            <li
+              v-for="(r, i) in timeline"
+              :key="`${r.from}-${i}`"
+              class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-3 py-1.5"
+              data-testid="st-uk-modal-timeline-row"
+              :data-from="r.from"
+            >
+              <span class="min-w-0 break-words" :class="r.deleted ? 'text-muted italic' : 'text-highlighted'">{{ r.name }}</span>
+              <span class="tabular-nums text-muted">{{ r.from }} → {{ r.to ?? 'ถึงปัจจุบัน' }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <UFormField label="ส่งต่อให้" name="ownerAdminId">
           <USelect
             v-model="ownerId"
             :items="items"
@@ -128,6 +155,11 @@ const LINES: { label: string, key: 'prefix' | 'source' | 'medium' | 'campaign' }
             <span class="text-error">{{ adminsError }}</span>
           </template>
         </UFormField>
+
+        <p class="text-sm text-muted" data-testid="st-uk-modal-effective-help">
+          มีผลตั้งแต่ <span class="font-medium tabular-nums text-highlighted" data-testid="st-uk-modal-effective">{{ effectiveDay }}</span>
+          · ยอดของวันก่อนหน้านั้นยังเป็นของผู้ถือ key คนปัจจุบัน
+        </p>
 
         <UAlert
           v-if="submitError"
@@ -152,7 +184,7 @@ const LINES: { label: string, key: 'prefix' | 'source' | 'medium' | 'campaign' }
             @click="open = false"
           />
           <UButton
-            label="ย้ายเจ้าของ"
+            label="ส่งต่อเจ้าของ"
             icon="i-lucide-user-check"
             color="primary"
             :disabled="!dirty"
