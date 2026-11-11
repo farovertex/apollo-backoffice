@@ -62,6 +62,7 @@ import type { Advertiser, AdvertisersResponse } from '#shared/types/advertisers'
 import type {
   AdsDeleteAccepted,
   AdsMonitorResponse,
+  AppealAccepted,
   BudgetPendingView,
   CampaignBudgetAccepted,
   CampaignBudgetUnchanged,
@@ -528,6 +529,74 @@ function clearSelection() {
 /** the ticked rows that are still on the page (stale keys from a Refresh are ignored) */
 const selectedRows = computed(() => rows.value.filter(row => selected.value.has(rowKey(row))))
 const selectionCount = computed(() => selectedRows.value.length)
+
+/** the auto-appeal button: ad tab, a campaign filter set, and every ticked ad is `not_delivery` + `creative_offline_audit` */
+const canAutoAppeal = computed(() =>
+  tab.value === 'ad'
+  && !!campaignId.value
+  && selectedRows.value.length > 0
+  && selectedRows.value.every(monitorRowAutoAppealEligible)
+)
+
+const autoAppealOpen = ref(false)
+const autoAppealRows = ref<MonitorRow[]>([])
+const autoAppealSending = ref(false)
+
+function onAutoAppeal() {
+  if (!canAutoAppeal.value) return
+  autoAppealRows.value = [...selectedRows.value]
+  autoAppealOpen.value = true
+}
+
+/**
+ * One `POST /ads-monitor/appeal` per ad (the existing FEAT-082 endpoint, one `adAppeal` job each), sent one after
+ * another with `retry: 0` so no ad is ever appealed twice by this press. Then one summary toast, clear, reload.
+ */
+async function confirmAutoAppeal(rowsToAppeal: MonitorRow[]) {
+  if (autoAppealSending.value) return
+  autoAppealSending.value = true
+  let accepted = 0
+  const failed: string[] = []
+  try {
+    for (const row of rowsToAppeal) {
+      const name = row.name || row.id
+      if (!row.adId) {
+        failed.push(`${name}: ไม่พบโฆษณา`)
+        continue
+      }
+      try {
+        await api<AppealAccepted>('/ads-monitor/appeal', {
+          retry: 0,
+          method: 'POST',
+          body: { adId: row.adId, reason: AUTO_APPEAL_REASON, description: AUTO_APPEAL_DESCRIPTION }
+        })
+        accepted++
+      } catch (e) {
+        const err = e as FetchError<Partial<ApiErrorBody & MaybeDuplicateBody>>
+        const message = isDuplicate(err.data)
+          ? duplicateText(err.data?.queuePosition)
+          : err.data?.error ?? err.message ?? 'ยื่นอุทธรณ์ไม่ได้'
+        failed.push(`${name}: ${message}`)
+      }
+    }
+  } finally {
+    autoAppealSending.value = false
+    autoAppealOpen.value = false
+  }
+  if (accepted > 0) {
+    toast.add({ title: `ส่งคำร้องเข้าคิวแล้ว ${accepted} รายการ`, icon: 'i-lucide-circle-check', color: 'success' })
+  }
+  if (failed.length > 0) {
+    toast.add({
+      title: `ยื่นอุทธรณ์ไม่ได้ ${failed.length} รายการ`,
+      description: failed.join('\n'),
+      icon: 'i-lucide-triangle-alert',
+      color: 'error'
+    })
+  }
+  clearSelection()
+  await load()
+}
 
 function onSelectRow(row: MonitorRow, value: boolean) {
   const key = rowKey(row)
@@ -1174,6 +1243,8 @@ const intervalText = computed(() => {
             <AdsMonitorSelectionBar
               v-if="tab !== 'campaign' && selectionCount > 0"
               :count="selectionCount"
+              :can-auto-appeal="canAutoAppeal"
+              @auto-appeal="onAutoAppeal"
               @delete="askDeleteMany(selectedRows)"
               @clear="clearSelection"
             />
@@ -1231,6 +1302,13 @@ const intervalText = computed(() => {
     :rows="deleteRow ? [deleteRow] : []"
     :deleting="deleting"
     @confirm="(rowsToDelete) => rowsToDelete[0] && confirmDelete(rowsToDelete[0])"
+  />
+
+  <AdsMonitorAutoAppealModal
+    v-model:open="autoAppealOpen"
+    :rows="autoAppealRows"
+    :sending="autoAppealSending"
+    @confirm="confirmAutoAppeal"
   />
 
   <!-- FEAT-093 — ad-group / ad tabs: multi-select delete via `POST /ads-monitor/delete` -->

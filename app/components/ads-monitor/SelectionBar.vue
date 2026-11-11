@@ -10,9 +10,13 @@
 const props = defineProps<{
   /** how many rows are ticked on the current page */
   count: number
+  /** show "ยื่นอุทธรณ์อัตโนมัติ" — the page decides (ad tab + campaign filter + every ticked ad eligible) */
+  canAutoAppeal?: boolean
 }>()
 
 const emit = defineEmits<{
+  /** "ยื่นอุทธรณ์อัตโนมัติ" pressed */
+  autoAppeal: []
   /** "ลบที่เลือก" pressed — the page opens the bulk confirm modal */
   delete: []
   /** "ล้าง" pressed — the page clears the selection */
@@ -31,6 +35,16 @@ const countText = computed(() => `เลือก ${props.count} รายกา
       {{ countText }}
     </span>
     <div class="flex flex-wrap items-center gap-2 sm:ms-auto">
+      <UButton
+        v-if="canAutoAppeal"
+        label="ยื่นอุทธรณ์อัตโนมัติ"
+        icon="i-lucide-send"
+        color="primary"
+        variant="solid"
+        size="sm"
+        data-testid="am-auto-appeal"
+        @click="emit('autoAppeal')"
+      />
       <UButton
         label="ลบที่เลือก"
         icon="i-lucide-trash-2"
