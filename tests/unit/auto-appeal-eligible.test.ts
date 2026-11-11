@@ -5,21 +5,24 @@ import { describe, expect, it } from 'vitest'
 import type { MonitorRow, MonitorStatus } from '../../shared/types/ads-monitor'
 import { monitorRowAutoAppealEligible } from '../../app/utils/reports'
 
-function row(primary: string, detail: string, key: MonitorStatus['key'] = 'rejected'): Pick<MonitorRow, 'status'> {
+function row(primary: string, detail: string, key: MonitorStatus['key']): Pick<MonitorRow, 'status'> {
   return { status: { key, primary, detail, reasons: [] } }
 }
 
 describe('monitorRowAutoAppealEligible', () => {
   it('accepts not_delivery + creative_offline_audit', () => {
-    expect(monitorRowAutoAppealEligible(row('not_delivery', 'creative_offline_audit'))).toBe(true)
+    expect(monitorRowAutoAppealEligible(row('not_delivery', 'creative_offline_audit', 'rejected'))).toBe(true)
   })
 
-  it('refuses not_delivery with any other detail', () => {
+  it('accepts a rejected ad whose campaign switch is off (real data: disable / campaign_disable)', () => {
+    expect(monitorRowAutoAppealEligible(row('disable', 'campaign_disable', 'rejected'))).toBe(true)
+  })
+
+  it('refuses every non-rejected key', () => {
     expect(monitorRowAutoAppealEligible(row('not_delivery', 'creative_disable', 'notDelivering'))).toBe(false)
-    expect(monitorRowAutoAppealEligible(row('not_delivery', 'ad_offline_audit'))).toBe(false)
-  })
-
-  it('refuses creative_offline_audit under another primary', () => {
-    expect(monitorRowAutoAppealEligible(row('delivery_ok', 'creative_offline_audit', 'delivering'))).toBe(false)
+    expect(monitorRowAutoAppealEligible(row('delivery_ok', 'creative_enable', 'delivering'))).toBe(false)
+    expect(monitorRowAutoAppealEligible(row('disable', 'campaign_disable', 'paused'))).toBe(false)
+    expect(monitorRowAutoAppealEligible(row('not_delivery', 'creative_offline_audit', 'deleted'))).toBe(false)
+    expect(monitorRowAutoAppealEligible(row('not_delivery', 'creative_offline_audit', 'banned'))).toBe(false)
   })
 })
