@@ -63,6 +63,7 @@ import type {
   AdsDeleteAccepted,
   AdsMonitorResponse,
   AppealAccepted,
+  AppealReason,
   BudgetPendingView,
   CampaignBudgetAccepted,
   CampaignBudgetUnchanged,
@@ -530,7 +531,7 @@ function clearSelection() {
 const selectedRows = computed(() => rows.value.filter(row => selected.value.has(rowKey(row))))
 const selectionCount = computed(() => selectedRows.value.length)
 
-/** the auto-appeal button: ad tab, a campaign filter set, and every ticked ad is `not_delivery` + `creative_offline_audit` */
+/** the auto-appeal button: ad tab, a campaign filter set, and every ticked ad is `rejected` (`monitorRowAutoAppealEligible`) */
 const canAutoAppeal = computed(() =>
   tab.value === 'ad'
   && !!campaignId.value
@@ -549,10 +550,11 @@ function onAutoAppeal() {
 }
 
 /**
- * One `POST /ads-monitor/appeal` per ad (the existing FEAT-082 endpoint, one `adAppeal` job each), sent one after
- * another with `retry: 0` so no ad is ever appealed twice by this press. Then one summary toast, clear, reload.
+ * One `POST /ads-monitor/appeal` per ad (the existing FEAT-082 endpoint, one `adAppeal` job each) with the one reason +
+ * description typed into the modal, sent one after another with `retry: 0` so no ad is ever appealed twice by this
+ * press. Then one summary toast, clear, reload.
  */
-async function confirmAutoAppeal(rowsToAppeal: MonitorRow[]) {
+async function confirmAutoAppeal(rowsToAppeal: MonitorRow[], form: { reason: AppealReason, description: string }) {
   if (autoAppealSending.value) return
   autoAppealSending.value = true
   let accepted = 0
@@ -568,7 +570,7 @@ async function confirmAutoAppeal(rowsToAppeal: MonitorRow[]) {
         await api<AppealAccepted>('/ads-monitor/appeal', {
           retry: 0,
           method: 'POST',
-          body: { adId: row.adId, reason: AUTO_APPEAL_REASON, description: AUTO_APPEAL_DESCRIPTION }
+          body: { adId: row.adId, reason: form.reason, description: form.description }
         })
         accepted++
       } catch (e) {
