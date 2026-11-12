@@ -186,6 +186,15 @@ const links = computed(() => [[{
         open.value = false
       }
     }, {
+      // FEAT-100 — mssg Pages, directly after Posts as in the design; same GOD/Admin gate (Payment: no item, the
+      // page's `mssg-pages-access` middleware redirects, the API answers 403)
+      label: 'mssg Pages',
+      icon: 'i-lucide-message-circle',
+      to: '/mssg-pages',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
       // FEAT-094 — admin challenge page, directly after Posts; same role gate (spec "UI behaviour")
       label: 'Challenge',
       icon: 'i-lucide-trophy',
