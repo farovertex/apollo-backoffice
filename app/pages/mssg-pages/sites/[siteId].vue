@@ -189,6 +189,8 @@ const step5Errors = computed(() => draft.fieldErrors.value.filter(e => e.step ==
 const store = computed(() => view.value?.store ?? null)
 /** the products the editor shows: last store read + the draft's product ops (names for labels / the destructive list) */
 const localProducts = computed(() => mssgApplyProductOps(store.value?.products ?? [], draft.ops.value, mssgStoreCurrency(store.value)))
+/** step-3 fields with a place of their own (B3 background; v1.6 preset, auto pair, font) */
+const STEP3_FIELDS = ['theme.page.backgroundColor', 'theme.page.backgroundImage', 'theme.colorId', 'theme.light', 'theme.dark', 'theme.page.font', 'theme.page.font.family', 'theme.page.font.provider']
 const STEP4_FIELDS = ['seo.title', 'seo.description', 'seo.indexing', 'seo.faviconUrl', 'seo.ogImageUrl', 'tracking.tiktok', 'tracking.facebook', 'tracking.google', 'embeddedCode.content', 'embeddedCode.inHead', 'embeddedCode.onLoad']
 const step4Errors = computed(() => {
   const out: Record<string, string> = {}
@@ -202,7 +204,7 @@ const otherStepErrors = computed(() => draft.fieldErrors.value.filter((e) => {
   if (e.step !== step.value) return false
   if (e.step === 1) return !mssgStep1Key(e.path)
   if (e.step === 2) return !placedOnStep2(e)
-  if (e.step === 3) return !(e.target.pageId === selectedPageId.value && ['theme.page.backgroundColor', 'theme.page.backgroundImage'].includes(e.target.field))
+  if (e.step === 3) return !(e.target.pageId === selectedPageId.value && STEP3_FIELDS.includes(e.target.field))
   if (e.step === 4) return !STEP4_FIELDS.includes(e.path)
   if (e.step === 5) return !(e.target.productId && localProducts.value.some(p => p.id === e.target.productId))
   return true

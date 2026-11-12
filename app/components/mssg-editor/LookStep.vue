@@ -3,18 +3,24 @@
  * FEAT-101 M3 — editor step 3 "Page decoration · หน้าตาเว็บ" (AC-27, AC-29; contract §3.2 `page.update` theme, §3.3;
  * design step 3). For the selected page: background colour (picker + hex; "ใช้ตามธีม" = `null`) and background image
  * (the B2 upload control; "ลบรูป" = `null`), each emitted as `page.update { theme: { page: { … } } }` (folded by the
- * draft). "ใช้กับทุกหน้า" emits one `page.update` per page with this page's colour + image. An invalid hex stays in the
- * field with its Thai message and is never sent. Theme presets and fonts are **disabled "เร็ว ๆ นี้"** (scope/out: the
- * preset catalog and the font key were never observed) — no handler, no request.
- * Server messages (draft 400 / apply `mssgValidation`, `pages.<id>.theme.page.<key>`) arrive as `errors` with a target.
+ * draft). An invalid hex stays in the field with its Thai message and is never sent.
+ * v1.6 (B3r, contract §3.4, AC-43, AC-44):
+ * - preset tiles = the 18 `colorId` values with Apollo's own display swatches (K16 hint once under the tiles); choosing
+ *   one sends `page.update { theme: { colorId } }`, `autoTheme` also `light` / `dark` (two selects of the other 17,
+ *   defaults `lightTheme` / `darkTheme`);
+ * - font select: "ค่าเริ่มต้น" (`null`) + the 38 families grouped google / websafe → `theme.page.font { family, provider }`;
+ * - "ใช้กับทุกหน้า" = one `page.update` per page with this page's background colour + image, preset (+ pair) and font.
+ * Server messages (draft 400 / apply `mssgValidation`, `pages.<id>.theme.<key>`) arrive as `errors` with a target.
  *
  * Test ids: `me-sheet-3`, `me-look-page` (page select), `me-look-color` (picker), `me-look-hex` (+ `me-look-hex-error`),
  * `me-look-use-theme`, `me-look-bg-label`, `me-upload-Page.backgroundImage(-input|-pick|-remove|-error)`,
- * `me-look-apply-all`, `me-look-apply-all-done`, `me-look-themes` / `me-look-theme-<n>` / `me-look-fonts` /
- * `me-look-font` (disabled, `data-soon`), `me-look-style` (read-only styleId).
+ * `me-look-apply-all`, `me-look-apply-all-done`, `me-look-themes` (`data-selected` = colorId), `me-look-theme-<colorId>`
+ * (`data-selected`, `data-color-id`), `me-look-auto` / `me-look-auto-light` / `me-look-auto-dark` (native selects),
+ * `me-look-preset-hint`, `me-look-theme-error`, `me-look-fonts`, `me-look-font` (native select, value = family or ""),
+ * `me-look-font-default` (button), `me-look-font-error`, `me-look-style` (read-only styleId).
  */
 import type { MssgFieldError } from '~/utils/mssg-sites'
-import type { MssgOp, MssgPageProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
+import type { MssgOp, MssgPageFont, MssgPageProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
 type PageFields = Extract<MssgOp, { op: 'page.update' }>['fields']
 
@@ -67,6 +73,13 @@ function serverError(key: string): string | null {
 }
 const hexError = computed(() => hexInvalid.value ?? serverError('backgroundColor'))
 const imageError = computed(() => serverError('backgroundImage'))
+function themeServerError(...keys: string[]): string | null {
+  const p = page.value
+  if (!p) return null
+  return props.errors.find(e => e.target.pageId === p.id && keys.includes(e.target.field))?.message ?? null
+}
+const themeError = computed(() => themeServerError('theme.colorId', 'theme.light', 'theme.dark'))
+const fontError = computed(() => themeServerError('theme.page.font', 'theme.page.font.family', 'theme.page.font.provider'))
 
 const pickerValue = computed(() => (MSSG_HEX_RE.test(hex.value) ? hex.value : '#FFFFFF'))
 
@@ -103,13 +116,56 @@ function applyAll() {
   const p = page.value
   if (!p || props.readOnly || hexInvalid.value) return
   const color = MSSG_HEX_RE.test(hex.value) ? hex.value.toUpperCase() : null
+  // v1.6: preset (+ autoTheme pair) and font travel with the background colour + image
+  const theme = mssgApplyAllTheme(p.theme)
+  theme.page = { ...theme.page, backgroundColor: color, backgroundImage: bgImage.value }
   for (const target of pages.value) {
-    emit('pageUpdate', target.id, { theme: { page: { backgroundColor: color, backgroundImage: bgImage.value } } })
+    emit('pageUpdate', target.id, { theme: theme as PageFields['theme'] })
   }
   applied.value = pages.value.length
 }
 
-const soonTiles = [1, 2, 3, 4, 5, 6]
+// ── v1.6 presets ────────────────────────────────────────────────────────────────────────────────────────────────────
+const colorId = computed(() => (typeof page.value?.theme?.colorId === 'string' ? page.value.theme.colorId : ''))
+const isAuto = computed(() => colorId.value === MSSG_AUTO_THEME)
+const autoLight = computed(() => (typeof page.value?.theme?.light === 'string' && MSSG_AUTO_PAIR_IDS.includes(page.value.theme.light) ? page.value.theme.light : MSSG_AUTO_DEFAULT.light))
+const autoDark = computed(() => (typeof page.value?.theme?.dark === 'string' && MSSG_AUTO_PAIR_IDS.includes(page.value.theme.dark) ? page.value.theme.dark : MSSG_AUTO_DEFAULT.dark))
+function choosePreset(id: string) {
+  const p = page.value
+  if (!p || props.readOnly) return
+  if (id === colorId.value && id !== MSSG_AUTO_THEME) return
+  emit('pageUpdate', p.id, { theme: mssgPresetPatch(id, { light: autoLight.value, dark: autoDark.value }) as PageFields['theme'] })
+}
+function setPair(which: 'light' | 'dark', id: string) {
+  const p = page.value
+  if (!p || props.readOnly || !MSSG_AUTO_PAIR_IDS.includes(id)) return
+  const pair = { light: autoLight.value, dark: autoDark.value, [which]: id }
+  emit('pageUpdate', p.id, { theme: mssgPresetPatch(MSSG_AUTO_THEME, pair) as PageFields['theme'] })
+}
+function presetName(id: string): string {
+  const d = mssgPreset(id)
+  return d ? `${d.th} (${d.en})` : id
+}
+
+// ── v1.6 fonts ──────────────────────────────────────────────────────────────────────────────────────────────────────
+const font = computed<MssgPageFont | null>(() => {
+  const f = page.value?.theme?.page?.font
+  return mssgFontValid(f) ? f as MssgPageFont : null
+})
+/** a font read from mssg that is not in the contract's list: shown, kept until the user picks another */
+const unknownFont = computed(() => {
+  const f = page.value?.theme?.page?.font as { family?: unknown } | null | undefined
+  return f && !mssgFontValid(f) && typeof f.family === 'string' ? f.family : null
+})
+function setFont(family: string) {
+  const p = page.value
+  if (!p || props.readOnly) return
+  const next = family ? mssgFontByFamily(family) : null
+  if (family && !next) return
+  emit('pageUpdate', p.id, { theme: { page: { font: next ? { ...next } : null } } })
+}
+const selectClass = 'w-full rounded-md border-0 bg-default px-2.5 py-1.5 text-sm text-highlighted ring ring-inset ring-accented focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-75'
+
 const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ? page.value.theme.styleId : ''))
 </script>
 
@@ -132,28 +188,71 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
         />
       </UFormField>
 
-      <section class="flex flex-col gap-2.5" data-testid="me-look-themes" data-soon="true">
+      <section class="flex min-w-0 flex-col gap-2.5" data-testid="me-look-themes" :data-selected="colorId">
         <div class="flex flex-wrap items-baseline justify-between gap-2">
           <span class="text-sm text-default">{{ MSSG_STEP3_TEXT.themes }}</span>
-          <span class="text-[11px] text-dimmed">{{ MSSG_SOON }}</span>
+          <span class="text-[11px] text-dimmed">{{ colorId ? `ใช้อยู่: ${presetName(colorId)}` : 'ยังไม่ได้เลือกธีม' }}</span>
         </div>
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2.5">
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2" role="radiogroup" aria-label="ธีม">
           <button
-            v-for="n in soonTiles"
-            :key="n"
+            v-for="t in MSSG_PRESETS"
+            :key="t.id"
             type="button"
-            disabled
-            :title="MSSG_SOON"
-            class="flex cursor-not-allowed flex-col gap-1.5 rounded-lg border border-default bg-elevated/40 p-1.5 pb-2 text-center opacity-60"
-            :data-testid="`me-look-theme-${n}`"
+            role="radio"
+            :aria-checked="colorId === t.id"
+            :disabled="readOnly"
+            :title="`${t.en} · ${t.id}`"
+            class="flex min-w-0 flex-col gap-1.5 rounded-lg border p-1.5 pb-2 text-center hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-60"
+            :class="colorId === t.id ? 'border-primary ring-2 ring-primary/30' : 'border-default bg-elevated/40'"
+            :data-testid="`me-look-theme-${t.id}`"
+            :data-color-id="t.id"
+            :data-selected="colorId === t.id ? 'true' : 'false'"
+            @click="choosePreset(t.id)"
           >
-            <span aria-hidden="true" class="flex h-14 items-center justify-center rounded-md bg-accented/60">
-              <UIcon name="i-lucide-lock" class="size-4 text-dimmed" />
+            <span
+              aria-hidden="true"
+              class="relative flex h-12 items-center justify-center overflow-hidden rounded-md border border-black/5 text-sm font-semibold"
+              :style="t.id === MSSG_AUTO_THEME
+                ? { background: `linear-gradient(135deg, ${mssgPreset(autoLight)?.bg} 50%, ${mssgPreset(autoDark)?.bg} 50%)`, color: mssgPreset(autoLight)?.fg }
+                : { background: t.bg, color: t.fg }"
+            >
+              Aa
+              <span class="absolute inset-x-2 bottom-1.5 h-1 rounded-full" :style="{ background: t.accent }" />
             </span>
-            <span class="text-xs text-muted">ธีม {{ n }}</span>
+            <span class="truncate text-xs text-default">{{ t.th }}</span>
           </button>
         </div>
-        <span v-if="styleId" class="text-xs break-all text-muted" data-testid="me-look-style">เลือกอยู่ใน mssg: {{ styleId }}</span>
+        <div v-if="isAuto" class="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="me-look-auto">
+          <label class="flex min-w-0 flex-col gap-1 text-sm text-default">
+            ตอนสว่าง (Light)
+            <select
+              :value="autoLight"
+              :disabled="readOnly"
+              :class="selectClass"
+              data-testid="me-look-auto-light"
+              @change="setPair('light', ($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="id in MSSG_AUTO_PAIR_IDS" :key="id" :value="id">{{ presetName(id) }}</option>
+            </select>
+          </label>
+          <label class="flex min-w-0 flex-col gap-1 text-sm text-default">
+            ตอนมืด (Dark)
+            <select
+              :value="autoDark"
+              :disabled="readOnly"
+              :class="selectClass"
+              data-testid="me-look-auto-dark"
+              @change="setPair('dark', ($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="id in MSSG_AUTO_PAIR_IDS" :key="id" :value="id">{{ presetName(id) }}</option>
+            </select>
+          </label>
+        </div>
+        <span v-if="themeError" class="text-xs text-error" data-testid="me-look-theme-error">{{ themeError }}</span>
+        <p class="text-xs text-muted" data-testid="me-look-preset-hint">
+          {{ MSSG_STEP3_TEXT.presetHint }}
+        </p>
+        <span v-if="styleId" class="text-xs break-all text-muted" data-testid="me-look-style">รูปแบบใน mssg: {{ styleId }}</span>
       </section>
 
       <div class="grid grid-cols-1 gap-5 sm:grid-cols-2">
@@ -216,20 +315,48 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
         </div>
       </div>
 
-      <div class="flex min-w-0 flex-col gap-2" data-testid="me-look-fonts" data-soon="true">
-        <span class="flex flex-wrap items-baseline justify-between gap-2 text-sm text-default">
-          {{ MSSG_STEP3_TEXT.fonts }}
-          <span class="text-[11px] text-dimmed">{{ MSSG_SOON }}</span>
-        </span>
-        <USelect
-          :model-value="undefined"
-          :items="[]"
-          placeholder="เลือกฟอนต์"
-          disabled
-          class="w-full sm:max-w-80"
-          :title="MSSG_SOON"
-          data-testid="me-look-font"
-        />
+      <div class="flex min-w-0 flex-col gap-1.5" data-testid="me-look-fonts">
+        <label for="me-look-font" class="text-sm text-default">{{ MSSG_STEP3_TEXT.fonts }}</label>
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <select
+            id="me-look-font"
+            :value="font?.family ?? ''"
+            :disabled="readOnly"
+            :class="[selectClass, 'sm:max-w-80']"
+            :style="font ? { fontFamily: mssgFontCss(font) ?? undefined } : undefined"
+            data-testid="me-look-font"
+            :data-value="font?.family ?? ''"
+            @change="setFont(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">
+              ค่าเริ่มต้น (Default)
+            </option>
+            <option v-if="unknownFont" :value="unknownFont" disabled>
+              {{ unknownFont }} (ตั้งไว้บน mssg)
+            </option>
+            <optgroup label="Google fonts">
+              <option v-for="f in MSSG_GOOGLE_FONTS" :key="f" :value="f">
+                {{ f }}
+              </option>
+            </optgroup>
+            <optgroup label="Web safe">
+              <option v-for="f in MSSG_WEBSAFE_FONTS" :key="f" :value="f">
+                {{ f }}
+              </option>
+            </optgroup>
+          </select>
+          <UButton
+            label="ใช้ฟอนต์ค่าเริ่มต้น"
+            color="primary"
+            variant="link"
+            size="xs"
+            :disabled="readOnly || (!font && !unknownFont)"
+            data-testid="me-look-font-default"
+            @click="setFont('')"
+          />
+        </div>
+        <span class="text-xs text-muted">ตัวอย่างใช้ฟอนต์นี้เมื่อเครื่องนี้มีฟอนต์ · หน้าเว็บจริงโหลดฟอนต์จาก mssg</span>
+        <span v-if="fontError" class="text-xs text-error" data-testid="me-look-font-error">{{ fontError }}</span>
       </div>
 
       <div class="flex flex-col gap-1.5 border-t border-default pt-4">

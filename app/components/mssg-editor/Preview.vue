@@ -8,9 +8,11 @@
  * text (never `v-html`). Approximate, not pixel-exact.
  * Test ids: `me-preview` (`data-page-id`, `data-blocks` = shown blocks), `me-preview-name`, `me-preview-url`,
  * `me-preview-page`, `me-preview-block` (`data-kind`, `data-block-id`), `me-preview-empty`, `me-preview-screen` (M3: `data-bg` = background colour, `data-bg-image`).
- * v1.6 (B2r): Hat `title / subtitle / logoUrl / bgUrl`, Features icon names, every action type of §3.4; a block's
+ * v1.6 (B2r / B3r): Hat `title / subtitle / logoUrl / bgUrl`, Features icon names, every action type of §3.4; a block's
  * style override (colours, radius, border, width, mode — approximate) with `data-style-mode` / `data-styled` on
- * `me-preview-block`; the menu bar `me-preview-menu` (shown items, when the menu is on).
+ * `me-preview-block`; the menu bar `me-preview-menu` (shown items, when the menu is on); the page font
+ * (`data-font`, applied when the browser has it — nothing is loaded) and the preset swatch as background only when the
+ * page has no own background colour (`data-color-id`; K16: mssg's real colours may differ).
  */
 import type { MssgBlockProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
@@ -25,10 +27,16 @@ const props = withDefaults(defineProps<{
 const home = computed(() => mssgHomePage(props.site))
 const page = computed(() => (props.pageId && props.site?.pages.find(p => p.id === props.pageId)) || home.value)
 const blocks = computed(() => (page.value?.blocks ?? []).filter(b => b.enabled))
-const bg = computed(() => {
+const ownBg = computed(() => {
   const c = page.value?.theme?.page?.backgroundColor
-  return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : '#FFFFFF'
+  return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : null
 })
+/** v1.6: the preset's display swatch (Apollo's colours) when the page has no background colour of its own */
+const swatch = computed(() => mssgThemeSwatch(page.value?.theme))
+const bg = computed(() => ownBg.value ?? swatch.value?.bg ?? '#FFFFFF')
+const colorId = computed(() => (typeof page.value?.theme?.colorId === 'string' ? page.value.theme.colorId : ''))
+const font = computed(() => page.value?.theme?.page?.font ?? null)
+const fontCss = computed(() => mssgFontCss(font.value))
 const menuItems = computed(() => {
   const m = props.site?.menu
   if (!m?.enabled) return []
@@ -43,6 +51,7 @@ const { src: bgImageSrc } = useMssgImageSrc(() => props.siteId, bgImageValue)
 const bgStyle = computed(() => ({
   'background-color': bg.value,
   'color': fg.value,
+  ...(fontCss.value ? { 'font-family': fontCss.value } : {}),
   ...(bgImageSrc.value ? { 'background-image': `url(${JSON.stringify(bgImageSrc.value)})`, 'background-size': 'cover', 'background-position': 'center' } : {})
 }))
 /** dark text on a light background and vice versa */
@@ -115,6 +124,8 @@ function countdown(b: MssgBlockProjection): string {
       data-testid="me-preview-screen"
       :data-bg="bg"
       :data-bg-image="bgImageValue ? 'true' : 'false'"
+      :data-color-id="colorId"
+      :data-font="font?.family ?? ''"
     >
       <div class="flex flex-col gap-0.5 border-b border-current/10 px-4 py-2 text-center">
         <span class="text-sm font-semibold break-words" data-testid="me-preview-name">{{ site?.name || '—' }}</span>

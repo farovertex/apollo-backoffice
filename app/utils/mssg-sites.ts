@@ -125,8 +125,9 @@ export const MSSG_STEP3_TEXT = {
   fonts: 'ฟอนต์ (Fonts)',
   useTheme: 'ใช้ตามธีม',
   applyAll: 'ใช้กับทุกหน้า',
-  applyAllDone: (n: number) => `ใช้พื้นหลังนี้กับ ${n} หน้าแล้ว`,
-  applyAllHint: 'ใช้สีและรูปพื้นหลังของหน้านี้กับทุกหน้าของเว็บ (ร่างเปลี่ยนทีละหน้า)'
+  applyAllDone: (n: number) => `ใช้หน้าตานี้กับ ${n} หน้าแล้ว`,
+  applyAllHint: 'ใช้ธีม ฟอนต์ สีและรูปพื้นหลังของหน้านี้กับทุกหน้าของเว็บ (ร่างเปลี่ยนทีละหน้า)',
+  presetHint: 'ตัวอย่างสีเป็นค่าประมาณ — สีจริงตาม mssg'
 } as const
 
 /** `https://<subdomain>.<apex>/`, or the connected own domain (AC-10) */
