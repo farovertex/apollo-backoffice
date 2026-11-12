@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * FEAT-099 (spec "UI behaviour → Account card", AC-30) — rename = `PATCH /mssg-accounts/:id { nickname }`.
+ * FEAT-100 (spec "UI behaviour → Account card", AC-30) — rename = `PATCH /mssg-accounts/:id { nickname }`.
  * ≤60 after trim, `''` clears it (sent as `null`). Unchanged → no request. 400 issues land on the field through a
  * component-owned `serverErrors` map (FEAT-008 BUG-007), anything else in `mp-rename-error`.
  */

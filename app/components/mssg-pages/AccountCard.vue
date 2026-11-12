@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * FEAT-099 (spec "UI behaviour → Account card", AC-14, AC-28, AC-29) — one linked mssg account.
+ * FEAT-100 (spec "UI behaviour → Account card", AC-14, AC-28, AC-29) — one linked mssg account.
  *
  * Shows nickname · email, the status badge, "N เว็บ · ดึงล่าสุด …", plan, quota, the last error and the site rows.
  * Controls (refresh / เข้าสู่ระบบใหม่ / rename / ยกเลิกการเชื่อม) only emit — the page makes every request. The four

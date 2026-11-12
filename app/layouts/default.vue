@@ -186,7 +186,7 @@ const links = computed(() => [[{
         open.value = false
       }
     }, {
-      // FEAT-099 — mssg Pages, directly after Posts as in the design; same GOD/Admin gate (Payment: no item, the
+      // FEAT-100 — mssg Pages, directly after Posts as in the design; same GOD/Admin gate (Payment: no item, the
       // page's `mssg-pages-access` middleware redirects, the API answers 403)
       label: 'mssg Pages',
       icon: 'i-lucide-message-circle',

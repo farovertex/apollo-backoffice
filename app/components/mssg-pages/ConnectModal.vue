@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * FEAT-099 (spec "UI behaviour → Connect / relogin modal", AC-10, AC-11, AC-12, AC-15) — three steps:
+ * FEAT-100 (spec "UI behaviour → Connect / relogin modal", AC-10, AC-11, AC-12, AC-15) — three steps:
  *   1. email + password (show/hide) → `POST /mssg-accounts` (connect) or `POST /mssg-accounts/:id/relogin` (relogin,
  *      email read-only, the body is `{ password }` only);
  *   2. "กำลังเข้าสู่ระบบ mssg" with the queue/step text while the job runs — closing the modal cancels nothing;

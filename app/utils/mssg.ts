@@ -1,5 +1,5 @@
 /**
- * FEAT-099 — Thai texts and small pure helpers of `/mssg-pages` (spec "UI behaviour", api-contract.md v1).
+ * FEAT-100 — Thai texts and small pure helpers of `/mssg-pages` (spec "UI behaviour", api-contract.md v1).
  * The API sends codes (`lastError.code`, 409 `reason`, `job.step`); every sentence the user reads lives here, and
  * every map has a fallback so an unknown code still prints something sensible.
  */

@@ -1,5 +1,5 @@
 /**
- * FEAT-099 — mssg Pages (`/mssg-pages`). Mirrors api-contract.md v1 + v2 of the feature: `MssgAccountView`, the list,
+ * FEAT-100 — mssg Pages (`/mssg-pages`). Mirrors api-contract.md v1 + v2 of the feature: `MssgAccountView`, the list,
  * the GOD-only overview, the request bodies and the 409 reasons. The view never carries a password, cookie or token,
  * and none of the bodies below is ever kept after its request (the password lives only in the modal's form field).
  */

@@ -1,5 +1,5 @@
 /**
- * FEAT-099 (spec "UI behaviour → Polling", AC-30) — the job follow-up of `/mssg-pages`.
+ * FEAT-100 (spec "UI behaviour → Polling", AC-30) — the job follow-up of `/mssg-pages`.
  *
  * `GET /mssg-accounts/:id` every 2 s while that account's `job.status` is `pending|waiting|active`, and (contract v2)
  * while its status is `disconnecting`, whose end is the 404 of the deleted account (`onGone`). Same shape as the

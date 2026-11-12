@@ -1,5 +1,5 @@
 /**
- * FEAT-099 (spec "Permissions", AC-1) — `/mssg-pages` (`definePageMeta({ middleware: 'mssg-pages-access' })`).
+ * FEAT-100 (spec "Permissions", AC-1) — `/mssg-pages` (`definePageMeta({ middleware: 'mssg-pages-access' })`).
  *
  * GOD and Admin pass. Everybody else — in practice a Payment-only admin — gets exactly the `god-only` behaviour:
  * "Not allowed" toast + home, the toast carried by the flash cookie across an SSR redirect on a direct URL load

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * FEAT-099 (spec "UI behaviour → Account card", AC-25, AC-30, AC-36; contract v2) — the confirm step of
+ * FEAT-100 (spec "UI behaviour → Account card", AC-25, AC-30, AC-36; contract v2) — the confirm step of
  * "ยกเลิกการเชื่อม". One `DELETE /mssg-accounts/:id` per click (`retry: 0`):
  *   - **202** + view (`status: disconnecting`, `job.type: mssgLogout`): a job logs out of mssg inside the browser
  *     profile, then the account is unbound and deleted → `disconnecting` (the page polls until the 404);

@@ -167,7 +167,7 @@ function formatProxy(proxy: AvailableProfile['proxy']): string {
 }
 
 /**
- * FEAT-099 (api-contract v2, spec H6) — the mssg badge of the Status column (`bp-mssg-<profileId>`, `data-state` =
+ * FEAT-100 (api-contract v2, spec H6) — the mssg badge of the Status column (`bp-mssg-<profileId>`, `data-state` =
  * `bound|free|stale`); nothing for a profile mssg does not use, nor for an older API without the `mssg` key. Rendered
  * from the same client-side table data as the Free/Bound badge, no SSR-only path (BUG-049).
  */
@@ -583,7 +583,7 @@ async function runDelete() {
     const err = e as FetchError<Partial<ProviderErrorBody>>
     const status = err.response?.status ?? err.statusCode
     deleteConfirmOpen.value = false
-    // FEAT-099 (contract v2) — a profile bound to a mssg account: say what to do instead of the API's English text
+    // FEAT-100 (contract v2) — a profile bound to a mssg account: say what to do instead of the API's English text
     const mssgBound = status === 409 && (err.data as { reason?: string } | undefined)?.reason === 'mssgBound'
     toast.add({
       title: 'Could not delete',

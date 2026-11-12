@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * FEAT-099 — mssg Pages (`/mssg-pages`, test-id prefix `mp-`; spec "UI behaviour", api-contract.md v1).
+ * FEAT-100 — mssg Pages (`/mssg-pages`, test-id prefix `mp-`; spec "UI behaviour", api-contract.md v1).
  *
  * GOD and Admin link mssg.me accounts (email + password → a dedicated browser profile + an async login job), see
  * plan / quota / sites per account, re-read on demand, log in again, rename and unlink. Every request goes through
