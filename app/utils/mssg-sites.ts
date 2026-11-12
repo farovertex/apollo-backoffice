@@ -155,7 +155,10 @@ export const MSSG_FIELD_LABEL: Record<string, string> = {
   'tracking.tiktok': 'TikTok Pixel',
   'embeddedCode.content': 'Embed code',
   'embeddedCode.inHead': 'Insert into HEAD tag',
-  'embeddedCode.onLoad': 'Run code after page content load'
+  'embeddedCode.onLoad': 'Run code after page content load',
+  'menu': 'เมนู',
+  'menu.enabled': 'เมนู · แสดง / ซ่อน',
+  'menu.items': 'เมนู · ลำดับและชื่อ'
 }
 
 /** v1.4 site path (`site.seo.title`) → the field (`seo.title`); other paths (`pages.<id>…`, `products.<id>…`) unchanged */
@@ -192,6 +195,7 @@ export function mssgFieldLabel(path: string): string {
   const p = mssgSitePath(path)
   if (MSSG_FIELD_LABEL[p]) return MSSG_FIELD_LABEL[p]!
   if (/^pages\.[^.]+\.order$/.test(p)) return 'ลำดับ block ในหน้า'
+  if (/^menu\.items\.\d+/.test(p)) return `เมนู · รายการที่ ${Number(p.split('.')[2]) + 1}`
   if (p.startsWith('pages.')) return 'หน้าเว็บ'
   if (p.startsWith('products.')) {
     const m = /^products\.([^.]+)(?:\.(.*))?$/.exec(p)
@@ -211,6 +215,8 @@ export function mssgStepOf(op: Pick<MssgOp, 'op'> | null | undefined, path: stri
   // page look (theme.*) is step 3; everything else of a page / block is step 2
   if (t.pageId && !t.blockId && t.field.startsWith('theme.')) return 3
   if (t.pageId || type.startsWith('page.') || type.startsWith('block.')) return 2
+  // v1.6: the menu is edited in step 2
+  if (/^menu(\.|$)/.test(p)) return 2
   if (STEP4_PREFIXES.some(x => p.startsWith(x))) return 4
   return 1
 }

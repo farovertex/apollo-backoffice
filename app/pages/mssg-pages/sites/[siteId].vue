@@ -177,7 +177,9 @@ const step1Errors = computed(() => {
 })
 /** B2: step-2 errors that land on a page / block of the draft (the sheet shows them in place) */
 const step2Errors = computed(() => draft.fieldErrors.value.filter(e => e.step === 2))
-function placedOnStep2(e: { target: { pageId: string | null } }) {
+function placedOnStep2(e: { path: string, target: { pageId: string | null } }) {
+  // v1.6: menu errors are shown in the step's "เมนู" section
+  if (!e.target.pageId && /^menu(\.|$)/.test(e.path)) return !!draft.localSite.value?.menu
   return !!e.target.pageId && !!draft.localSite.value?.pages.some(p => p.id === e.target.pageId)
 }
 /** M3: step-3 errors (page background) land on the selected page's field; step-4 errors on their site field path */
@@ -750,6 +752,7 @@ onBeforeRouteLeave(async () => {
                   v-model:page="selectedPageId"
                   :site-id="view.id"
                   :site="draft.localSite.value"
+                  :live="view.live"
                   :ops="draft.ops.value"
                   :read-only="draft.readOnly.value"
                   :errors="step2Errors"
@@ -758,6 +761,7 @@ onBeforeRouteLeave(async () => {
                   @page-update="draft.updatePage"
                   @block-update="draft.updateBlock"
                   @ops="draft.editOps"
+                  @site-update="draft.updateSite"
                   @start-kind-handled="startKind = null"
                 />
                 <MssgEditorLookStep

@@ -31,15 +31,29 @@ export interface MssgSiteEmbeddedCode {
   onLoad: boolean
 }
 
+/** v1.6 §3.4 — one of the 38 fonts of the contract */
+export interface MssgPageFont {
+  family: string
+  provider: 'google' | 'websafe'
+}
+
 export interface MssgPageTheme {
   styleId?: string | null
+  /** v1.6 — one of the 18 presets of contract §3.4 (Apollo never expands the colours, K16) */
+  colorId?: string | null
+  /** v1.6 — `autoTheme` only: the presets of the light / dark mode (⚠K16) */
+  light?: string | null
+  dark?: string | null
   page?: {
     backgroundColor?: string | null
     backgroundGradient?: unknown
     backgroundImage?: string | null
     backgroundImageOpacity?: number | null
     alignment?: string | null
+    /** v1.6 — `null` / missing = mssg's default font */
+    font?: MssgPageFont | null
   } | null
+  /** per-kind block defaults (`link`, `messengers` …), the key set of a block's style override (v1.6 §3.4) */
   blocks?: Record<string, unknown>
   [key: string]: unknown
 }
@@ -61,6 +75,18 @@ export interface MssgPageProjection {
   seo: { title: string, description: string }
   theme: MssgPageTheme | null
   blocks: MssgBlockProjection[]
+}
+
+/** v1.6 §3.4 — one menu row: a page id, its label and whether it is shown */
+export interface MssgSiteMenuItem {
+  page: string
+  label: string
+  enabled: boolean
+}
+
+export interface MssgSiteMenu {
+  enabled: boolean
+  items: MssgSiteMenuItem[]
 }
 
 /** `crm` keys are ⚠ (envelope seen, inner keys not); the projector drops every payment-provider key in the page */
@@ -85,6 +111,8 @@ export interface MssgSiteProjection {
   seo: MssgSiteSeo
   tracking: MssgSiteTracking
   embeddedCode: MssgSiteEmbeddedCode
+  /** v1.6 §3.4 — `null` when the site has none */
+  menu?: MssgSiteMenu | null
   homePageId: string | null
   crm: MssgSiteCrm | null
   pages: MssgPageProjection[]
@@ -101,6 +129,8 @@ export interface MssgSiteUpdateFields {
   seo?: Partial<MssgSiteSeo>
   tracking?: Partial<Pick<MssgSiteTracking, 'google' | 'facebook' | 'tiktok'>>
   embeddedCode?: Partial<MssgSiteEmbeddedCode>
+  /** v1.6 §3.4 — `items` is the whole ordered list of the pages that exist on mssg */
+  menu?: { enabled?: boolean, items?: MssgSiteMenuItem[] }
 }
 
 export interface MssgOpSiteUpdate { op: 'site.update', fields: MssgSiteUpdateFields }
@@ -114,7 +144,13 @@ export interface MssgOpPageUpdate {
     slug?: string
     enabled?: boolean
     seo?: { title?: string, description?: string }
-    theme?: { page?: { backgroundColor?: string | null, backgroundImage?: string | null } }
+    /** v1.6 §3.4: `colorId` (+ `light` / `dark` for `autoTheme`), `page.font` (`null` = default) */
+    theme?: {
+      colorId?: string
+      light?: string
+      dark?: string
+      page?: { backgroundColor?: string | null, backgroundImage?: string | null, font?: MssgPageFont | null }
+    }
   }
 }
 export interface MssgOpPageClone { op: 'page.clone', pageId: string, tempId: string }

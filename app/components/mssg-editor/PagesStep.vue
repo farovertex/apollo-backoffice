@@ -11,17 +11,21 @@
  * until then. "เพิ่ม block (Choose block)": the 19 kinds (Thai + English) → the kind's form → `block.create`.
  * Objects created in this draft carry temp ids (`tmp-…`); deleting one drops its ops instead of sending a delete.
  *
+ * v1.6 (B2r): block forms get the page's style defaults (`live`, `mssgStyleDefaults`) and the site's Features icon names;
+ * "เมนู" (`MenuEditor`) below the pages emits `siteUpdate { menu }` (folded into the draft's `site.update`).
  * Every action emits ops to the page (→ `useMssgDraft`: autosave, rev); nothing here calls the API except uploads.
  * Field errors (draft 400 / apply `mssgValidation`) arrive as `errors` with their page / block / field target.
  */
 import type { ModalProps } from '@nuxt/ui'
-import type { MssgOp, MssgOpBlockCreate, MssgPageProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
+import type { MssgOp, MssgOpBlockCreate, MssgPageProjection, MssgSiteProjection, MssgSiteUpdateFields } from '#shared/types/mssg-sites'
 import type { MssgFieldError } from '~/utils/mssg-sites'
 import type { MssgPageForm, MssgNewPageForm } from '~/utils/mssg-blocks'
 
 const props = defineProps<{
   siteId: string
   site: MssgSiteProjection | null
+  /** v1.6: the live site — the key set of a block's style override comes from its page's defaults as read */
+  live?: MssgSiteProjection | null
   ops: MssgOp[]
   readOnly: boolean
   /** step-2 field errors (with `target`) */
@@ -37,6 +41,8 @@ const emit = defineEmits<{
   blockUpdate: [pageId: string, blockId: string, patch: { fields?: Record<string, unknown>, enabled?: boolean }]
   ops: [next: MssgOp[], clear?: (e: MssgFieldError) => boolean]
   startKindHandled: []
+  /** v1.6 menu edits (`{ menu: { enabled? , items? } }`) */
+  siteUpdate: [fields: MssgSiteUpdateFields]
 }>()
 
 const selectedId = defineModel<string>('page', { default: '' })
@@ -52,6 +58,11 @@ const isHome = computed(() => !!page.value && page.value.id === homeId.value)
 const clonedPage = computed(() => !!page.value && mssgIsClonedPage(props.ops, page.value.id))
 
 // ── errors ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** v1.6: menu errors have no page target (site path `menu.…`) */
+const menuErrors = computed(() => props.errors.filter(e => !e.target.pageId && /^menu(\.|$)/.test(e.path)))
+function onMenu(menu: NonNullable<MssgSiteUpdateFields['menu']>) {
+  emit('siteUpdate', { menu })
+}
 function pageErrors(pageId: string) {
   return props.errors.filter(e => e.target.pageId === pageId)
 }
@@ -173,6 +184,12 @@ watch(() => page.value?.id, () => {
 watch(blocks, (list) => {
   if (editingId.value && !list.some(b => b.id === editingId.value)) editingId.value = null
 })
+
+/** v1.6: the "รูปแบบ" keys of a kind on the selected page, and the icon names the site's Features blocks use */
+function styleDefaultsOf(kind: string | null) {
+  return page.value && kind ? mssgStyleDefaults(props.live ?? props.site, page.value.id, kind) : null
+}
+const siteIcons = computed(() => mssgSiteIcons([props.live, props.site]))
 
 function canEdit(b: { id: string, kind: string }) {
   return mssgIsKnownKind(b.kind) && !clonedPage.value
@@ -459,6 +476,15 @@ const pageTitle = computed(() => page.value?.name || '—')
       </UForm>
     </section>
 
+    <!-- v1.6 menu -->
+    <MssgEditorMenuEditor
+      :site="site"
+      :read-only="readOnly"
+      :errors="menuErrors"
+      :reset-token="resetToken"
+      @update="onMenu"
+    />
+
     <!-- blocks -->
     <section v-if="page" class="flex min-w-0 flex-col gap-3" aria-label="block ของหน้า">
       <p class="text-sm break-words text-toned">
@@ -601,6 +627,8 @@ const pageTitle = computed(() => page.value?.name || '—')
             :pages="pages"
             :read-only="readOnly"
             :errors="blockErrors(b.id)"
+            :style-defaults="styleDefaultsOf(b.kind)"
+            :icons="siteIcons"
             @change="onBlockChange(b.id, $event)"
             @close="editingId = null"
             @add-link="startAdd('Link', i + 1)"
@@ -617,6 +645,8 @@ const pageTitle = computed(() => page.value?.name || '—')
           :site-id="siteId"
           :pages="pages"
           :read-only="readOnly"
+          :style-defaults="styleDefaultsOf(newKind)"
+          :icons="siteIcons"
           @submit="addBlock"
           @cancel="newKind = null"
         />

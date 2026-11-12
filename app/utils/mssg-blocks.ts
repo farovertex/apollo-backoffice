@@ -10,6 +10,9 @@
  *   its create op, deleting an object created in the draft drops its ops instead of sending a delete;
  * - the zod rules per page / block kind (contract §3.3, Thai messages) and their form adapters;
  * - where a field error / conflict item points to (page, block, field) and its Thai label.
+ * v1.6 (B2r): proven shapes (`Hat {title, subtitle, logoUrl, bgUrl}`, `Features.items[].glyph {type:"icon", icon}`,
+ * `Messengers.messengers[] {platform, type, value, enabled}`, `ImageGallery.images[] {url, action}`), the actions of §3.4
+ * (`mssg-actions.ts`), block style overrides folded key by key (`mssg-style.ts`), page presets / fonts (`mssg-look.ts`).
  */
 import * as z from 'zod'
 import type {
@@ -23,6 +26,9 @@ import type {
   MssgPageProjection,
   MssgSiteProjection
 } from '../../shared/types/mssg-sites'
+import type { MssgActionContext } from './mssg-actions'
+import { mssgActionIssues, mssgActionOut, mssgGlyphIssue, mssgMessengerEditable, mssgMessengerIssue } from './mssg-actions'
+import { mssgMergeBlockTheme } from './mssg-style'
 
 // ── kinds ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 export interface MssgBlockKindDef {
@@ -114,6 +120,19 @@ export function mssgDeepEqual(a: unknown, b: unknown): boolean {
   return ka.length === kb.length && ka.every(k => mssgDeepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
 }
 
+/**
+ * Block `fields` + a patch: whole keys replace (the API's merge), except `theme` (v1.6 style override) which merges key by
+ * key; `dropNull` removes the override keys set to `null` (preview / create) instead of keeping them for the API.
+ */
+function mergeBlockFields(prev: Record<string, unknown>, patch: Record<string, unknown>, dropNull: boolean): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...prev }
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) continue
+    out[k] = k === 'theme' ? mssgMergeBlockTheme(prev.theme, v, dropNull) : clone(v)
+  }
+  return out
+}
+
 // ── preview = base + ops (client copy of the API's rule) ────────────────────────────────────────────────────────────
 function findPage(site: MssgSiteProjection, id: string): MssgPageProjection | undefined {
   return site.pages.find(p => p.id === id)
@@ -145,7 +164,20 @@ function applyOne(site: MssgSiteProjection, op: MssgOp): void {
       if (f.slug !== undefined) page.slug = f.slug
       if (f.enabled !== undefined) page.enabled = f.enabled
       if (f.seo) page.seo = { ...page.seo, ...f.seo }
-      if (f.theme) page.theme = deepMerge((page.theme ?? {}) as Record<string, unknown>, f.theme as Record<string, unknown>) as MssgPageProjection['theme']
+      if (f.theme) {
+        const theme = deepMerge((page.theme ?? {}) as Record<string, unknown>, f.theme as Record<string, unknown>) as NonNullable<MssgPageProjection['theme']>
+        // v1.6 §3.4: a preset is `colorId` only (the expanded `colors` are dropped); `light` / `dark` belong to `autoTheme`
+        if (f.theme.colorId !== undefined) {
+          delete theme.colors
+          if (f.theme.colorId !== 'autoTheme') {
+            delete theme.light
+            delete theme.dark
+          }
+        }
+        // `font: null` = mssg's default font: the key is removed
+        if (f.theme.page && 'font' in f.theme.page && f.theme.page.font === null && theme.page) delete theme.page.font
+        page.theme = theme
+      }
       return
     }
     case 'page.clone': {
@@ -181,7 +213,7 @@ function applyOne(site: MssgSiteProjection, op: MssgOp): void {
     case 'block.update': {
       const block = findPage(site, op.pageId)?.blocks.find(b => b.id === op.blockId)
       if (!block) return
-      if (op.fields) block.fields = { ...block.fields, ...clone(op.fields) }
+      if (op.fields) block.fields = mergeBlockFields(block.fields, op.fields, true)
       if (op.enabled !== undefined) block.enabled = op.enabled
       return
     }
@@ -292,11 +324,21 @@ export function mssgFoldPageUpdate(ops: MssgOp[], pageId: string, fields: MssgOp
   const ui = lastIndex(next, o => o.op === 'page.update' && o.pageId === pageId)
   if (ui >= 0) {
     const prev = next[ui] as MssgOpPageUpdate
-    next[ui] = { ...prev, fields: deepMerge(prev.fields as Record<string, unknown>, rest as Record<string, unknown>) as MssgOpPageUpdate['fields'] }
+    next[ui] = { ...prev, fields: fixPresetPair(deepMerge(prev.fields as Record<string, unknown>, rest as Record<string, unknown>) as MssgOpPageUpdate['fields']) }
   } else {
-    next.push({ op: 'page.update', pageId, fields: clone(rest) })
+    next.push({ op: 'page.update', pageId, fields: fixPresetPair(clone(rest)) })
   }
   return next
+}
+
+/** v1.6 §3.4: `light` / `dark` only go with `colorId: "autoTheme"` (a folded switch to another preset drops them) */
+function fixPresetPair(fields: MssgOpPageUpdate['fields']): MssgOpPageUpdate['fields'] {
+  const t = fields.theme
+  if (t && t.colorId !== undefined && t.colorId !== 'autoTheme') {
+    delete t.light
+    delete t.dark
+  }
+  return fields
 }
 
 /**
@@ -310,7 +352,7 @@ export function mssgFoldBlockUpdate(ops: MssgOp[], pageId: string, blockId: stri
     const create = next[ci] as MssgOpBlockCreate
     next[ci] = {
       ...create,
-      fields: patch.fields ? { ...create.fields, ...clone(patch.fields) } : create.fields,
+      fields: patch.fields ? mergeBlockFields(create.fields, patch.fields, true) : create.fields,
       enabled: patch.enabled ?? create.enabled
     }
     return next
@@ -319,7 +361,7 @@ export function mssgFoldBlockUpdate(ops: MssgOp[], pageId: string, blockId: stri
   if (ui >= 0) {
     const prev = next[ui] as MssgOpBlockUpdate
     const merged: MssgOpBlockUpdate = { ...prev }
-    if (patch.fields) merged.fields = { ...(prev.fields ?? {}), ...clone(patch.fields) }
+    if (patch.fields) merged.fields = mergeBlockFields(prev.fields ?? {}, patch.fields, false)
     if (patch.enabled !== undefined) merged.enabled = patch.enabled
     next[ui] = merged
   } else {
@@ -428,8 +470,6 @@ export function mssgSuggestSlug(name: string, taken: string[]): string {
 }
 
 // ── block forms ─────────────────────────────────────────────────────────────────────────────────────────────────────
-/** contract §3.3 Messengers platforms (⚠K7); values read from mssg that are not listed stay selectable */
-export const MSSG_MESSENGER_PLATFORMS = ['whatsapp', 'telegram', 'viber', 'messenger', 'line']
 /** contract §3.3 SubscriptionForm item types (⚠K11) */
 export const MSSG_FORM_ITEM_TYPES = [
   { value: 'text', label: 'ข้อความ (Text)' },
@@ -437,68 +477,72 @@ export const MSSG_FORM_ITEM_TYPES = [
   { value: 'phone', label: 'เบอร์โทร (Phone)' }
 ]
 
-const linkAction = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('url'), url: httpUrl('ปลายทาง') }),
-  z.object({ type: z.literal('page'), page: z.string().min(1, 'เลือกหน้าปลายทาง') }),
-  // actions read from mssg that the BO cannot set yet ("เร็ว ๆ นี้") stay as they are
-  z.looseObject({ type: z.enum(['call', 'email', 'sms', 'anchor']) })
-], { error: 'เลือกว่ากดแล้วทำอะไร' })
+/** zod: an action of contract §3.4 (`image` = Image / gallery) checked by `mssgActionIssues` against the draft's pages */
+function actionSchema(image: boolean, ctx: MssgActionContext | null) {
+  return z.looseObject({ type: z.string({ error: 'เลือกว่ากดแล้วทำอะไร' }) }).superRefine((a, c) => {
+    for (const i of mssgActionIssues(a, ctx, image)) c.addIssue({ code: 'custom', path: i.path.split('.'), message: i.message })
+  })
+}
 
-const imageAction = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('none') }),
-  z.object({ type: z.literal('url'), url: httpUrl('ปลายทาง') }),
-  z.looseObject({ type: z.enum(['page', 'call', 'email', 'sms', 'image', 'anchor']) })
-], { error: 'เลือกว่ากดแล้วทำอะไร' })
-
-/** Link actions the BO can set; the others are shown disabled "เร็ว ๆ นี้" (spec scope/out) */
-export const MSSG_LINK_ACTIONS = [
-  { value: 'url', label: 'เปิดลิงก์ (Open link)', soon: false },
-  { value: 'page', label: 'เปิดหน้าภายใน (Internal page)', soon: false },
-  { value: 'call', label: 'โทรออก (Call)', soon: true },
-  { value: 'email', label: 'ส่งอีเมล (Send email)', soon: true },
-  { value: 'sms', label: 'ส่ง SMS (Send SMS)', soon: true },
-  { value: 'anchor', label: 'ไปที่ block (Anchor)', soon: true }
-]
+const imageField = (what: string) => z.string().nullable().refine(v => !v || mssgIsImageValue(v), `${what}ต้องเป็นรูปที่อัปโหลด หรือลิงก์ http(s)`)
 
 /**
- * Form state per kind. Most kinds edit their `fields` keys directly; TextRich edits plain `text` (→ `html`) and Timer
- * a local `datetime-local` value (→ ISO `expireDate`). Item objects keep the keys read from mssg (loose objects).
+ * The form schema of a kind (contract §3.3 / §3.4). `ctx` = the draft's pages + blocks, so an internal page / anchor
+ * must exist in the preview; without it (the static `MSSG_BLOCK_SCHEMAS`) targets are only checked for presence.
+ * Most kinds edit their `fields` keys directly; TextRich edits plain `text` (→ `html`) and Timer a local
+ * `datetime-local` value (→ ISO `expireDate`). Item objects keep the keys read from mssg (loose objects).
  */
-export const MSSG_BLOCK_SCHEMAS: Record<string, z.ZodType> = {
-  Hat: z.object({
-    header: maxLen(250, 'ชื่อ'),
-    subheader: maxLen(500, 'คำอธิบายสั้น'),
-    image: z.string().nullable().refine(v => !v || mssgIsImageValue(v), 'รูปต้องเป็นรูปที่อัปโหลด หรือลิงก์ http(s)')
-  }),
-  Link: z.object({ title: len(1, 250, 'ชื่อปุ่ม'), action: linkAction }),
-  TextRich: z.object({ text: z.string().trim().min(1, 'กรอกข้อความ').max(20_000, 'ข้อความยาวได้ไม่เกิน 20,000 ตัวอักษร') }),
-  Image: z.object({ url: image('รูปภาพ'), action: imageAction }),
-  ImageGallery: z.object({ images: list(z.looseObject({ url: image('รูป') }), 1, 20, 'รูป'), autoplay }),
-  Video: z.object({ url: httpUrl('ลิงก์วิดีโอ') }),
-  VideoGallery: z.object({ videos: list(z.looseObject({ url: httpUrl('ลิงก์วิดีโอ') }), 1, 20, 'วิดีโอ'), autoplay }),
-  AudioEmbed: z.object({ url: httpUrl('ลิงก์เพลง').refine(mssgIsAudioUrl, 'รองรับเฉพาะลิงก์ YouTube, Spotify, Apple Music, SoundCloud หรือ Mixcloud') }),
-  Giphy: z.object({ giphyId: len(1, 100, 'รหัส GIF (Giphy ID)') }),
-  Map: z.object({ address: len(10, 300, 'ที่อยู่') }),
-  Timer: z.object({ local: z.string().min(1, 'เลือกวันเวลาสิ้นสุด').refine(v => !Number.isNaN(new Date(v).getTime()), 'วันเวลาไม่ถูกต้อง') }),
-  Divider: z.object({}),
-  Accordion: z.object({ items: list(z.looseObject({ title: len(3, 250, 'คำถาม'), content: len(3, 20_000, 'คำตอบ') }), 1, 50, 'คำถาม') }),
-  Features: z.object({ items: list(z.looseObject({ title: len(1, 250, 'หัวข้อ'), text: maxLen(1000, 'คำอธิบาย') }), 1, 20, 'จุดเด่น') }),
-  Messengers: z.object({
-    messengers: list(z.looseObject({ platform: z.string().min(1, 'เลือกแอปแชท'), value: len(1, 250, 'ช่องทางติดต่อ'), enabled: z.boolean() }), 1, 10, 'ปุ่มแชท')
-  }),
-  Socials: z.object({ items: list(z.looseObject({ url: httpUrl('ลิงก์โซเชียล') }), 1, 30, 'ลิงก์โซเชียล') }),
-  Products: z.object({}),
-  SubscriptionForm: z.object({
-    items: list(z.looseObject({
-      type: z.enum(['text', 'email', 'phone'], { error: 'เลือกชนิดช่อง' }),
-      label: len(1, 100, 'ชื่อช่อง'),
-      required: z.boolean()
-    }), 1, 10, 'ช่องในฟอร์ม'),
-    sendLabel: len(1, 50, 'ข้อความบนปุ่มส่ง'),
-    sentText: len(1, 500, 'ข้อความหลังส่งสำเร็จ')
-  }),
-  CustomCode: z.object({ content: z.string().min(1, 'กรอกโค้ด HTML').max(30_000, 'โค้ดยาวได้ไม่เกิน 30,000 ตัวอักษร') })
+export function mssgBlockSchema(kind: string, ctx: MssgActionContext | null = null): z.ZodType | null {
+  switch (kind) {
+    case 'Hat': return z.object({ title: maxLen(250, 'ชื่อ'), subtitle: maxLen(500, 'คำอธิบายสั้น'), logoUrl: imageField('รูปโปรไฟล์'), bgUrl: imageField('ภาพปก') })
+    case 'Link': return z.object({ title: len(1, 250, 'ชื่อปุ่ม'), action: actionSchema(false, ctx) })
+    case 'TextRich': return z.object({ text: z.string().trim().min(1, 'กรอกข้อความ').max(20_000, 'ข้อความยาวได้ไม่เกิน 20,000 ตัวอักษร') })
+    case 'Image': return z.object({ url: image('รูปภาพ'), action: actionSchema(true, ctx) })
+    case 'ImageGallery': return z.object({ images: list(z.looseObject({ url: image('รูป'), action: actionSchema(true, ctx) }), 1, 20, 'รูป'), autoplay })
+    case 'Video': return z.object({ url: httpUrl('ลิงก์วิดีโอ') })
+    case 'VideoGallery': return z.object({ videos: list(z.looseObject({ url: httpUrl('ลิงก์วิดีโอ') }), 1, 20, 'วิดีโอ'), autoplay })
+    case 'AudioEmbed': return z.object({ url: httpUrl('ลิงก์เพลง').refine(mssgIsAudioUrl, 'รองรับเฉพาะลิงก์ YouTube, Spotify, Apple Music, SoundCloud หรือ Mixcloud') })
+    case 'Giphy': return z.object({ giphyId: len(1, 100, 'รหัส GIF (Giphy ID)') })
+    case 'Map': return z.object({ address: len(10, 300, 'ที่อยู่') })
+    case 'Timer': return z.object({ local: z.string().min(1, 'เลือกวันเวลาสิ้นสุด').refine(v => !Number.isNaN(new Date(v).getTime()), 'วันเวลาไม่ถูกต้อง') })
+    case 'Divider': return z.object({})
+    case 'Accordion': return z.object({ items: list(z.looseObject({ title: len(3, 250, 'คำถาม'), content: len(3, 20_000, 'คำตอบ') }), 1, 50, 'คำถาม') })
+    case 'Features': return z.object({
+      items: list(z.looseObject({ title: len(1, 250, 'หัวข้อ'), content: maxLen(1000, 'คำอธิบาย') }).superRefine((it, c) => {
+        const m = mssgGlyphIssue(it.glyph)
+        if (m) c.addIssue({ code: 'custom', path: ['glyph', 'icon'], message: m })
+      }), 1, 20, 'จุดเด่น')
+    })
+    case 'Messengers': return z.object({
+      messengers: list(z.looseObject({}).superRefine((row, c) => {
+        // a platform read from mssg that Apollo does not know is kept exactly as read (no check)
+        if (row.platform && !mssgMessengerEditable(row.platform)) return
+        const pair = mssgMessengerIssue(row)
+        if (pair) c.addIssue({ code: 'custom', path: [pair.path], message: pair.message })
+        const value = typeof row.value === 'string' ? row.value.trim() : ''
+        if (!value) c.addIssue({ code: 'custom', path: ['value'], message: 'กรอกช่องทางติดต่อ' })
+        else if (value.length > 250) c.addIssue({ code: 'custom', path: ['value'], message: 'ช่องทางติดต่อยาวได้ไม่เกิน 250 ตัวอักษร' })
+        if (typeof row.enabled !== 'boolean') c.addIssue({ code: 'custom', path: ['enabled'], message: 'เลือกแสดงหรือซ่อน' })
+      }), 1, 10, 'ปุ่มแชท')
+    })
+    case 'Socials': return z.object({ items: list(z.looseObject({ url: httpUrl('ลิงก์โซเชียล') }), 1, 30, 'ลิงก์โซเชียล') })
+    case 'Products': return z.object({})
+    case 'SubscriptionForm': return z.object({
+      items: list(z.looseObject({
+        type: z.enum(['text', 'email', 'phone'], { error: 'เลือกชนิดช่อง' }),
+        label: len(1, 100, 'ชื่อช่อง'),
+        required: z.boolean()
+      }), 1, 10, 'ช่องในฟอร์ม'),
+      sendLabel: len(1, 50, 'ข้อความบนปุ่มส่ง'),
+      sentText: len(1, 500, 'ข้อความหลังส่งสำเร็จ')
+    })
+    case 'CustomCode': return z.object({ content: z.string().min(1, 'กรอกโค้ด HTML').max(30_000, 'โค้ดยาวได้ไม่เกิน 30,000 ตัวอักษร') })
+    default: return null
+  }
 }
+
+/** the static schemas (targets checked for presence only) — the forms use `mssgBlockSchema(kind, ctx)` */
+export const MSSG_BLOCK_SCHEMAS: Record<string, z.ZodType> = Object.fromEntries(MSSG_BLOCK_KINDS.map(k => [k.kind, mssgBlockSchema(k.kind)!]))
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }
 const UNESC: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': '\'', '&nbsp;': ' ' }
@@ -539,11 +583,11 @@ export function mssgIsoToLocalInput(iso: unknown): string {
 /** default fields of a new block of `kind` (required lists start with one row) */
 export function mssgBlockDefaults(kind: string): Record<string, unknown> {
   switch (kind) {
-    case 'Hat': return { header: '', subheader: '', image: null }
+    case 'Hat': return { title: '', subtitle: '', logoUrl: null, bgUrl: null }
     case 'Link': return { title: '', action: { type: 'url', url: '' } }
     case 'TextRich': return { html: '', editorState: null }
-    case 'Image': return { url: '', action: { type: 'none' } }
-    case 'ImageGallery': return { images: [{ url: '' }], autoplay: 0 }
+    case 'Image': return { url: '', action: { type: 'nothing' } }
+    case 'ImageGallery': return { images: [{ url: '', action: { type: 'nothing' } }], autoplay: 0 }
     case 'Video': return { url: '' }
     case 'VideoGallery': return { videos: [{ url: '' }], autoplay: 0 }
     case 'AudioEmbed': return { url: '' }
@@ -551,8 +595,8 @@ export function mssgBlockDefaults(kind: string): Record<string, unknown> {
     case 'Map': return { address: '' }
     case 'Timer': return { expireDate: '' }
     case 'Accordion': return { items: [{ title: '', content: '' }] }
-    case 'Features': return { items: [{ title: '', text: '', glyph: { type: 'emoji', value: '⭐' } }] }
-    case 'Messengers': return { messengers: [{ platform: 'line', type: 'link', value: '', enabled: true }] }
+    case 'Features': return { items: [{ title: '', content: '', glyph: { type: 'icon', icon: '' } }] }
+    case 'Messengers': return { messengers: [{ platform: 'whatsapp', type: 'auto', value: '', enabled: true }] }
     case 'Socials': return { items: [{ url: '' }] }
     case 'SubscriptionForm': return { items: [{ type: 'email', label: 'Email', required: true }], sendLabel: 'Send', sentText: 'ขอบคุณ เราได้รับข้อมูลแล้ว' }
     case 'CustomCode': return { content: '' }
@@ -562,7 +606,7 @@ export function mssgBlockDefaults(kind: string): Record<string, unknown> {
 
 /** the `fields` keys the form of a kind edits (only these are compared / sent) */
 export const MSSG_BLOCK_KEYS: Record<string, string[]> = {
-  Hat: ['header', 'subheader', 'image'],
+  Hat: ['title', 'subtitle', 'logoUrl', 'bgUrl'],
   Link: ['title', 'action'],
   TextRich: ['html', 'editorState'],
   Image: ['url', 'action'],
@@ -583,25 +627,42 @@ export const MSSG_BLOCK_KEYS: Record<string, string[]> = {
   CustomCode: ['content']
 }
 
+/** an action read from mssg → form state (a value input is always a string); missing → `fallback` type */
+function actionToForm(action: unknown, fallback: string): Record<string, unknown> {
+  const a = isPlain(action) ? clone(action) : {}
+  if (typeof a.type !== 'string' || !a.type) return { type: fallback, ...(fallback === 'url' ? { url: '' } : {}) }
+  if (['url', 'tel', 'email', 'sms'].includes(a.type)) a.url = typeof a.url === 'string' ? a.url : ''
+  if (a.type === 'page') a.page = typeof a.page === 'string' ? a.page : ''
+  if (a.type === 'anchor') {
+    const an = isPlain(a.anchor) ? a.anchor : {}
+    a.anchor = { ...an, page: typeof an.page === 'string' ? an.page : '', block: typeof an.block === 'string' ? an.block : '' }
+  }
+  return a
+}
+
 /** block `fields` → form state of its kind */
 export function mssgBlockToForm(kind: string, fields: Record<string, unknown>): Record<string, unknown> {
   const f = { ...mssgBlockDefaults(kind), ...clone(fields) }
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
   switch (kind) {
-    case 'Hat': return { header: str(f.header), subheader: str(f.subheader), image: typeof f.image === 'string' && f.image ? f.image : null }
+    case 'Hat': {
+      const img = (v: unknown) => (typeof v === 'string' && v ? v : null)
+      return { title: str(f.title), subtitle: str(f.subtitle), logoUrl: img(f.logoUrl), bgUrl: img(f.bgUrl) }
+    }
     case 'TextRich': return { text: mssgHtmlToText(str(f.html)) }
     case 'Timer': return { local: mssgIsoToLocalInput(f.expireDate) }
-    case 'Link': {
-      const a = isPlain(f.action) ? f.action : {}
-      const action = a.type === 'page' ? { ...a, page: str(a.page) } : { ...a, type: a.type === 'url' || !a.type ? 'url' : a.type, url: str(a.url) }
-      return { title: str(f.title), action }
+    case 'Link': return { title: str(f.title), action: actionToForm(f.action, 'url') }
+    case 'Image': return { url: str(f.url), action: actionToForm(f.action, 'nothing') }
+    case 'ImageGallery': return {
+      ...f,
+      images: (Array.isArray(f.images) ? f.images : []).map(it => (isPlain(it) ? { ...it, url: str(it.url), action: actionToForm(it.action, 'nothing') } : it)),
+      autoplay: typeof f.autoplay === 'number' ? f.autoplay : 0
     }
-    case 'Image': {
-      const a = isPlain(f.action) ? f.action : { type: 'none' }
-      return { url: str(f.url), action: a.type === 'url' ? { ...a, url: str(a.url) } : { ...a, type: a.type ?? 'none' } }
-    }
-    case 'ImageGallery':
     case 'VideoGallery': return { ...f, autoplay: typeof f.autoplay === 'number' ? f.autoplay : 0 }
+    case 'Features': return {
+      ...f,
+      items: (Array.isArray(f.items) ? f.items : []).map(it => (isPlain(it) ? { ...it, title: str(it.title), content: str(it.content) } : it))
+    }
     default: return f
   }
 }
@@ -625,7 +686,38 @@ export function mssgFormToBlock(kind: string, form: Record<string, unknown>, ori
     if (typeof v === 'string' && k !== 'content') v = v.trim()
     out[k] = v
   }
-  if (kind === 'Hat' && !out.image) out.image = null
+  if (kind === 'Hat') {
+    if (!out.logoUrl) out.logoUrl = null
+    if (!out.bgUrl) out.bgUrl = null
+  }
+  if (kind === 'Link' || kind === 'Image') out.action = mssgActionOut(out.action)
+  if (kind === 'ImageGallery' && Array.isArray(out.images)) {
+    out.images = (out.images as unknown[]).map(it => (isPlain(it) ? { ...it, action: mssgActionOut(it.action) } : it))
+  }
+  if (kind === 'Messengers' && Array.isArray(out.messengers)) {
+    out.messengers = (out.messengers as unknown[]).map(it => (isPlain(it) && mssgMessengerEditable(it.platform) && typeof it.value === 'string' ? { ...it, value: it.value.trim() } : it))
+  }
+  return out
+}
+
+/**
+ * The `fields` of a **new** block: keys mssg adds itself (`redirectUrl`, contract §3.3 Messengers) are never sent on
+ * create, and empty optional images are left out (v1.6, B2 rule "unknown keys out of fields on create").
+ */
+export function mssgCreateFields(kind: string, fields: Record<string, unknown>): Record<string, unknown> {
+  const out = clone(fields)
+  delete out.redirectUrl
+  if (kind === 'Messengers' && Array.isArray(out.messengers)) {
+    out.messengers = (out.messengers as unknown[]).map((it) => {
+      if (!isPlain(it)) return it
+      const { redirectUrl: _drop, ...rest } = it
+      return rest
+    })
+  }
+  if (kind === 'Hat') {
+    if (!out.logoUrl) delete out.logoUrl
+    if (!out.bgUrl) delete out.bgUrl
+  }
   return out
 }
 
@@ -652,7 +744,7 @@ function blockSummaryText(kind: string, f: Record<string, unknown>): string {
     case 'TextRich':
       return mssgHtmlToText(s(f.html)).replace(/\s+/g, ' ')
     case 'Hat':
-      return s(f.header) || s(f.subheader)
+      return s(f.title) || s(f.subtitle)
     case 'Accordion':
     case 'Features':
     case 'Socials':
@@ -728,29 +820,45 @@ const PAGE_FIELD_LABEL: Record<string, string> = {
   'seo.description': 'SEO description ของหน้า',
   'order': 'ลำดับ block',
   'theme.page.backgroundColor': 'สีพื้นหลังของหน้า',
-  'theme.page.backgroundImage': 'รูปพื้นหลังของหน้า'
+  'theme.page.backgroundImage': 'รูปพื้นหลังของหน้า',
+  'theme.colorId': 'ธีม (preset)',
+  'theme.light': 'ธีมตอนสว่าง',
+  'theme.dark': 'ธีมตอนมืด',
+  'theme.page.font': 'ฟอนต์',
+  'theme.page.font.family': 'ฟอนต์',
+  'theme.page.font.provider': 'ฟอนต์'
 }
 
 const BLOCK_FIELD_LABEL: Record<string, string> = {
-  enabled: 'ซ่อน / แสดง',
-  title: 'ชื่อ',
-  action: 'กดแล้วทำอะไร',
-  url: 'ลิงก์',
-  html: 'ข้อความ',
-  header: 'ชื่อ',
-  subheader: 'คำอธิบายสั้น',
-  image: 'รูป',
-  images: 'รูปภาพ',
-  videos: 'วิดีโอ',
-  autoplay: 'เล่นอัตโนมัติ',
-  giphyId: 'รหัส GIF',
-  address: 'ที่อยู่',
-  expireDate: 'วันเวลาสิ้นสุด',
-  items: 'รายการ',
-  messengers: 'ปุ่มแชท',
-  sendLabel: 'ข้อความบนปุ่มส่ง',
-  sentText: 'ข้อความหลังส่งสำเร็จ',
-  content: 'เนื้อหา'
+  'enabled': 'ซ่อน / แสดง',
+  'title': 'ชื่อ',
+  'action': 'กดแล้วทำอะไร',
+  'url': 'ลิงก์',
+  'html': 'ข้อความ',
+  'subtitle': 'คำอธิบายสั้น',
+  'logoUrl': 'รูปโปรไฟล์',
+  'bgUrl': 'ภาพปก',
+  'images': 'รูปภาพ',
+  'videos': 'วิดีโอ',
+  'autoplay': 'เล่นอัตโนมัติ',
+  'giphyId': 'รหัส GIF',
+  'address': 'ที่อยู่',
+  'expireDate': 'วันเวลาสิ้นสุด',
+  'items': 'รายการ',
+  'messengers': 'ปุ่มแชท',
+  'sendLabel': 'ข้อความบนปุ่มส่ง',
+  'sentText': 'ข้อความหลังส่งสำเร็จ',
+  'content': 'เนื้อหา',
+  'platform': 'แอปแชท',
+  'type': 'แบบ',
+  'value': 'ช่องทางติดต่อ',
+  'glyph.icon': 'ไอคอน',
+  'action.url': 'ปลายทาง',
+  'action.page': 'หน้าปลายทาง',
+  'action.anchor': 'block ปลายทาง',
+  'action.anchor.page': 'หน้าของ block ปลายทาง',
+  'action.anchor.block': 'block ปลายทาง',
+  'action.type': 'กดแล้วทำอะไร'
 }
 
 export function mssgPageFieldLabel(field: string): string {
@@ -758,6 +866,9 @@ export function mssgPageFieldLabel(field: string): string {
 }
 
 export function mssgBlockFieldLabel(field: string): string {
+  // v1.6 style override: `theme.blocks.<kind>.<key>`
+  const st = /^theme\.blocks\.[^.]+\.(.+)$/.exec(field)
+  if (st) return `รูปแบบ · ${st[1]}`
   const [head, idx, ...rest] = field.split('.')
   const base = BLOCK_FIELD_LABEL[head!] ?? head ?? ''
   if (idx !== undefined && /^\d+$/.test(idx)) return `${base} ที่ ${Number(idx) + 1}${rest.length ? ` · ${BLOCK_FIELD_LABEL[rest.join('.')] ?? rest.join('.')}` : ''}`

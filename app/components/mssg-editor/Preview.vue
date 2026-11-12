@@ -8,6 +8,9 @@
  * text (never `v-html`). Approximate, not pixel-exact.
  * Test ids: `me-preview` (`data-page-id`, `data-blocks` = shown blocks), `me-preview-name`, `me-preview-url`,
  * `me-preview-page`, `me-preview-block` (`data-kind`, `data-block-id`), `me-preview-empty`, `me-preview-screen` (M3: `data-bg` = background colour, `data-bg-image`).
+ * v1.6 (B2r): Hat `title / subtitle / logoUrl / bgUrl`, Features icon names, every action type of §3.4; a block's
+ * style override (colours, radius, border, width, mode — approximate) with `data-style-mode` / `data-styled` on
+ * `me-preview-block`; the menu bar `me-preview-menu` (shown items, when the menu is on).
  */
 import type { MssgBlockProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
@@ -25,6 +28,11 @@ const blocks = computed(() => (page.value?.blocks ?? []).filter(b => b.enabled))
 const bg = computed(() => {
   const c = page.value?.theme?.page?.backgroundColor
   return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : '#FFFFFF'
+})
+const menuItems = computed(() => {
+  const m = props.site?.menu
+  if (!m?.enabled) return []
+  return m.items.filter(it => it.enabled && props.site?.pages.some(p => p.id === it.page)).slice(0, 6)
 })
 /** M3: page background image (`upload:<id>` through the API client, or an http(s) URL) over the colour */
 const bgImageValue = computed(() => {
@@ -62,9 +70,16 @@ function paragraphs(b: MssgBlockProjection): string[] {
   return mssgHtmlToText(str(b.fields.html)).split(/\n+/).filter(Boolean).slice(0, 6)
 }
 function linkTarget(b: MssgBlockProjection): string {
-  const a = b.fields.action as Record<string, unknown> | undefined
-  if (a?.type === 'page') return `→ ${props.site?.pages.find(p => p.id === a.page)?.name ?? 'หน้าภายใน'}`
-  return host(a?.url)
+  return mssgActionText(b.fields.action, props.site)
+}
+/** v1.6: the block's style override (approximate) */
+function blockStyle(b: MssgBlockProjection) {
+  return mssgPreviewStyle(b.fields, b.kind)
+}
+function glyphText(it: Record<string, unknown>): string {
+  const g = (it.glyph ?? {}) as Record<string, unknown>
+  if (g.type === 'icon' && typeof g.icon === 'string') return g.icon
+  return str(g.value) || '•'
 }
 function countdown(b: MssgBlockProjection): string {
   const t = new Date(str(b.fields.expireDate)).getTime()
@@ -106,6 +121,20 @@ function countdown(b: MssgBlockProjection): string {
         <span class="truncate text-[11px] opacity-70" data-testid="me-preview-url">{{ url }}</span>
         <span v-if="page && page.id !== home?.id" class="truncate text-[11px] opacity-70" data-testid="me-preview-page">หน้า: {{ page.name }} (/{{ page.slug }})</span>
       </div>
+      <nav
+        v-if="menuItems.length > 1"
+        aria-label="เมนูของเว็บ (ตัวอย่าง)"
+        class="flex gap-1 overflow-x-auto border-b border-current/10 px-3 py-1.5"
+        data-testid="me-preview-menu"
+        :data-count="menuItems.length"
+      >
+        <span
+          v-for="it in menuItems"
+          :key="it.page"
+          class="shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+          :class="it.page === page?.id ? 'bg-current/15 font-medium' : 'opacity-75'"
+        >{{ it.label }}</span>
+      </nav>
       <div class="flex flex-1 flex-col gap-2.5 p-4">
         <p v-if="!page" class="py-10 text-center text-xs opacity-70" data-testid="me-preview-empty">
           เว็บนี้ยังไม่มีหน้า
@@ -120,21 +149,36 @@ function countdown(b: MssgBlockProjection): string {
           data-testid="me-preview-block"
           :data-kind="b.kind"
           :data-block-id="b.id"
+          :data-styled="Object.keys(blockStyle(b).style).length ? 'true' : 'false'"
+          :data-style-mode="blockStyle(b).mode ?? ''"
         >
           <!-- Profile -->
           <div v-if="b.kind === 'Hat'" class="flex flex-col items-center gap-1.5 py-1 text-center">
             <MssgEditorImage
-              v-if="str(b.fields.image)"
+              v-if="str(b.fields.bgUrl)"
               :site-id="siteId"
-              :value="str(b.fields.image)"
+              :value="str(b.fields.bgUrl)"
+              alt=""
+              class="h-20 w-full rounded-lg"
+            />
+            <MssgEditorImage
+              v-if="str(b.fields.logoUrl)"
+              :site-id="siteId"
+              :value="str(b.fields.logoUrl)"
               alt=""
               class="size-16 rounded-full"
+              :class="str(b.fields.bgUrl) ? '-mt-8 ring-2 ring-current/20' : ''"
             />
-            <span v-if="str(b.fields.header)" class="text-base font-semibold break-words">{{ b.fields.header }}</span>
-            <span v-if="str(b.fields.subheader)" class="text-xs break-words opacity-75">{{ b.fields.subheader }}</span>
+            <span v-if="str(b.fields.title)" class="text-base font-semibold break-words">{{ b.fields.title }}</span>
+            <span v-if="str(b.fields.subtitle)" class="text-xs break-words opacity-75">{{ b.fields.subtitle }}</span>
           </div>
           <!-- Link -->
-          <div v-else-if="b.kind === 'Link'" class="flex min-h-11 flex-col items-center justify-center rounded-xl bg-current/10 px-3 py-2 text-center">
+          <div
+            v-else-if="b.kind === 'Link'"
+            class="mx-auto flex min-h-11 w-full flex-col items-center justify-center rounded-xl bg-current/10 px-3 py-2 text-center"
+            :class="{ 'shadow-md': blockStyle(b).mode === 'card', 'aspect-square max-w-[50%]': blockStyle(b).mode === 'square' || blockStyle(b).mode === 'grid', 'min-h-20': blockStyle(b).mode === 'tall' }"
+            :style="blockStyle(b).style"
+          >
             <span class="text-sm font-medium break-words">{{ str(b.fields.title) || 'ลิงก์' }}</span>
             <span v-if="linkTarget(b)" class="max-w-full truncate text-[10px] opacity-60">{{ linkTarget(b) }}</span>
           </div>
@@ -198,20 +242,26 @@ function countdown(b: MssgBlockProjection): string {
           <!-- Features -->
           <div v-else-if="b.kind === 'Features'" class="flex flex-col gap-1.5">
             <div v-for="(it, k) in arr(b.fields.items).slice(0, 5)" :key="k" class="flex gap-2 text-sm">
-              <span aria-hidden="true">{{ str((it.glyph as Record<string, unknown> | undefined)?.value) || '•' }}</span>
+              <span class="shrink-0 rounded bg-current/10 px-1 text-[10px] leading-5 opacity-80" aria-hidden="true">{{ glyphText(it) }}</span>
               <span class="flex min-w-0 flex-col">
                 <span class="font-medium break-words">{{ str(it.title) }}</span>
-                <span v-if="str(it.text)" class="text-xs break-words opacity-75">{{ str(it.text) }}</span>
+                <span v-if="str(it.content)" class="text-xs break-words opacity-75">{{ str(it.content) }}</span>
               </span>
             </div>
           </div>
           <!-- Messengers / Socials -->
-          <div v-else-if="b.kind === 'Messengers' || b.kind === 'Socials'" class="flex flex-wrap justify-center gap-1.5">
+          <div
+            v-else-if="b.kind === 'Messengers' || b.kind === 'Socials'"
+            class="flex flex-wrap justify-center gap-1.5"
+            :class="{ 'flex-col items-stretch': blockStyle(b).mode === 'list' }"
+          >
             <span
               v-for="(it, k) in arr(b.kind === 'Messengers' ? b.fields.messengers : b.fields.items).filter(x => x.enabled !== false).slice(0, 8)"
               :key="k"
-              class="rounded-full bg-current/10 px-2.5 py-1 text-[11px]"
-            >{{ b.kind === 'Messengers' ? str(it.platform) : (host(it.url) || 'link') }}</span>
+              class="rounded-full bg-current/10 px-2.5 py-1 text-center text-[11px]"
+              :class="{ 'px-4 py-2 text-xs': blockStyle(b).mode === 'beefy' }"
+              :style="blockStyle(b).style"
+            >{{ b.kind === 'Messengers' ? (MSSG_MESSENGER_PLATFORM_LABEL[str(it.platform)] ?? str(it.platform)) : (host(it.url) || 'link') }}</span>
           </div>
           <!-- Form -->
           <div v-else-if="b.kind === 'SubscriptionForm'" class="flex flex-col gap-1.5 rounded-lg border border-current/20 p-2.5">

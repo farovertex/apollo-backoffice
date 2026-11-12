@@ -35,7 +35,7 @@ const site = (): MssgSiteProjection => ({
   homePageId: 'p1', crm: null,
   pages: [
     { id: 'p1', name: 'Homepage', slug: 'home', enabled: true, seo: { title: '', description: '' }, theme: null, blocks: [
-      { id: 'b1', kind: 'Hat', enabled: true, fields: { header: 'Hi' } },
+      { id: 'b1', kind: 'Hat', enabled: true, fields: { title: 'Hi' } },
       { id: 'b2', kind: 'Link', enabled: true, fields: { title: 'Go', action: { type: 'url', url: 'https://a.b' }, schemaVersion: 2, items: [] } },
       { id: 'b3', kind: 'TextRich', enabled: false, fields: { html: '<p>x</p>' } }
     ] },
@@ -168,7 +168,10 @@ describe('rules', () => {
     expect(ok('Link', { title: 'Go', action: { type: 'url', url: 'ftp://x.y' } })).toBe(false)
     expect(ok('Link', { title: '', action: { type: 'page', page: 'p1' } })).toBe(false)
     expect(ok('Link', { title: 'Go', action: { type: 'page', page: 'p1' } })).toBe(true)
-    expect(ok('Link', { title: 'Go', action: { type: 'call', phone: '1' } })).toBe(true)
+    // v1.6: tel / email / sms / anchor are editable (a type mssg holds that Apollo does not know stays as read)
+    expect(ok('Link', { title: 'Go', action: { type: 'tel', url: '+66 81 234 5678' } })).toBe(true)
+    expect(ok('Link', { title: 'Go', action: { type: 'tel', url: 'tel:0812' } })).toBe(false)
+    expect(ok('Link', { title: 'Go', action: { type: 'whatsappChat', phone: '1' } })).toBe(true)
   })
   it('Map 10–300, Accordion items 3+, AudioEmbed hosts, Image needs an upload or url', () => {
     expect(ok('Map', { address: 'short' })).toBe(false)
@@ -176,8 +179,8 @@ describe('rules', () => {
     expect(ok('Accordion', { items: [] })).toBe(false)
     expect(mssgIsAudioUrl('https://open.spotify.com/track/1')).toBe(true)
     expect(mssgIsAudioUrl('https://vimeo.com/1')).toBe(false)
-    expect(ok('Image', { url: 'upload:0123456789abcdef01234567', action: { type: 'none' } })).toBe(true)
-    expect(ok('Image', { url: '', action: { type: 'none' } })).toBe(false)
+    expect(ok('Image', { url: 'upload:0123456789abcdef01234567', action: { type: 'nothing' } })).toBe(true)
+    expect(ok('Image', { url: '', action: { type: 'nothing' } })).toBe(false)
   })
   it('default fields of every kind are invalid only where the contract requires input', () => {
     const optional = ['Hat', 'Divider', 'Products', 'SubscriptionForm']

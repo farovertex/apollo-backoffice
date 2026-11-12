@@ -9,13 +9,17 @@
  * - edit: every change that leaves the whole form valid emits `change` with the keys changed since the form opened
  *   (a key once changed keeps being sent, so changing it back also reaches the draft); an invalid state sends nothing.
  * Server messages (draft 400, apply `mssgValidation`) arrive in `errors` keyed by field path (`title`, `items.0.title`).
- * Not in FEAT-101 (spec scope/out) and rendered disabled "เร็ว ๆ นี้" with no handler: Link icon / emoji / custom
- * icon image, Link actions other than open-link / internal page, Feature emoji, per-block style controls.
+ * v1.6 (B2r): proven shapes (Hat `title/subtitle/logoUrl/bgUrl`, Features `content` + icon glyph, Messengers platform /
+ * type pairs, gallery image actions), the actions of §3.4 (`ActionFields`), the "รูปแบบ" section (`BlockStyle`, its
+ * touched keys go out as `fields.theme.blocks.<kind>`). Still disabled "เร็ว ๆ นี้" (shape unknown) and sending nothing:
+ * Link icon / emoji / custom icon image; "+ เพิ่มลิงก์" adds another Link block (contract v1.4 #2).
  *
  * Test ids: `me-block-form` (`data-kind`, `data-mode`), fields `me-block-field-<path>` + `me-block-field-error-<path>`,
- * uploads `me-upload-<Kind>.<path>`, list rows `me-block-item-<i>`, `me-block-item-add`, `me-block-item-remove-<i>`,
- * `me-block-link-action`, `me-block-link-page`, `me-block-link-icon-soon`, `me-block-link-add`, `me-block-style-soon`,
- * `me-block-new-enabled`, `me-block-new-ok`, `me-block-new-cancel`, `me-block-form-close`.
+ * uploads `me-upload-<Kind>.<path>`, list rows `me-block-item-<i>` (`data-readonly` for a Messengers platform Apollo cannot
+ * edit), `me-block-item-add`, `me-block-item-remove-<i>`, `me-block-link-action`, `me-block-link-page`, `me-block-image-action`,
+ * `me-block-field-images.<i>.action.type`, the action inputs of `ActionFields`, `me-block-icon-suggest-<i>-<name>`,
+ * `me-block-link-icon-soon`, `me-block-link-add`, the style section of `BlockStyle`, `me-block-new-enabled`,
+ * `me-block-new-ok`, `me-block-new-cancel`, `me-block-form-close`.
  */
 import type { MssgPageProjection } from '#shared/types/mssg-sites'
 
@@ -25,12 +29,16 @@ const props = withDefaults(defineProps<{
   fields: Record<string, unknown>
   mode: 'new' | 'edit'
   siteId: string
-  /** pages of the draft (Link → "เปิดหน้าภายใน") */
-  pages: Pick<MssgPageProjection, 'id' | 'name'>[]
+  /** pages of the draft with their blocks (internal page / anchor targets) */
+  pages: MssgPageProjection[]
   readOnly?: boolean
   /** server messages by field path */
   errors?: Record<string, string>
-}>(), { readOnly: false, errors: () => ({}) })
+  /** v1.6: the page's style defaults of this kind (`mssgStyleDefaults`), `null` = nothing to adjust */
+  styleDefaults?: Record<string, unknown> | null
+  /** v1.6: icon names already used on the site's Features blocks (suggestions) */
+  icons?: string[]
+}>(), { readOnly: false, errors: () => ({}), styleDefaults: null, icons: () => [] })
 
 const emit = defineEmits<{
   change: [fields: Record<string, unknown>]
@@ -41,9 +49,16 @@ const emit = defineEmits<{
 }>()
 
 const def = computed(() => MSSG_BLOCK_KINDS.find(k => k.kind === props.kind))
-const schema = computed(() => MSSG_BLOCK_SCHEMAS[props.kind] ?? null)
+/** the kind's rules with the draft's pages, so an internal page / anchor must exist in the preview (contract §3.4) */
+const schema = computed(() => mssgBlockSchema(props.kind, { pages: props.pages }))
 
-const original = props.mode === 'new' ? mssgBlockDefaults(props.kind) : JSON.parse(JSON.stringify(props.fields ?? {})) as Record<string, unknown>
+function newDefaults(): Record<string, unknown> {
+  const d = mssgBlockDefaults(props.kind)
+  // Features: a new item starts with the first icon the site already uses (⚠K20: names are not otherwise known)
+  if (props.kind === 'Features' && props.icons[0]) d.items = [{ title: '', content: '', glyph: { type: 'icon', icon: props.icons[0] } }]
+  return d
+}
+const original = props.mode === 'new' ? newDefaults() : JSON.parse(JSON.stringify(props.fields ?? {})) as Record<string, unknown>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the state's shape depends on the kind (zod checks it)
 const state = reactive<Record<string, any>>(mssgBlockToForm(props.kind, original))
 /** what the untouched form would send — the base of "changed" */
@@ -55,17 +70,32 @@ function err(path: string): string | null {
   return props.errors?.[path] ?? null
 }
 
-watch(state, () => {
+// v1.6 style override: the keys touched in `BlockStyle` (value or `null`) and whether they are all valid
+const styleTouched = shallowRef<Record<string, unknown>>({})
+const styleValid = ref(true)
+function onStyle(p: { touched: Record<string, unknown>, valid: boolean }) {
+  styleTouched.value = p.touched
+  styleValid.value = p.valid
+}
+
+watch([state, styleTouched, styleValid], () => {
   if (props.mode !== 'edit' || props.readOnly || !schema.value) return
-  if (!schema.value.safeParse(state).success) return
+  if (!styleValid.value || !schema.value.safeParse(state).success) return
   const next = mssgFormToBlock(props.kind, state, original)
   for (const k of Object.keys(mssgChangedKeys(next, baseline))) touched.add(k)
-  if (!touched.size) return
-  emit('change', Object.fromEntries([...touched].map(k => [k, next[k]])))
+  const out: Record<string, unknown> = Object.fromEntries([...touched].map(k => [k, next[k]]))
+  const theme = mssgStylePatch(props.kind, styleTouched.value)
+  if (theme) out.theme = theme
+  if (!Object.keys(out).length) return
+  emit('change', out)
 }, { deep: true })
 
 function onSubmit() {
-  emit('submit', { fields: mssgFormToBlock(props.kind, state, original), enabled: showNow.value })
+  if (!styleValid.value) return
+  const fields = mssgCreateFields(props.kind, mssgFormToBlock(props.kind, state, original))
+  const theme = mssgStylePatch(props.kind, styleTouched.value, true)
+  if (theme) fields.theme = theme
+  emit('submit', { fields, enabled: showNow.value })
 }
 
 // ── lists ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -95,10 +125,9 @@ const rows = computed<any[]>(() => (listKey.value && Array.isArray(state[listKey
 function addRow() {
   const key = listKey.value
   if (!key) return
-  const first = (mssgBlockDefaults(props.kind)[key] as unknown[] | undefined)?.[0] ?? {}
+  const first = (newDefaults()[key] as unknown[] | undefined)?.[0] ?? {}
   const row = JSON.parse(JSON.stringify(first)) as Record<string, unknown>
   if (props.kind === 'SubscriptionForm') Object.assign(row, { type: 'text', label: '', required: false })
-  if (props.kind === 'Features') Object.assign(row, { title: '', text: '' })
   state[key] = [...rows.value, row]
 }
 function removeRow(i: number) {
@@ -107,28 +136,45 @@ function removeRow(i: number) {
   state[key] = rows.value.filter((_, k) => k !== i)
 }
 
-// ── Link / Image actions ────────────────────────────────────────────────────────────────────────────────────────────
-const linkActionItems = MSSG_LINK_ACTIONS.map(a => ({ label: a.soon ? `${a.label} · ${MSSG_SOON}` : a.label, value: a.value, disabled: a.soon }))
-function setLinkAction(type: string) {
-  if (type === state.action?.type) return
-  if (type === 'url') state.action = { type: 'url', url: '' }
-  else if (type === 'page') state.action = { type: 'page', page: props.pages[0]?.id ?? '' }
+// ── actions (ActionFields) · server messages below an action path ───────────────────────────────────────────────────
+function actionErrors(prefix: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(props.errors ?? {})) {
+    if (k.startsWith(`${prefix}.`)) out[k.slice(prefix.length + 1)] = v
+  }
+  return out
 }
-const pageItems = computed(() => props.pages.map(p => ({ label: p.name, value: p.id })))
-const imageActionItems = [
-  { label: 'ไม่ทำอะไร (No action)', value: 'none' },
-  { label: 'เปิดลิงก์ (Open link)', value: 'url' },
-  { label: `เปิดหน้าภายใน · ${MSSG_SOON}`, value: 'page', disabled: true },
-  { label: `เปิดรูปเต็ม · ${MSSG_SOON}`, value: 'image', disabled: true }
-]
-function setImageAction(type: string) {
-  if (type === state.action?.type) return
-  state.action = type === 'url' ? { type: 'url', url: '' } : { type: 'none' }
+
+// ── Messengers (contract §3.4 pairs; a platform Apollo does not know is read-only) ──────────────────────────────────
+const platformItems = MSSG_MESSENGER_PLATFORMS.map(p => ({ label: MSSG_MESSENGER_PLATFORM_LABEL[p] ?? p, value: p }))
+function typeItems(platform: unknown) {
+  return (MSSG_MESSENGER_TYPES[String(platform)] ?? []).map(t => ({ label: MSSG_MESSENGER_TYPE_LABEL[t] ?? t, value: t }))
 }
-const messengerItems = computed(() => {
-  const known = new Set(MSSG_MESSENGER_PLATFORMS)
-  const extra = rows.value.map(r => String(r.platform ?? '')).filter(p => p && !known.has(p))
-  return [...MSSG_MESSENGER_PLATFORMS, ...new Set(extra)].map(p => ({ label: p.charAt(0).toUpperCase() + p.slice(1), value: p }))
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows keep the keys read from mssg
+function setPlatform(row: any, platform: string) {
+  row.platform = platform
+  row.type = mssgMessengerTypeFor(platform, row.type)
+}
+
+// ── Features icon (glyph `{ type: "icon", icon }`, ⚠K20) ────────────────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows keep the keys read from mssg
+function iconOf(row: any): string {
+  return row.glyph?.type === 'icon' && typeof row.glyph.icon === 'string' ? row.glyph.icon : ''
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows keep the keys read from mssg
+function setIcon(row: any, icon: string) {
+  // an emoji / other glyph read from mssg becomes an icon glyph as soon as a name is typed
+  row.glyph = row.glyph?.type === 'icon' ? { ...row.glyph, icon: icon.trim() } : { type: 'icon', icon: icon.trim() }
+}
+
+// ── style (BlockStyle): server messages of `theme.blocks.<kind>.<key>` by key ──────────────────────────────────────
+const styleErrors = computed(() => {
+  const prefix = `theme.blocks.${mssgStyleKindKey(props.kind)}.`
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(props.errors ?? {})) {
+    if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v
+  }
+  return out
 })
 
 const textHasFormatting = computed(() => props.kind === 'TextRich' && mssgHtmlHasFormatting(String(original.html ?? '')))
@@ -166,33 +212,51 @@ const T = 'me-block-field'
 
     <!-- Hat -->
     <template v-if="kind === 'Hat'">
-      <MssgEditorUploadField
-        v-model="state.image"
-        :site-id="siteId"
-        field="Hat.image"
-        label="รูปโปรไฟล์ / ภาพปก (Image)"
-        :disabled="readOnly"
-        :error="err('image')"
-      />
+      <div class="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <UFormField name="logoUrl" :error="err('logoUrl') || undefined">
+          <MssgEditorUploadField
+            v-model="state.logoUrl"
+            :site-id="siteId"
+            field="Hat.logoUrl"
+            label="รูปโปรไฟล์ (Logo)"
+            :disabled="readOnly"
+          />
+          <template #error="{ error: e }">
+            <span v-if="e" data-testid="me-block-field-error-logoUrl">{{ e }}</span>
+          </template>
+        </UFormField>
+        <UFormField name="bgUrl" :error="err('bgUrl') || undefined">
+          <MssgEditorUploadField
+            v-model="state.bgUrl"
+            :site-id="siteId"
+            field="Hat.bgUrl"
+            label="ภาพปก (Cover)"
+            :disabled="readOnly"
+          />
+          <template #error="{ error: e }">
+            <span v-if="e" data-testid="me-block-field-error-bgUrl">{{ e }}</span>
+          </template>
+        </UFormField>
+      </div>
       <MssgEditorFormText
-        v-model="state.header"
-        name="header"
+        v-model="state.title"
+        name="title"
         label="ชื่อ (Title)"
         :testid="T"
         :maxlength="250"
         counter
-        :error="err('header')"
+        :error="err('title')"
       />
       <MssgEditorFormText
-        v-model="state.subheader"
-        name="subheader"
+        v-model="state.subtitle"
+        name="subtitle"
         label="คำอธิบายสั้น (Subtitle)"
         :testid="T"
         textarea
         :rows="2"
         :maxlength="500"
         counter
-        :error="err('subheader')"
+        :error="err('subtitle')"
       />
     </template>
 
@@ -224,46 +288,16 @@ const T = 'me-block-field'
         </div>
         <span class="text-xs text-muted">เลือกไอคอน emoji หรือรูปไอคอนเอง · {{ MSSG_SOON }}</span>
       </div>
-      <UFormField label="กดแล้วทำอะไร (Action)" name="action" :error="err('action') || undefined">
-        <USelect
-          :model-value="state.action?.type"
-          :items="linkActionItems"
-          class="w-full"
-          data-testid="me-block-link-action"
-          @update:model-value="setLinkAction(String($event))"
-        />
-      </UFormField>
-      <MssgEditorFormText
-        v-if="state.action?.type === 'url'"
-        v-model="state.action.url"
-        name="action.url"
-        label="ปลายทาง"
-        placeholder="https://..."
-        :testid="T"
-        required
-        :error="err('action.url')"
+      <MssgEditorActionFields
+        v-model="state.action"
+        prefix="action"
+        type-testid="me-block-link-action"
+        page-testid="me-block-link-page"
+        :pages="pages"
+        :read-only="readOnly"
+        :errors="actionErrors('action')"
       />
-      <UFormField
-        v-else-if="state.action?.type === 'page'"
-        label="หน้าปลายทาง"
-        name="action.page"
-        required
-        :error="err('action.page') || undefined"
-      >
-        <USelect
-          v-model="state.action.page"
-          :items="pageItems"
-          class="w-full"
-          placeholder="เลือกหน้า"
-          data-testid="me-block-link-page"
-        />
-        <template #error="{ error: e }">
-          <span v-if="e" data-testid="me-block-field-error-action.page">{{ e }}</span>
-        </template>
-      </UFormField>
-      <p v-else class="text-xs text-muted">
-        การกดแบบนี้แก้ใน Apollo ไม่ได้ ({{ MSSG_SOON }}) · ค่าเดิมบน mssg ยังอยู่
-      </p>
+      <span v-if="err('action')" class="text-xs text-error" data-testid="me-block-field-error-action">{{ err('action') }}</span>
     </template>
 
     <!-- TextRich -->
@@ -300,25 +334,16 @@ const T = 'me-block-field'
           <span v-if="e" data-testid="me-block-field-error-url">{{ e }}</span>
         </template>
       </UFormField>
-      <UFormField label="กดแล้วทำอะไร (Action)" name="action">
-        <USelect
-          :model-value="state.action?.type"
-          :items="imageActionItems"
-          class="w-full"
-          data-testid="me-block-image-action"
-          @update:model-value="setImageAction(String($event))"
-        />
-      </UFormField>
-      <MssgEditorFormText
-        v-if="state.action?.type === 'url'"
-        v-model="state.action.url"
-        name="action.url"
-        label="ปลายทาง"
-        placeholder="https://..."
-        :testid="T"
-        required
-        :error="err('action.url')"
+      <MssgEditorActionFields
+        v-model="state.action"
+        prefix="action"
+        image
+        type-testid="me-block-image-action"
+        :pages="pages"
+        :read-only="readOnly"
+        :errors="actionErrors('action')"
       />
+      <span v-if="err('action')" class="text-xs text-error" data-testid="me-block-field-error-action">{{ err('action') }}</span>
     </template>
 
     <!-- single URL kinds -->
@@ -433,7 +458,19 @@ const T = 'me-block-field'
               required
               :disabled="readOnly"
             />
+            <template #error="{ error: e }">
+              <span v-if="e" :data-testid="`me-block-field-error-images.${i}.url`">{{ e }}</span>
+            </template>
           </UFormField>
+          <MssgEditorActionFields
+            v-model="row.action"
+            :prefix="`images.${i}.action`"
+            image
+            :type-testid="`me-block-field-images.${i}.action.type`"
+            :pages="pages"
+            :read-only="readOnly"
+            :errors="actionErrors(`images.${i}.action`)"
+          />
         </template>
         <MssgEditorFormText
           v-else-if="kind === 'VideoGallery' || kind === 'Socials'"
@@ -468,9 +505,41 @@ const T = 'me-block-field'
           />
         </template>
         <template v-else-if="kind === 'Features'">
-          <div class="flex items-center gap-2 text-xs text-muted" data-soon="true">
-            <span class="text-lg" aria-hidden="true">{{ row.glyph?.value ?? '⭐' }}</span>
-            <span>emoji ของจุดเด่น · เปลี่ยนได้ {{ MSSG_SOON }}</span>
+          <div class="flex min-w-0 flex-col gap-1.5">
+            <MssgEditorFormText
+              :model-value="iconOf(row)"
+              :name="`items.${i}.glyph.icon`"
+              label="ไอคอน (Icon)"
+              placeholder="ชื่อไอคอน เช่น star"
+              description="ชื่อไอคอนของ mssg (a-z ตัวเล็ก ตัวเลข _ -) · ไม่รองรับ emoji"
+              :testid="T"
+              :maxlength="64"
+              required
+              :error="err(`items.${i}.glyph.icon`) || err(`items.${i}.glyph`)"
+              @update:model-value="setIcon(row, $event)"
+            />
+            <span v-if="row.glyph && row.glyph.type !== 'icon'" class="text-xs break-words text-muted" :data-testid="`me-block-glyph-kept-${i}`">
+              ตอนนี้เป็น {{ row.glyph.type }} {{ row.glyph.value ?? '' }} จาก mssg · ใส่ชื่อไอคอนเพื่อเปลี่ยน (ไม่ใส่ = คงค่าเดิม)
+            </span>
+            <div
+              v-if="icons.length"
+              class="flex flex-wrap items-center gap-1"
+              role="group"
+              aria-label="ไอคอนที่ใช้ในเว็บนี้"
+            >
+              <span class="text-[11px] text-dimmed">ที่ใช้ในเว็บนี้:</span>
+              <UButton
+                v-for="ic in icons.slice(0, 12)"
+                :key="ic"
+                :label="ic"
+                size="xs"
+                :color="iconOf(row) === ic ? 'primary' : 'neutral'"
+                :variant="iconOf(row) === ic ? 'subtle' : 'outline'"
+                :disabled="readOnly"
+                :data-testid="`me-block-icon-suggest-${i}-${ic}`"
+                @click="setIcon(row, ic)"
+              />
+            </div>
           </div>
           <MssgEditorFormText
             v-model="row.title"
@@ -482,42 +551,69 @@ const T = 'me-block-field'
             :error="err(`items.${i}.title`)"
           />
           <MssgEditorFormText
-            v-model="row.text"
-            :name="`items.${i}.text`"
-            label="คำอธิบาย"
+            v-model="row.content"
+            :name="`items.${i}.content`"
+            label="คำอธิบาย (Content)"
             :testid="T"
             textarea
             :rows="2"
             :maxlength="1000"
-            :error="err(`items.${i}.text`)"
+            :error="err(`items.${i}.content`)"
           />
         </template>
         <template v-else-if="kind === 'Messengers'">
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-[10rem_1fr]">
-            <UFormField label="แอปแชท" :name="`messengers.${i}.platform`">
-              <USelect
-                v-model="row.platform"
-                :items="messengerItems"
-                class="w-full"
-                :data-testid="`me-block-field-messengers.${i}.platform`"
-              />
-            </UFormField>
+          <div
+            v-if="row.platform && !mssgMessengerEditable(row.platform)"
+            class="flex min-w-0 flex-col gap-0.5 text-sm"
+            :data-testid="`me-block-field-messengers.${i}.platform`"
+            data-readonly="true"
+          >
+            <span class="font-medium break-words text-highlighted">{{ row.platform }} · {{ row.value }}</span>
+            <span class="text-xs text-muted">แอปนี้ Apollo ยังแก้ไม่ได้ · ส่งกลับตามค่าเดิมบน mssg</span>
+          </div>
+          <template v-else>
+            <div class="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+              <UFormField label="แอปแชท (Platform)" :name="`messengers.${i}.platform`" :error="err(`messengers.${i}.platform`) || undefined">
+                <USelect
+                  :model-value="row.platform || undefined"
+                  :items="platformItems"
+                  class="w-full"
+                  placeholder="เลือกแอป"
+                  :disabled="readOnly"
+                  :data-testid="`me-block-field-messengers.${i}.platform`"
+                  @update:model-value="setPlatform(row, String($event))"
+                />
+              </UFormField>
+              <UFormField label="แบบของปุ่ม (Type)" :name="`messengers.${i}.type`" :error="err(`messengers.${i}.type`) || undefined">
+                <USelect
+                  v-model="row.type"
+                  :items="typeItems(row.platform)"
+                  class="w-full"
+                  :disabled="readOnly || !row.platform"
+                  :data-testid="`me-block-field-messengers.${i}.type`"
+                />
+                <template #error="{ error: e }">
+                  <span v-if="e" :data-testid="`me-block-field-error-messengers.${i}.type`">{{ e }}</span>
+                </template>
+              </UFormField>
+            </div>
             <MssgEditorFormText
               v-model="row.value"
               :name="`messengers.${i}.value`"
-              label="ช่องทางติดต่อ"
+              label="ช่องทางติดต่อ (Value)"
               placeholder="เบอร์ / @username / ลิงก์"
               :testid="T"
               :maxlength="250"
               required
               :error="err(`messengers.${i}.value`)"
             />
-          </div>
-          <USwitch
-            v-model="row.enabled"
-            label="แสดงปุ่มนี้"
-            :data-testid="`me-block-field-messengers.${i}.enabled`"
-          />
+            <USwitch
+              v-model="row.enabled"
+              label="แสดงปุ่มนี้"
+              :disabled="readOnly"
+              :data-testid="`me-block-field-messengers.${i}.enabled`"
+            />
+          </template>
         </template>
         <template v-else-if="kind === 'SubscriptionForm'">
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-[10rem_1fr]">
@@ -605,29 +701,15 @@ const T = 'me-block-field'
       @click="emit('addLink')"
     />
 
-    <!-- per-block style controls: not in FEAT-101 (spec scope/out) -->
-    <fieldset
-      disabled
-      class="flex min-w-0 flex-col gap-2 rounded-md border border-dashed border-default p-2.5 opacity-70"
-      data-testid="me-block-style-soon"
-      data-soon="true"
-    >
-      <legend class="px-1 text-xs text-muted">
-        การตกแต่ง block · {{ MSSG_SOON }}
-      </legend>
-      <div class="flex flex-wrap gap-2">
-        <UButton
-          v-for="s in ['รูปแบบ (Template)', 'สีพื้น', 'สีตัวอักษร', 'ความกว้าง', 'มุมโค้ง', 'เส้นขอบ', 'ระยะห่าง']"
-          :key="s"
-          :label="s"
-          color="neutral"
-          variant="outline"
-          size="xs"
-          disabled
-          :title="MSSG_SOON"
-        />
-      </div>
-    </fieldset>
+    <!-- v1.6 per-block style override -->
+    <MssgEditorBlockStyle
+      :kind="kind"
+      :defaults="styleDefaults"
+      :fields="original"
+      :read-only="readOnly"
+      :errors="styleErrors"
+      @update="onStyle"
+    />
 
     <div v-if="mode === 'new'" class="flex flex-wrap items-center justify-between gap-3 border-t border-default pt-3">
       <USwitch v-model="showNow" label="แสดง block นี้ทันที" data-testid="me-block-new-enabled" />
