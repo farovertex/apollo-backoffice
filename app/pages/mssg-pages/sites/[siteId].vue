@@ -18,10 +18,19 @@
  * Step 2 (B2): pages and blocks (`MssgEditorPagesStep`); the page selected there is also the one the mobile preview
  * shows. Step 3 (B3) page look and step 4 (B3) SEO / tracking / embed code; step 5 (B4) store, products and customer data (`MssgEditorStoreStep`, "ดึงข้อมูลร้านค้าใหม่" = `POST …/store/read` followed like an apply). The current step lives in `?step=` so a reload stays on it.
  * "แก้ไขล่าสุดโดย" = `lastSuccessfulApply` (v1.1; kept after a failed save).
+ *
+ * B5 (M5, AC-34..37, D6; contract §4.2 / §4.3 / §4.6): step 1 own domain (`MssgEditorDomainSection`: connect / check /
+ * disconnect = `mssgDomain` job), duplicate (confirm → `mssgSiteDuplicate`; on success the copy = the account's site
+ * that was not there before the request → link to its editor) and delete website (`MssgEditorDeleteSiteModal`: exact
+ * name → `mssgSiteDelete`; the poll's 404 at its end sends the user back to `/mssg-pages` with a notice). All three are
+ * disabled with the reason while the account / site is busy (contract v1.6 #9: `view.account.job` of any type), the
+ * account is not connected or the site is gone; delete also for a GOD outside their own area (403 `ownAreaOnly`). A
+ * failed lifecycle job shows in `me-apply-error` (`data-type` = its job type) with the Thai text of `lastError.code`.
  */
-import type { MssgAccountView } from '#shared/types/mssg-accounts'
+import type { MssgAccountView, MssgSite } from '#shared/types/mssg-accounts'
 import type { MssgSiteView, MssgStepNo } from '#shared/types/mssg-sites'
 import type { MssgSiteSettingsForm } from '~/utils/mssg-sites'
+import type { MssgDomainAction } from '~/composables/useMssgDraft'
 
 useSeoMeta({ title: 'แก้ไขเว็บ · mssg Pages' })
 definePageMeta({ middleware: 'mssg-pages-access' })
@@ -43,6 +52,10 @@ const noticeOk = ref(false)
 function onJobEnd(v: MssgSiteView) {
   const job = v.job
   if (!job) return
+  if (mssgIsLifecycleJob(job.type)) {
+    onLifecycleEnd(v)
+    return
+  }
   if (job.type !== 'mssgApply') {
     const isStore = job.type === 'mssgStoreRead'
     if (job.status === 'completed') toast.add({ title: isStore ? 'ดึงข้อมูลร้านค้าแล้ว' : 'งานเสร็จแล้ว', color: 'success' })
@@ -80,6 +93,12 @@ const draft = useMssgDraft(siteId, {
   onAccountJobEnd: () => {
     // a relogin modal that is open shows the account: refresh it
     if (account.value) void loadAccount()
+  },
+  // B5: the 404 at the end of a delete this page requested is its success
+  onGone: () => {
+    if (!deleteRequested.value) return false
+    leaveAfterDelete()
+    return true
   }
 })
 const view = draft.view
@@ -252,12 +271,164 @@ function onAddForm() {
   goStep(2)
 }
 
+// ── site lifecycle (B5, M5) ─────────────────────────────────────────────────────────────────────────────────────────
+/** what every lifecycle control waits for, or `null` (the API's 409 stays the authority) */
+const lifecycleBlocked = computed<string | null>(() => {
+  const v = view.value
+  if (!v) return 'กำลังโหลด'
+  if (v.gone) return MSSG_CONFLICT_TEXT.siteGone
+  if (v.account?.status !== 'connected') return MSSG_CONFLICT_TEXT.notConnected
+  if (draft.jobOpen.value) return mssgOwnJobText(v.job)
+  if (accountBusy.value) return MSSG_CONFLICT_TEXT.jobInProgress
+  if (draft.requesting.value) return 'กำลังทำงานอยู่'
+  return null
+})
+/** a 403 `ownAreaOnly` came back although the page did not expect it (e.g. stale area data) */
+const ownAreaRefused = ref(false)
+const deleteBlocked = computed(() => (isOtherArea.value || ownAreaRefused.value ? MSSG_FORBIDDEN_TEXT.ownAreaOnly : lifecycleBlocked.value))
+/** the site's own lifecycle job while it is open */
+const lifecycleRunning = computed(() => {
+  const j = view.value?.job
+  return draft.jobOpen.value && j && mssgIsLifecycleJob(j.type) ? j.type : null
+})
+/** a failed lifecycle job of this site (the site's last job), shown in `me-apply-error` */
+const lifecycleProblem = computed(() => {
+  const v = view.value
+  const j = v?.job
+  if (!v || !j || !mssgIsLifecycleJob(j.type) || j.status !== 'failed') return null
+  const code = v.lastError?.code ?? ''
+  return {
+    type: j.type,
+    code,
+    title: mssgLifecycleFailTitle(j.type),
+    text: mssgErrorText(code || undefined),
+    detail: v.lastError?.message ?? ''
+  }
+})
+
+/** the account's Apollo site ids (for the duplicate's "which one is the copy"); `null` when it could not be read */
+async function accountSites(): Promise<MssgSite[] | null> {
+  const id = view.value?.accountId
+  if (!id) return null
+  try {
+    const acc = await api<MssgAccountView>(`/mssg-accounts/${encodeURIComponent(id)}`, { retry: 0 })
+    return acc.sites
+  } catch {
+    return null
+  }
+}
+function editorLink(id: string) {
+  const ws = isOtherArea.value ? view.value?.workspaceId : ''
+  return { path: `/mssg-pages/sites/${encodeURIComponent(id)}`, query: ws ? { workspaceId: ws } : undefined }
+}
+
+// duplicate
+const duplicateOpen = ref(false)
+let duplicateBaseline: string[] | null = null
+const duplicateDone = ref<{ copy: MssgSite | null } | null>(null)
+async function onDuplicateConfirm() {
+  if (lifecycleBlocked.value) {
+    duplicateOpen.value = false
+    return
+  }
+  duplicateDone.value = null
+  const before = await accountSites()
+  const res = await draft.duplicate()
+  duplicateOpen.value = false
+  if (res.ok) {
+    duplicateBaseline = before ? before.map(x => x.id).filter((x): x is string => !!x) : null
+    toast.add({ title: 'สั่งทำสำเนาเว็บแล้ว', description: 'สำเนาจะขึ้นในบัญชีนี้เมื่อเสร็จ', color: 'info' })
+  } else {
+    toast.add({ title: 'ทำสำเนาเว็บไม่ได้', description: res.message, color: res.status === 409 ? 'warning' : 'error' })
+  }
+}
+
+// delete
+const deleteOpen = ref(false)
+const deleteError = ref<string | null>(null)
+const deleteRequested = ref(false)
+let deleteBack: ReturnType<typeof backToFor> | null = null
+let deletedName = ''
+function openDelete() {
+  if (deleteBlocked.value) return
+  deleteError.value = null
+  deleteOpen.value = true
+}
+async function onDeleteConfirm(name: string) {
+  deleteError.value = null
+  const back = backTo.value
+  const siteName = view.value?.live?.name ?? view.value?.name ?? name
+  const res = await draft.deleteSite(name)
+  if (res.ok) {
+    deleteOpen.value = false
+    deleteRequested.value = true
+    deleteBack = back
+    deletedName = siteName
+    toast.add({ title: 'สั่งลบเว็บแล้ว', description: 'กลับไปรายการเว็บเมื่อ mssg ลบเสร็จ', color: 'info' })
+    return
+  }
+  if (res.status === 403 && res.reason === 'ownAreaOnly') ownAreaRefused.value = true
+  deleteError.value = res.message ?? MSSG_LIFECYCLE_TEXT.deleteFailed
+}
+function leaveAfterDelete() {
+  if (!deleteRequested.value) return
+  deleteRequested.value = false
+  const notice = { kind: 'deleted' as const, title: MSSG_LIFECYCLE_TEXT.deleteOk, description: `"${deletedName}" ถูกลบจาก mssg และจาก Apollo แล้ว`, color: 'success' as const }
+  useMssgPagesNotice().value = notice
+  toast.add({ title: notice.title, description: notice.description, color: 'success' })
+  void router.push(deleteBack ?? { path: '/mssg-pages' })
+}
+
+// own domain
+let domainAction: MssgDomainAction | null = null
+async function onDomain(action: MssgDomainAction, name?: string) {
+  if (lifecycleBlocked.value) return
+  domainAction = action
+  const res = await draft.domain(action, name)
+  if (!res.ok) {
+    domainAction = null
+    toast.add({ title: MSSG_LIFECYCLE_TEXT.domainFailed, description: res.message, color: res.status === 409 ? 'warning' : 'error' })
+  }
+}
+
+async function onLifecycleEnd(v: MssgSiteView) {
+  const job = v.job!
+  if (job.status === 'completed') {
+    if (job.type === 'mssgSiteDelete') {
+      leaveAfterDelete()
+      return
+    }
+    if (job.type === 'mssgSiteDuplicate') {
+      const after = await accountSites()
+      const added = after ? mssgNewSites(duplicateBaseline, after) : []
+      duplicateBaseline = null
+      duplicateDone.value = { copy: added[0] ?? null }
+      toast.add({ title: MSSG_LIFECYCLE_TEXT.duplicateOk, description: added[0]?.name, color: 'success' })
+      return
+    }
+    const st = mssgDomainStateOf(v.domain)
+    const title = domainAction === 'disconnect' ? 'ยกเลิกการเชื่อมโดเมนแล้ว' : domainAction === 'connect' ? 'ส่งคำขอเชื่อมโดเมนแล้ว' : 'ตรวจสถานะโดเมนแล้ว'
+    domainAction = null
+    toast.add({ title, description: st ? MSSG_DOMAIN_STATE[st].label : undefined, color: 'success' })
+    return
+  }
+  if (job.type === 'mssgSiteDelete') deleteRequested.value = false
+  if (job.type === 'mssgSiteDuplicate') duplicateBaseline = null
+  if (job.type === 'mssgDomain') domainAction = null
+  toast.add({
+    title: mssgLifecycleFailTitle(job.type),
+    description: job.status === 'cancelled' ? 'งานถูกยกเลิก' : mssgErrorText(v.lastError?.code),
+    color: 'error'
+  })
+  if (v.lastError?.code === 'mssgSessionExpired') void loadAccount()
+}
+
 // ── header / banners ────────────────────────────────────────────────────────────────────────────────────────────────
 const isOtherArea = computed(() => isGod.value && !!view.value && !!homeWorkspaceId.value && view.value.workspaceId !== homeWorkspaceId.value)
-const backTo = computed(() => {
-  const ws = isOtherArea.value ? view.value!.workspaceId : (typeof route.query.workspaceId === 'string' ? route.query.workspaceId : '')
+function backToFor(ws: string) {
   return ws && ws !== homeWorkspaceId.value ? { path: '/mssg-pages', query: { area: ws } } : { path: '/mssg-pages' }
-})
+}
+const backTo = computed(() => backToFor(isOtherArea.value ? view.value!.workspaceId : (typeof route.query.workspaceId === 'string' ? route.query.workspaceId : '')))
 const accountLabel = computed(() => (view.value ? (view.value.account?.nickname || view.value.account?.email || 'บัญชี mssg') : ''))
 const lastEdit = computed(() => {
   const v = view.value
@@ -382,6 +553,9 @@ onMounted(() => {
 watch(siteId, (id, prev) => {
   if (id && id !== prev) {
     account.value = null
+    duplicateDone.value = null
+    duplicateBaseline = null
+    ownAreaRefused.value = false
     void draft.load()
   }
 })
@@ -640,8 +814,77 @@ onBeforeRouteLeave(async () => {
             />
           </div>
 
+          <div
+            v-if="duplicateDone"
+            role="status"
+            class="flex flex-wrap items-center gap-3 rounded-lg border border-success/40 bg-success/10 px-4 py-3 text-sm text-success"
+            data-testid="me-duplicate-done"
+            :data-copy-id="duplicateDone.copy?.id ?? ''"
+          >
+            <span class="min-w-0 flex-1 basis-56 break-words">
+              {{ MSSG_LIFECYCLE_TEXT.duplicateOk }}<template v-if="duplicateDone.copy"> · <strong>{{ duplicateDone.copy.name }}</strong></template>
+            </span>
+            <UButton
+              v-if="duplicateDone.copy?.id"
+              label="เปิดแก้ไขสำเนา"
+              icon="i-lucide-arrow-right"
+              trailing
+              color="success"
+              variant="outline"
+              size="xs"
+              :to="editorLink(duplicateDone.copy.id)"
+              data-testid="me-duplicate-open"
+            />
+            <UButton
+              v-else
+              label="ดูในรายการเว็บ"
+              icon="i-lucide-list"
+              color="success"
+              variant="outline"
+              size="xs"
+              :to="backTo"
+              data-testid="me-duplicate-list"
+            />
+            <UButton
+              label="ปิด"
+              color="neutral"
+              variant="outline"
+              size="xs"
+              data-testid="me-duplicate-done-close"
+              @click="duplicateDone = null"
+            />
+          </div>
+
           <UAlert
-            v-if="applyProblem"
+            v-if="lifecycleProblem"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            :title="lifecycleProblem.title"
+            :data-code="lifecycleProblem.code"
+            data-status="failed"
+            :data-type="lifecycleProblem.type"
+            data-testid="me-apply-error"
+          >
+            <template #description>
+              <span class="flex flex-col gap-1">
+                <span class="break-words">{{ lifecycleProblem.text }}</span>
+                <span v-if="lifecycleProblem.detail" class="text-xs break-words opacity-80">{{ lifecycleProblem.detail }}</span>
+              </span>
+            </template>
+            <template v-if="lifecycleProblem.code === 'mssgSessionExpired'" #actions>
+              <UButton
+                label="เข้าสู่ระบบใหม่"
+                icon="i-lucide-log-in"
+                color="error"
+                size="xs"
+                data-testid="me-apply-relogin"
+                @click="openRelogin"
+              />
+            </template>
+          </UAlert>
+          <UAlert
+            v-else-if="applyProblem"
             :color="applyProblem.status === 'partial' ? 'warning' : 'error'"
             variant="subtle"
             icon="i-lucide-triangle-alert"
@@ -748,7 +991,32 @@ onBeforeRouteLeave(async () => {
                   :errors="step1Errors"
                   :reset-token="draft.resetToken.value"
                   @update="draft.updateSite"
-                />
+                >
+                  <template #domain>
+                    <MssgEditorDomainSection
+                      :domain="view.domain"
+                      :live-name="view.live?.domain?.name ?? null"
+                      :blocked-reason="lifecycleBlocked"
+                      :requesting="draft.requesting.value === 'domain'"
+                      :running="lifecycleRunning === 'mssgDomain'"
+                      :progress="mssgJobProgressText(view.job)"
+                      :reset-token="draft.resetToken.value"
+                      @connect="onDomain('connect', $event)"
+                      @check="onDomain('check')"
+                      @disconnect="onDomain('disconnect')"
+                    />
+                  </template>
+                  <template #lifecycle>
+                    <MssgEditorLifecycleActions
+                      :duplicate-reason="lifecycleBlocked"
+                      :delete-reason="deleteBlocked"
+                      :running-type="lifecycleRunning"
+                      :progress="mssgJobProgressText(view.job)"
+                      @duplicate="duplicateOpen = true"
+                      @delete="openDelete"
+                    />
+                  </template>
+                </MssgEditorSettingsStep>
                 <MssgEditorPagesStep
                   v-else-if="step === 2"
                   v-model:page="selectedPageId"
@@ -867,6 +1135,23 @@ onBeforeRouteLeave(async () => {
         :busy="draft.requesting.value === 'discard'"
         testid="me-confirm-discard"
         @confirm="onDiscard"
+      />
+      <MssgEditorConfirmModal
+        v-model:open="duplicateOpen"
+        :title="MSSG_LIFECYCLE_TEXT.duplicateConfirmTitle"
+        :description="MSSG_LIFECYCLE_TEXT.duplicateConfirm(view?.live?.name ?? view?.name ?? '')"
+        confirm-label="ทำสำเนา"
+        color="primary"
+        :busy="draft.requesting.value === 'duplicate'"
+        testid="me-duplicate-confirm"
+        @confirm="onDuplicateConfirm"
+      />
+      <MssgEditorDeleteSiteModal
+        v-model:open="deleteOpen"
+        :site-name="view?.live?.name ?? view?.name ?? ''"
+        :busy="draft.requesting.value === 'delete'"
+        :error="deleteError"
+        @confirm="onDeleteConfirm"
       />
       <MssgPagesConnectModal
         v-model:open="reloginOpen"

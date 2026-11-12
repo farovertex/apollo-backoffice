@@ -400,6 +400,21 @@ export interface MssgResolveBody {
   take: 'live' | 'mine'
 }
 
+/** M5 — `DELETE /mssg-sites/:id` (contract §4.3): the exact current live name, compared after trimming both sides */
+export interface MssgSiteDeleteBody {
+  confirmName: string
+}
+
+/** M5 — `PUT /mssg-sites/:id/domain` (contract §4.6) */
+export interface MssgDomainConnectBody {
+  name: string
+}
+
+/** M5 — `DELETE /mssg-sites/:id/domain` (contract §4.6; without `confirm: true` → 400) */
+export interface MssgDomainDisconnectBody {
+  confirm: true
+}
+
 /** 409 reasons of the site routes (contract §3.1, §4) */
 export type MssgSiteConflictReason
   = | 'draftChanged'

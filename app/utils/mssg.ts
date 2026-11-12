@@ -10,6 +10,7 @@ import type {
   MssgConflictReason,
   MssgErrorBody,
   MssgErrorCode,
+  MssgForbiddenReason,
   MssgJobStatus,
   MssgJobView,
   MssgSiteStatus
@@ -46,8 +47,8 @@ export const MSSG_ERROR_TEXT: Record<MssgErrorCode, string> = {
   mssgValidation: 'mssg ไม่รับค่าบางช่อง ดูข้อความใต้ช่องที่ต้องแก้ แล้วบันทึกอีกครั้ง',
   mssgConflict: 'ค่าบน mssg ถูกเปลี่ยนไปหลังจากเริ่มร่างนี้ ยังไม่ได้เขียนอะไร เลือกว่าจะใช้ค่าไหนแล้วบันทึกอีกครั้ง',
   mssgGuardRefused: 'ระบบหยุดคำสั่งที่ไม่ได้รับอนุญาตไว้ก่อนส่งไปที่ mssg แจ้งผู้ดูแลระบบ',
-  mssgPlanRequired: 'ต้องใช้แพ็กเกจ Business ของ mssg สำหรับการตั้งค่านี้',
-  mssgQuotaReached: 'บัญชี mssg นี้สร้างเว็บครบตามแพ็กเกจแล้ว',
+  mssgPlanRequired: 'ต้องใช้แพ็กเกจ Business ของ mssg สำหรับการตั้งค่านี้ (อัปเกรดแพ็กเกจที่ mssg ก่อนแล้วลองใหม่)',
+  mssgQuotaReached: 'mssg ไม่ให้สร้างเว็บเพิ่ม เพราะบัญชีนี้สร้างเว็บครบตามแพ็กเกจแล้ว ลบเว็บที่ไม่ใช้หรืออัปเกรดแพ็กเกจที่ mssg ก่อน',
   mssgNotFound: 'ไม่พบเว็บนี้บน mssg แล้ว อาจถูกลบไปจาก mssg'
 }
 
@@ -70,8 +71,16 @@ export const MSSG_CONFLICT_TEXT: Record<MssgConflictReason, string> = {
   confirmRequired: 'ร่างนี้มีการเปลี่ยนที่ย้อนกลับไม่ได้ ต้องยืนยันก่อนบันทึก',
   conflictPending: 'ยังมีค่าที่ขัดกับ mssg ต้องเลือกว่าจะใช้ค่าไหนก่อนบันทึก',
   noConflict: 'ไม่มีค่าที่ขัดกันแล้ว',
-  quotaReached: 'บัญชี mssg นี้สร้างเว็บครบตามแพ็กเกจแล้ว'
+  quotaReached: 'บัญชี mssg นี้สร้างเว็บครบตามแพ็กเกจแล้ว (ตามโควตาที่อ่านล่าสุด) ลบเว็บที่ไม่ใช้หรืออัปเกรดแพ็กเกจที่ mssg ก่อน'
 }
+
+/** FEAT-101 — 403 `reason` → Thai (contract §4.3) */
+export const MSSG_FORBIDDEN_TEXT: Record<MssgForbiddenReason, string> = {
+  ownAreaOnly: 'ลบเว็บได้เฉพาะเว็บในพื้นที่ของคุณเอง · เว็บนี้อยู่ในพื้นที่ของผู้ใช้อื่น'
+}
+
+/** FEAT-101 — 400 `{ error: 'confirmMismatch' }` of `DELETE /mssg-sites/:id` (contract §4.3) */
+export const MSSG_CONFIRM_MISMATCH_TEXT = 'ชื่อที่พิมพ์ไม่ตรงกับชื่อเว็บปัจจุบัน (ต้องตรงทุกตัวอักษร รวมตัวพิมพ์เล็ก-ใหญ่) ยังไม่ได้ลบอะไร'
 
 export const MSSG_STATUS_TEXT: Record<MssgAccountStatus, string> = {
   connecting: 'กำลังเชื่อม',
@@ -188,7 +197,7 @@ export interface MssgFailure {
   message: string
 }
 
-/** status + body + one Thai sentence for a failed request (409 reason, 502 provision, 404, else the API's text) */
+/** status + body + one Thai sentence for a failed request (409 reason, 502 provision, 403 reason, 400 confirmMismatch, 404, else the API's text) */
 export function mssgFailure(e: unknown, fallback: string): MssgFailure {
   const err = e as FetchError<Partial<MssgErrorBody>>
   const status = err.response?.status ?? err.statusCode
@@ -196,6 +205,8 @@ export function mssgFailure(e: unknown, fallback: string): MssgFailure {
   let message: string | undefined
   if (status === 409 && body?.reason) message = (MSSG_CONFLICT_TEXT as Record<string, string>)[body.reason]
   if (!message && status === 502 && body?.error === 'profileProvisionFailed') message = MSSG_ERROR_TEXT.profileProvisionFailed
+  if (!message && status === 403 && body?.reason) message = (MSSG_FORBIDDEN_TEXT as Record<string, string>)[body.reason]
+  if (!message && status === 400 && body?.error === 'confirmMismatch') message = MSSG_CONFIRM_MISMATCH_TEXT
   if (!message && status === 404) message = 'ไม่พบบัญชีหรือพื้นที่นี้'
   if (!message && status === 413) message = 'ไฟล์ใหญ่เกินกำหนด'
   if (!message && status === 403) message = 'คุณไม่มีสิทธิ์ใช้งานส่วนนี้'

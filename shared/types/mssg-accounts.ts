@@ -11,9 +11,20 @@ export type MssgSiteStatus = 'published' | 'unpublished' | 'unknown'
 
 /**
  * v2: `mssgLogout` is created by `DELETE /mssg-accounts/:id` only. FEAT-101 (contract §4.1): `mssgSiteCreate` is the
- * account's job of `POST /mssg-accounts/:id/sites`; the other site jobs live on the site view (`mssg-sites.ts`).
+ * account's job of `POST /mssg-accounts/:id/sites`. Contract v1.6 #9: while any mssg job of the account is open the
+ * account view shows **that** job, so every FEAT-101 site job type may appear here too.
  */
-export type MssgJobType = 'mssgConnect' | 'mssgSync' | 'mssgLogout' | 'mssgSiteCreate'
+export type MssgJobType
+  = | 'mssgConnect'
+    | 'mssgSync'
+    | 'mssgLogout'
+    | 'mssgSiteCreate'
+    | 'mssgApply'
+    | 'mssgSiteDuplicate'
+    | 'mssgSiteDelete'
+    | 'mssgDomain'
+    | 'mssgStoreRead'
+    | 'mssgAnalytics'
 
 export type MssgJobStatus = 'pending' | 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
 
@@ -157,7 +168,18 @@ export type MssgConflictReason
     | 'noConflict'
     | 'quotaReached'
 
-/** 409 `{ error: 'conflict', reason }`, 400 `{ error: 'validation', issues }`, 502 `{ error: 'profileProvisionFailed' }` */
+/** FEAT-101 — 403 `{ error: 'forbidden', reason }` (contract §4.3: delete website only in the actor's own area) */
+export type MssgForbiddenReason = 'ownAreaOnly'
+
+/** FEAT-101 — `POST /mssg-accounts/:id/sites` (contract §4.1); no name → `{}` */
+export interface MssgSiteCreateBody {
+  name?: string
+}
+
+/**
+ * 409 `{ error: 'conflict', reason }`, 400 `{ error: 'validation', issues }`, 502 `{ error: 'profileProvisionFailed' }`;
+ * FEAT-101: 400 `{ error: 'confirmMismatch' }`, 403 `{ error: 'forbidden', reason: 'ownAreaOnly' }`
+ */
 export interface MssgErrorBody {
   error: string
   reason?: MssgConflictReason | string

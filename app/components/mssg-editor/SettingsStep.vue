@@ -8,11 +8,11 @@
  * Server messages (400 of the draft PUT, `mssgValidation` of an apply) come in as `errors` keyed by the form key
  * and are bound to each `UFormField :error` (BUG-007: `setErrors()` is wiped by the validate-on-input debounce).
  * Turning the publish switch off while the site is live asks first (D6) and makes the op destructive (confirmed again
- * on save). Own domain, duplicate and delete are rendered **disabled "เร็ว ๆ นี้"** until B5 — no handler, no request.
+ * on save). B5 (M5): the own-domain block and the duplicate / delete rows are the page's (slots `domain` and
+ * `lifecycle`, `MssgEditorDomainSection` / `MssgEditorLifecycleActions`): they start site jobs, not draft ops.
  *
  * Test ids: `me-sheet-1`, `me-field-<path>` / `me-field-error-<path>` for `name`, `localization.lang`, `subdomain`,
- * `apexDomain`, `enabled`, `branding`; `me-result-url`, `me-unpublish-note`, `me-domain`, `me-domain-connect`,
- * `me-duplicate`, `me-delete`, `me-confirm-unpublish(-ok|-cancel)`.
+ * `apexDomain`, `enabled`, `branding`; `me-result-url`, `me-unpublish-note`, `me-confirm-unpublish(-ok|-cancel)`.
  */
 import type { Form } from '@nuxt/ui'
 import type { MssgApexDomain, MssgSiteLang, MssgSiteProjection, MssgSiteUpdateFields } from '#shared/types/mssg-sites'
@@ -99,7 +99,6 @@ function confirmUnpublish() {
 }
 
 const resultUrl = computed(() => mssgSiteUrl(state.subdomain, state.apexDomain))
-const ownDomain = computed(() => props.site?.domain?.name ?? '')
 const unpublishPending = computed(() => props.liveEnabled && !state.enabled)
 const apexItems = MSSG_APEX_DOMAINS.map(d => ({ label: d, value: d }))
 const langItems = MSSG_LANG_OPTIONS.map(o => ({ label: o.label, value: o.value }))
@@ -200,31 +199,7 @@ const langItems = MSSG_LANG_OPTIONS.map(o => ({ label: o.label, value: o.value }
       </span>
     </fieldset>
 
-    <div class="flex flex-col gap-2" data-testid="me-domain" data-soon="true">
-      <span class="text-sm font-medium text-default">โดเมนของคุณเอง (ไม่บังคับ)</span>
-      <UInput
-        :model-value="ownDomain"
-        placeholder="เช่น shop.yourbrand.com"
-        class="w-full"
-        disabled
-        aria-label="โดเมนของคุณเอง"
-      />
-      <span class="text-xs text-muted">Pro Tip: ใส่โดเมนที่ต้องการเชื่อม ถ้ามีเว็บหลักอยู่แล้วใช้ subdomain ได้ เช่น mssg.example.com · ซื้อโดเมนได้ที่ godaddy.com, namecheap.com, nic.ua หรือผู้ขายโดเมนอื่น</span>
-      <UButton
-        label="เชื่อมโดเมน (Connect domain)"
-        color="primary"
-        variant="soft"
-        size="sm"
-        class="self-start"
-        disabled
-        :title="MSSG_SOON"
-        data-testid="me-domain-connect"
-      >
-        <template #trailing>
-          <span class="text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
-        </template>
-      </UButton>
-    </div>
+    <slot name="domain" />
 
     <div class="flex flex-col gap-1.5 rounded-lg border border-default bg-elevated/40 px-3.5 py-3">
       <div class="flex items-center justify-between gap-4">
@@ -261,38 +236,7 @@ const langItems = MSSG_LANG_OPTIONS.map(o => ({ label: o.label, value: o.value }
       <span v-if="errors.branding" class="text-xs text-error" data-testid="me-field-error-branding">{{ errors.branding }}</span>
     </div>
 
-    <div class="flex flex-col overflow-hidden rounded-lg border border-default bg-elevated/40">
-      <button
-        type="button"
-        disabled
-        :title="MSSG_SOON"
-        class="flex min-h-11.5 items-center justify-between gap-3 border-b border-default px-3.5 text-start text-sm text-muted disabled:cursor-not-allowed"
-        data-testid="me-duplicate"
-        data-soon="true"
-      >
-        <span class="flex min-w-0 flex-wrap items-center gap-2">
-          ทำสำเนาเว็บ (Duplicate website)
-          <UBadge
-            label="Business"
-            color="neutral"
-            variant="subtle"
-            size="sm"
-          />
-        </span>
-        <span class="shrink-0 text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
-      </button>
-      <button
-        type="button"
-        disabled
-        :title="MSSG_SOON"
-        class="flex min-h-11.5 items-center justify-between gap-3 px-3.5 text-start text-sm text-error/60 disabled:cursor-not-allowed"
-        data-testid="me-delete"
-        data-soon="true"
-      >
-        <span class="min-w-0">ลบเว็บ (Delete website)</span>
-        <span class="shrink-0 text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
-      </button>
-    </div>
+    <slot name="lifecycle" />
 
     <MssgEditorConfirmModal
       v-model:open="unpublishOpen"

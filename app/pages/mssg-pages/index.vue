@@ -24,6 +24,13 @@
  *
  * FEAT-101: moved from `pages/mssg-pages.vue` to `pages/mssg-pages/index.vue` (same URL and route name) so the editor
  * `pages/mssg-pages/sites/[siteId].vue` is a sibling route, not a child. Each site's "แก้ไขเว็บ" opens the editor.
+ *
+ * FEAT-101 B5 (AC-33, AC-37): "+ สร้างเว็บ" opens `MssgPagesCreateSiteModal` (`POST /mssg-accounts/:id/sites`); the 202
+ * account view carries the `mssgSiteCreate` job, followed by the same poll as every account job; its last read already
+ * lists the new site (contract §4.1 "the BO re-reads the account"), which gets the "ใหม่" badge (ids not in the list
+ * when the create was requested). A failed create shows on the card (`lastError`) and in a toast. Job ends of other
+ * FEAT-101 types (contract v1.6 #9: any type may be the account's job) get no "connected" toast. After a delete the
+ * editor comes back here and leaves a one-shot notice (`mssgPagesNotice` state → `mp-notice`).
  */
 import type {
   MssgAccountsResponse,
@@ -41,6 +48,10 @@ const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+/** FEAT-101 B5 — one-shot notice left by the editor (site deleted) */
+const pageNotice = useMssgPagesNotice()
+const shownNotice = ref(pageNotice.value)
+pageNotice.value = null
 
 const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
 const homeWorkspaceId = computed(() => auth.context.value?.homeWorkspaceId ?? auth.admin.value?.homeWorkspaceId ?? '')
@@ -219,6 +230,12 @@ function notifyJobEnd(view: MssgAccountView) {
   const job = view.job
   if (!job) return
   const name = mssgAccountName(view)
+  if (job.type === 'mssgSiteCreate') {
+    notifyCreateEnd(view)
+    return
+  }
+  // FEAT-101 site jobs (apply, duplicate, delete …) of this account: the card's site list already follows; no toast
+  if (job.type !== 'mssgSync' && job.type !== 'mssgConnect') return
   if (job.status === 'completed') {
     toast.add({ title: job.type === 'mssgSync' ? 'ดึงข้อมูลจาก mssg แล้ว' : 'เชื่อมบัญชี mssg แล้ว', description: name, color: 'success' })
   } else {
@@ -228,6 +245,58 @@ function notifyJobEnd(view: MssgAccountView) {
       color: 'error'
     })
   }
+}
+
+// ── create site (FEAT-101 B5, AC-37) ─────────────────────────────────────────────────────────────────────────────────
+const createOpen = ref(false)
+const createId = ref<string | null>(null)
+const createAccount = computed(() => (createId.value ? accounts.value.find(a => a.id === createId.value) ?? null : null))
+/** per account: the Apollo site ids it had when a create was requested (what is not in it afterwards is new) */
+const createBaseline = new Map<string, string[]>()
+const newSiteIds = ref<string[]>([])
+
+function openCreate(acc: MssgAccountView) {
+  createId.value = acc.id
+  createOpen.value = true
+}
+function siteIdsOf(acc: MssgAccountView): string[] {
+  return acc.sites.map(x => x.id).filter((id): id is string => !!id)
+}
+function onCreateRequested(view: MssgAccountView) {
+  const before = accounts.value.find(a => a.id === view.id)
+  createBaseline.set(view.id, siteIdsOf(before ?? view))
+  upsert(view)
+  toast.add({ title: 'สั่งสร้างเว็บแล้ว', description: `${mssgAccountName(view)} · เว็บใหม่จะขึ้นในรายการเมื่อเสร็จ`, color: 'info' })
+}
+/** 409 / 404 of the create: the card was out of date — show the account as it is now */
+function onCreateStale(id: string, status: number | undefined) {
+  if (status === 404) {
+    removeAccount(id)
+    return
+  }
+  void api<MssgAccountView>(`/mssg-accounts/${encodeURIComponent(id)}`, { retry: 0 }).then(upsert).catch(() => {})
+}
+function notifyCreateEnd(view: MssgAccountView) {
+  const job = view.job!
+  const name = mssgAccountName(view)
+  const before = createBaseline.get(view.id)
+  createBaseline.delete(view.id)
+  if (job.status === 'completed') {
+    const added = before ? view.sites.filter(x => x.id && !before.includes(x.id)) : []
+    if (added.length) newSiteIds.value = [...new Set([...newSiteIds.value, ...added.map(x => x.id!)])]
+    toast.add({
+      title: 'สร้างเว็บแล้ว',
+      description: added.length ? `${name} · ${added.map(x => x.name).join(', ')}` : name,
+      color: 'success'
+    })
+    if (isGod.value) void loadOverview() // site counts
+    return
+  }
+  toast.add({
+    title: 'สร้างเว็บไม่สำเร็จ',
+    description: `${name}: ${job.status === 'cancelled' ? 'งานถูกยกเลิก' : mssgErrorText(view.lastError?.code)}`,
+    color: 'error'
+  })
 }
 
 // ── area switch / mount / leave ──────────────────────────────────────────────────────────────────────────────────────
@@ -439,6 +508,20 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
           {{ subtitle }}
         </p>
 
+        <UAlert
+          v-if="shownNotice"
+          :color="shownNotice.color"
+          variant="subtle"
+          icon="i-lucide-circle-check"
+          :title="shownNotice.title"
+          :description="shownNotice.description"
+          close
+          role="status"
+          data-testid="mp-notice"
+          :data-kind="shownNotice.kind"
+          @update:open="shownNotice = null"
+        />
+
         <!-- GOD only: area tabs -->
         <div
           v-if="isGod"
@@ -619,6 +702,8 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
                 :page-syncing="syncAllRequesting"
                 :poll-timed-out="poll.hasTimedOut(acc.id)"
                 :area-workspace-id="isOtherArea ? otherWorkspaceId : ''"
+                :new-site-ids="newSiteIds"
+                @create="openCreate(acc)"
                 @refresh="syncOne(acc)"
                 @relogin="openRelogin(acc)"
                 @rename="openRename(acc)"
@@ -705,6 +790,7 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
                   v-for="acc in ws.accounts"
                   :key="acc.id"
                   :account="acc"
+                  :area-workspace-id="ws.isOwn ? '' : ws.id"
                   readonly
                 />
               </div>
@@ -724,6 +810,12 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
         :poll-timed-out="!!modalAccountId && poll.hasTimedOut(modalAccountId)"
         @requested="onRequested"
         @renamed="upsert"
+      />
+      <MssgPagesCreateSiteModal
+        v-model:open="createOpen"
+        :account="createAccount"
+        @requested="onCreateRequested"
+        @stale="onCreateStale"
       />
       <MssgPagesRenameModal
         v-model:open="renameOpen"

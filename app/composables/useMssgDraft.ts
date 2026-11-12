@@ -22,14 +22,23 @@
  * into its create op). Contract v1.1: the account's job of any type (`view.account.job`) is followed too — the site
  * view is re-read every 2 s while it is open (AC-19 busy state) without touching local edits; only the end of the
  * site's own job (`mssgApply` …) is handed to `onJobEnd`.
+ *
+ * B5 (M5, contract §4.2 / §4.3 / §4.6): `duplicate()`, `deleteSite(confirmName)` and `domain(action, name?)` start the
+ * site's `mssgSiteDuplicate` / `mssgSiteDelete` / `mssgDomain` job (202 view, followed like an apply; the draft is
+ * read-only meanwhile). A delete ends with the site gone: the poll's 404 goes to `onGone` first, which may claim it
+ * (the editor then navigates back to the list) instead of showing "ไม่พบเว็บนี้". A delete also drops any not-yet-sent
+ * edit, so leaving the editor never PUTs the draft of a deleted site.
  */
 import type {
   MssgApplyBody,
+  MssgDomainConnectBody,
+  MssgDomainDisconnectBody,
   MssgDraftPutBody,
   MssgOp,
   MssgOpPageUpdate,
   MssgOpSiteUpdate,
   MssgResolveBody,
+  MssgSiteDeleteBody,
   MssgSiteProjection,
   MssgSiteUpdateFields,
   MssgSiteView
@@ -45,7 +54,11 @@ export interface MssgDraftOptions {
   onPollTimeout?: () => void
   /** v1.1: a job of the account (not this site's own) ended — the page may refresh account data */
   onAccountJobEnd?: (view: MssgSiteView) => void
+  /** B5: the followed site answered 404 (e.g. the end of a delete); return `true` when the page handles it */
+  onGone?: () => boolean
 }
+
+export type MssgDomainAction = 'connect' | 'disconnect' | 'check'
 
 export interface MssgRequestResult {
   ok: boolean
@@ -90,7 +103,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   const dismissedApplyPaths = ref<string[]>([])
   /** bumped whenever `ops` is replaced from the server (load, reload, discard, resolve, job end) — forms re-init */
   const resetToken = ref(0)
-  const requesting = ref<null | 'apply' | 'discard' | 'resolve' | 'storeRead'>(null)
+  const requesting = ref<null | 'apply' | 'discard' | 'resolve' | 'storeRead' | 'duplicate' | 'delete' | 'domain'>(null)
 
   let timer: ReturnType<typeof setTimeout> | null = null
   let inflight: Promise<void> | null = null
@@ -206,6 +219,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
       }
     },
     onGone: () => {
+      if (options.onGone?.()) return
       loadState.value = 'notFound'
       view.value = null
     },
@@ -370,7 +384,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   }
 
   // ── discard / resolve / apply ─────────────────────────────────────────────────────────────────────────────────────
-  async function request(kind: 'discard' | 'resolve' | 'apply' | 'storeRead', run: () => Promise<MssgSiteView>, fallback: string): Promise<MssgRequestResult> {
+  async function request(kind: NonNullable<typeof requesting.value>, run: () => Promise<MssgSiteView>, fallback: string): Promise<MssgRequestResult> {
     requesting.value = kind
     try {
       const v = await run()
@@ -433,6 +447,59 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
     return res
   }
 
+  /** B5: a site job request (duplicate / domain) — the pending edit is sent first, like the store read */
+  async function siteJob(kind: 'duplicate' | 'domain', path: string, method: 'POST' | 'PUT' | 'DELETE', body: object | undefined, fallback: string): Promise<MssgRequestResult> {
+    const id = view.value?.id
+    if (!id) return { ok: false }
+    if (!(await flush())) return { ok: false, message: saveError.value ?? 'ร่างล่าสุดยังไม่ถูกบันทึก แก้ช่องที่ผิดก่อนแล้วลองใหม่' }
+    const res = await request(kind, () => api<MssgSiteView>(`/mssg-sites/${encodeURIComponent(id)}${path}`, { method, ...(body ? { body } : {}), retry: 0 }), fallback)
+    if (!res.ok && res.status === 409) await load({ replaceOps: true })
+    return res
+  }
+
+  /** B5 (contract §4.2): "ทำสำเนาเว็บ" → `POST …/duplicate` (no body) → 202 view with `mssgSiteDuplicate` */
+  function duplicate(): Promise<MssgRequestResult> {
+    return siteJob('duplicate', '/duplicate', 'POST', undefined, 'สั่งทำสำเนาเว็บไม่สำเร็จ')
+  }
+
+  /**
+   * B5 (contract §4.6): connect `PUT …/domain { name }` · disconnect `DELETE …/domain { confirm: true }` (the page asked
+   * first) · check `POST …/domain/check` — each a 202 view with `mssgDomain`.
+   */
+  function domain(action: MssgDomainAction, name?: string): Promise<MssgRequestResult> {
+    if (action === 'connect') {
+      const body: MssgDomainConnectBody = { name: name ?? '' }
+      return siteJob('domain', '/domain', 'PUT', body, 'สั่งเชื่อมโดเมนไม่สำเร็จ')
+    }
+    if (action === 'disconnect') {
+      const body: MssgDomainDisconnectBody = { confirm: true }
+      return siteJob('domain', '/domain', 'DELETE', body, 'สั่งยกเลิกการเชื่อมโดเมนไม่สำเร็จ')
+    }
+    return siteJob('domain', '/domain/check', 'POST', undefined, 'สั่งตรวจโดเมนไม่สำเร็จ')
+  }
+
+  /**
+   * B5 (contract §4.3): `DELETE /mssg-sites/:id { confirmName }` → 202 view with `mssgSiteDelete`. Edits not yet sent
+   * are dropped first (the site is about to go; a later PUT would only 404). 400 `confirmMismatch`, 403 `ownAreaOnly`
+   * and 409 come back as the result (the page shows them in the dialog).
+   */
+  async function deleteSite(confirmName: string): Promise<MssgRequestResult> {
+    const id = view.value?.id
+    if (!id) return { ok: false }
+    if (timer) clearTimeout(timer)
+    timer = null
+    if (inflight) await inflight
+    const body: MssgSiteDeleteBody = { confirmName }
+    const res = await request('delete', () => api<MssgSiteView>(`/mssg-sites/${encodeURIComponent(id)}`, { method: 'DELETE', body, retry: 0 }), 'สั่งลบเว็บไม่สำเร็จ')
+    if (res.ok) {
+      // nothing local is sent any more: the 202 view's draft is the server's and the site is on its way out
+      savedVersion.value = localVersion.value
+    } else if (res.status === 409) {
+      await load({ replaceOps: !pending.value })
+    }
+    return res
+  }
+
   /** the user asked to read the view again (retry, poll timed out) */
   function reload() {
     poll.resetTimeouts()
@@ -476,6 +543,9 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
     discard,
     resolve,
     apply,
-    readStore
+    readStore,
+    duplicate,
+    domain,
+    deleteSite
   }
 }
