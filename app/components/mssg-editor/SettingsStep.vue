@@ -54,7 +54,7 @@ function fromSite() {
 }
 
 // first view, and every time the draft is replaced from the server (load, discard, resolve, job end)
-watch(() => [props.resetToken, !!props.site] as const, fromSite, { immediate: true })
+watch([() => props.resetToken, () => !!props.site], fromSite, { immediate: true })
 
 function valid<K extends keyof MssgSiteSettingsForm>(key: K, value: unknown): boolean {
   return mssgSiteSettingsSchema.shape[key].safeParse(value).success

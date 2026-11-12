@@ -16,7 +16,7 @@
  * (`mssg-pages-access`).
  *
  * Step 2 (B2): pages and blocks (`MssgEditorPagesStep`); the page selected there is also the one the mobile preview
- * shows. Steps 3–5 show a placeholder until B3–B4. The current step lives in `?step=` so a reload stays on it.
+ * shows. Step 3 (B3) page look and step 4 (B3) SEO / tracking / embed code; step 5 shows a placeholder until B4. The current step lives in `?step=` so a reload stays on it.
  * "แก้ไขล่าสุดโดย" = `lastSuccessfulApply` (v1.1; kept after a failed save).
  */
 import type { MssgAccountView } from '#shared/types/mssg-accounts'
@@ -177,11 +177,23 @@ const step2Errors = computed(() => draft.fieldErrors.value.filter(e => e.step ==
 function placedOnStep2(e: { target: { pageId: string | null } }) {
   return !!e.target.pageId && !!draft.localSite.value?.pages.some(p => p.id === e.target.pageId)
 }
+/** M3: step-3 errors (page background) land on the selected page's field; step-4 errors on their site field path */
+const step3Errors = computed(() => draft.fieldErrors.value.filter(e => e.step === 3))
+const STEP4_FIELDS = ['seo.title', 'seo.description', 'seo.indexing', 'seo.faviconUrl', 'seo.ogImageUrl', 'tracking.tiktok', 'tracking.facebook', 'tracking.google', 'embeddedCode.content', 'embeddedCode.inHead', 'embeddedCode.onLoad']
+const step4Errors = computed(() => {
+  const out: Record<string, string> = {}
+  for (const e of draft.fieldErrors.value) {
+    if (e.step === 4 && !out[e.path]) out[e.path] = e.message
+  }
+  return out
+})
 /** field errors of the current step that have no field of their own (shown above the form) */
 const otherStepErrors = computed(() => draft.fieldErrors.value.filter((e) => {
   if (e.step !== step.value) return false
   if (e.step === 1) return !mssgStep1Key(e.path)
   if (e.step === 2) return !placedOnStep2(e)
+  if (e.step === 3) return !(e.target.pageId === selectedPageId.value && ['theme.page.backgroundColor', 'theme.page.backgroundImage'].includes(e.target.field))
+  if (e.step === 4) return !STEP4_FIELDS.includes(e.path)
   return true
 }))
 /** the page selected in step 2 (also shown by the mobile preview while on step 2) */
@@ -697,6 +709,25 @@ onBeforeRouteLeave(async () => {
                   @block-update="draft.updateBlock"
                   @ops="draft.editOps"
                 />
+                <MssgEditorLookStep
+                  v-else-if="step === 3"
+                  v-model:page="selectedPageId"
+                  :site-id="view.id"
+                  :site="draft.localSite.value"
+                  :read-only="draft.readOnly.value"
+                  :errors="step3Errors"
+                  :reset-token="draft.resetToken.value"
+                  @page-update="draft.updatePage"
+                />
+                <MssgEditorSeoStep
+                  v-else-if="step === 4"
+                  :site-id="view.id"
+                  :site="draft.localSite.value"
+                  :read-only="draft.readOnly.value"
+                  :errors="step4Errors"
+                  :reset-token="draft.resetToken.value"
+                  @update="draft.updateSite"
+                />
                 <div
                   v-else
                   class="flex flex-col items-center gap-2 rounded-lg border border-dashed border-default px-4 py-12 text-center"
@@ -744,7 +775,7 @@ onBeforeRouteLeave(async () => {
                 :site="draft.localSite.value"
                 :url="resultUrl"
                 :site-id="view.id"
-                :page-id="step === 2 ? selectedPageId : ''"
+                :page-id="step === 2 || step === 3 ? selectedPageId : ''"
               />
             </div>
           </div>

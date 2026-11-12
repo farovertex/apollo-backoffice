@@ -217,6 +217,18 @@ describe('error targets and labels', () => {
     expect(mssgOpTarget(ops[1], 'fields.title')).toEqual({ pageId: 'p1', blockId: 'tmp-bbbb1', field: 'title' })
     expect(mssgOpTarget(null, 'pages.p1.blocks.b2.fields.title')).toEqual({ pageId: 'p1', blockId: 'b2', field: 'title' })
   })
+  it('v1.4 id paths carry the ids themselves (page look, order, gone objects)', () => {
+    expect(mssgOpTarget(null, 'pages.p1.theme.page.backgroundColor')).toEqual({ pageId: 'p1', blockId: null, field: 'theme.page.backgroundColor' })
+    expect(mssgOpTarget(ops[0], 'pages.p1.order')).toEqual({ pageId: 'p1', blockId: null, field: 'order' })
+    expect(mssgOpTarget(null, 'pages.p1.blocks.b2.enabled')).toEqual({ pageId: 'p1', blockId: 'b2', field: 'enabled' })
+    expect(mssgOpTarget(null, 'pages.p1.blocks.b2')).toEqual({ pageId: 'p1', blockId: 'b2', field: '' })
+    expect(mssgOpTarget(null, 'pages.p1')).toEqual({ pageId: 'p1', blockId: null, field: '' })
+    expect(mssgOpTarget(null, 'site.seo.title')).toEqual({ pageId: null, blockId: null, field: 'site.seo.title' })
+  })
+  it('labels the page background fields', () => {
+    expect(mssgPageBlockLabel(null, 'pages.p1.theme.page.backgroundColor', [site()])).toBe('หน้า "Homepage" · สีพื้นหลังของหน้า')
+    expect(mssgPageBlockLabel(null, 'pages.p1.theme.page.backgroundImage', [site()])).toBe('หน้า "Homepage" · รูปพื้นหลังของหน้า')
+  })
   it('names pages, blocks and the block order', () => {
     const s = site()
     expect(mssgPageBlockLabel(ops[0], 'name', [s])).toBe('หน้า "About" · ชื่อหน้า')

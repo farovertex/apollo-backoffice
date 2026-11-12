@@ -86,6 +86,47 @@ export const mssgSiteSettingsSchema = z.object({
 })
 export type MssgSiteSettingsForm = z.output<typeof mssgSiteSettingsSchema>
 
+// ── step 3 / 4 (contract §3.3: page look, SEO, tracking, embed code) ──────────────────────────────────────────────────
+export const MSSG_SEO_TITLE_MAX = 80
+export const MSSG_SEO_DESC_MAX = 200
+export const MSSG_TRACKING_MAX = 100
+export const MSSG_EMBED_MAX = 30_000
+export const MSSG_HEX_RE = /^#[0-9A-Fa-f]{6}$/
+
+/** "" is allowed (cleared); otherwise `min`–`max` characters, as mssg */
+function optionalText(label: string, min: number, max: number) {
+  return z.string().refine(v => v.trim() === '' || (v.trim().length >= min && v.trim().length <= max), `${label}ต้องยาว ${min}–${max} ตัวอักษร หรือเว้นว่าง`)
+}
+
+/** step-4 client rules, Thai messages — the form state is nested like the site projection */
+export const mssgSeoStepSchema = z.object({
+  seo: z.object({
+    title: optionalText('ชื่อที่แสดงบน Google', 3, MSSG_SEO_TITLE_MAX),
+    description: optionalText('คำอธิบาย', 3, MSSG_SEO_DESC_MAX)
+  }),
+  tracking: z.object({
+    tiktok: z.string().trim().max(MSSG_TRACKING_MAX, `ไอดี Pixel ยาวได้ไม่เกิน ${MSSG_TRACKING_MAX} ตัวอักษร`),
+    facebook: z.string().trim().max(MSSG_TRACKING_MAX, `ไอดี Pixel ยาวได้ไม่เกิน ${MSSG_TRACKING_MAX} ตัวอักษร`),
+    google: z.string().trim().max(MSSG_TRACKING_MAX, `ไอดี Google Analytics ยาวได้ไม่เกิน ${MSSG_TRACKING_MAX} ตัวอักษร`)
+  }),
+  embeddedCode: z.object({
+    content: z.string().max(MSSG_EMBED_MAX, `โค้ดยาวได้ไม่เกิน ${MSSG_EMBED_MAX.toLocaleString('en-US')} ตัวอักษร`)
+  })
+})
+export type MssgSeoStepForm = z.output<typeof mssgSeoStepSchema>
+
+/** step-3 hex field: a `#RRGGBB` colour, or empty = "ใช้ตามธีม" (null) */
+export const mssgBgColorSchema = z.string().refine(v => v === '' || MSSG_HEX_RE.test(v), 'ใส่สีเป็นรหัส hex เช่น #1A2B3C (6 หลัก)')
+
+export const MSSG_STEP3_TEXT = {
+  themes: 'ธีม (Theme presets)',
+  fonts: 'ฟอนต์ (Fonts)',
+  useTheme: 'ใช้ตามธีม',
+  applyAll: 'ใช้กับทุกหน้า',
+  applyAllDone: (n: number) => `ใช้พื้นหลังนี้กับ ${n} หน้าแล้ว`,
+  applyAllHint: 'ใช้สีและรูปพื้นหลังของหน้านี้กับทุกหน้าของเว็บ (ร่างเปลี่ยนทีละหน้า)'
+} as const
+
 /** `https://<subdomain>.<apex>/`, or the connected own domain (AC-10) */
 export function mssgSiteUrl(subdomain: string, apex: string, ownDomain?: string | null): string {
   if (ownDomain) return `https://${ownDomain}/`
@@ -115,13 +156,18 @@ export const MSSG_FIELD_LABEL: Record<string, string> = {
   'embeddedCode.onLoad': 'Run code after page content load'
 }
 
-/** `site.seo.title` / `fields.seo.title` / `seo.title` → `seo.title` */
+/** v1.4 site path (`site.seo.title`) → the field (`seo.title`); other paths (`pages.<id>…`, `products.<id>…`) unchanged */
+export function mssgSitePath(path: string): string {
+  return path.replace(/^site\./, '')
+}
+
+/** a zod issue path of a draft PUT, after `ops.<n>.`: `fields.seo.title` / `seo.title` → `seo.title` */
 export function mssgNormalizePath(path: string): string {
-  return path.replace(/^site\./, '').replace(/^fields\./, '')
+  return mssgSitePath(path).replace(/^fields\./, '')
 }
 
 export function mssgFieldLabel(path: string): string {
-  const p = mssgNormalizePath(path)
+  const p = mssgSitePath(path)
   if (MSSG_FIELD_LABEL[p]) return MSSG_FIELD_LABEL[p]!
   if (/^pages\.[^.]+\.order$/.test(p)) return 'ลำดับ block ในหน้า'
   if (p.startsWith('pages.')) return 'หน้าเว็บ'
@@ -133,18 +179,20 @@ const STEP4_PREFIXES = ['seo.', 'tracking.', 'embeddedCode.']
 
 /** which editor step a field of an op belongs to (step badges for errors and conflicts) */
 export function mssgStepOf(op: Pick<MssgOp, 'op'> | null | undefined, path: string): MssgStepNo {
-  const p = mssgNormalizePath(path)
+  const p = mssgSitePath(path)
   const type = op?.op ?? ''
   if (type.startsWith('product.') || p.startsWith('products.')) return 5
-  if (type === 'page.update' && p.startsWith('theme.')) return 3
-  if (type.startsWith('page.') || type.startsWith('block.') || p.startsWith('pages.')) return 2
+  const t = mssgOpTarget(op as MssgOp | null | undefined, p)
+  // page look (theme.*) is step 3; everything else of a page / block is step 2
+  if (t.pageId && !t.blockId && t.field.startsWith('theme.')) return 3
+  if (t.pageId || type.startsWith('page.') || type.startsWith('block.')) return 2
   if (STEP4_PREFIXES.some(x => p.startsWith(x))) return 4
   return 1
 }
 
 /** a key of the step-1 form for a site field path (`localization.lang` → `lang`), or `null` */
 export function mssgStep1Key(path: string): keyof MssgSiteSettingsForm | null {
-  const p = mssgNormalizePath(path)
+  const p = mssgSitePath(path)
   if (p === 'localization.lang' || p === 'localization') return 'lang'
   if (p === 'name' || p === 'subdomain' || p === 'apexDomain' || p === 'enabled' || p === 'branding') return p
   return null
@@ -175,7 +223,8 @@ export function mssgIssuesToFieldErrors(issues: { path: string, message: string 
 
 export function mssgApplyErrorsToFieldErrors(fields: { opIndex: number, path: string, message: string }[] | undefined, ops: MssgOp[]): MssgFieldError[] {
   return (fields ?? []).map((f) => {
-    const path = mssgNormalizePath(f.path)
+    // v1.4: the path is already in its final form (`site.…`, `pages.<id>.…`) — no guessing
+    const path = mssgSitePath(f.path)
     return { opIndex: f.opIndex, path, message: f.message, step: mssgStepOf(ops[f.opIndex], path), target: mssgOpTarget(ops[f.opIndex], f.path) }
   })
 }

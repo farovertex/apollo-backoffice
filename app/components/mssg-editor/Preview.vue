@@ -7,7 +7,7 @@
  * Messengers (their items), Timer (countdown), Divider (line); **hidden blocks are omitted**. Text is rendered as
  * text (never `v-html`). Approximate, not pixel-exact.
  * Test ids: `me-preview` (`data-page-id`, `data-blocks` = shown blocks), `me-preview-name`, `me-preview-url`,
- * `me-preview-page`, `me-preview-block` (`data-kind`, `data-block-id`), `me-preview-empty`.
+ * `me-preview-page`, `me-preview-block` (`data-kind`, `data-block-id`), `me-preview-empty`, `me-preview-screen` (M3: `data-bg` = background colour, `data-bg-image`).
  */
 import type { MssgBlockProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
@@ -26,6 +26,17 @@ const bg = computed(() => {
   const c = page.value?.theme?.page?.backgroundColor
   return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : '#FFFFFF'
 })
+/** M3: page background image (`upload:<id>` through the API client, or an http(s) URL) over the colour */
+const bgImageValue = computed(() => {
+  const i = page.value?.theme?.page?.backgroundImage
+  return typeof i === 'string' && i ? i : null
+})
+const { src: bgImageSrc } = useMssgImageSrc(() => props.siteId, bgImageValue)
+const bgStyle = computed(() => ({
+  'background-color': bg.value,
+  'color': fg.value,
+  ...(bgImageSrc.value ? { 'background-image': `url(${JSON.stringify(bgImageSrc.value)})`, 'background-size': 'cover', 'background-position': 'center' } : {})
+}))
 /** dark text on a light background and vice versa */
 const fg = computed(() => {
   const hex = bg.value.slice(1)
@@ -85,7 +96,10 @@ function countdown(b: MssgBlockProjection): string {
     </div>
     <div
       class="flex min-h-120 w-full max-w-80 flex-col overflow-hidden rounded-[28px] border-8 border-accented"
-      :style="{ background: bg, color: fg }"
+      :style="bgStyle"
+      data-testid="me-preview-screen"
+      :data-bg="bg"
+      :data-bg-image="bgImageValue ? 'true' : 'false'"
     >
       <div class="flex flex-col gap-0.5 border-b border-current/10 px-4 py-2 text-center">
         <span class="text-sm font-semibold break-words" data-testid="me-preview-name">{{ site?.name || '—' }}</span>

@@ -17,12 +17,16 @@ const props = withDefaults(defineProps<{
   required?: boolean
   /** a server message for this field (overrides the form's own) */
   error?: string | null
-  /** `n/max` counter under the field */
+  /** `n/max` counter under the field (`max` = `limit`, else `maxlength`) */
   counter?: boolean
-}>(), { textarea: false, rows: 3, maxlength: undefined, placeholder: '', description: undefined, type: 'text', required: false, error: null, counter: false })
+  /** a soft limit for the counter and its red state — no native `maxlength`, so the Thai message can show (M3) */
+  limit?: number
+  mono?: boolean
+}>(), { textarea: false, rows: 3, maxlength: undefined, placeholder: '', description: undefined, type: 'text', required: false, error: null, counter: false, limit: undefined, mono: false })
 
 const model = defineModel<string>({ default: '' })
 const errorTestid = computed(() => `${props.testid}-error-${props.name}`)
+const max = computed(() => props.limit ?? props.maxlength)
 </script>
 
 <template>
@@ -43,7 +47,7 @@ const errorTestid = computed(() => `${props.testid}-error-${props.name}`)
       :maxrows="12"
       :maxlength="maxlength"
       :placeholder="placeholder"
-      class="w-full"
+      :class="['w-full', mono ? 'font-mono' : '']"
       :data-testid="`${testid}-${name}`"
     />
     <UInput
@@ -55,8 +59,12 @@ const errorTestid = computed(() => `${props.testid}-error-${props.name}`)
       class="w-full"
       :data-testid="`${testid}-${name}`"
     />
-    <template v-if="counter && maxlength" #hint>
-      <span class="text-xs text-muted tabular-nums">{{ model.length }}/{{ maxlength }}</span>
+    <template v-if="counter && max" #hint>
+      <span
+        class="text-xs tabular-nums"
+        :class="model.length > max ? 'text-error' : 'text-muted'"
+        :data-testid="`${testid}-counter-${name}`"
+      >{{ model.length }}/{{ max }}</span>
     </template>
     <template #error="{ error: e }">
       <span v-if="e" :data-testid="errorTestid">{{ e }}</span>

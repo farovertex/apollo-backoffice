@@ -682,32 +682,31 @@ export interface MssgOpTarget {
 }
 
 /**
- * Where an error / conflict lands: from the op at `opIndex` (v1.3: index in the stored draft) when there is one,
- * else from an id path (`pages.<id>.blocks.<id>.<field>`, `pages.<id>.<field>`). `fields.` / `site.` prefixes drop.
+ * Where an error / conflict lands. Contract v1.4 id paths (`pages.<id>.<field>`, `pages.<id>.order`,
+ * `pages.<id>.blocks.<id>.fields.<field>` / `….enabled`) carry the ids themselves and are read exactly; a zod issue of a
+ * draft PUT (`ops.<n>.` already cut: `fields.title`, `fields.theme.page.backgroundColor`) takes page / block from the op
+ * at that index. Block fields drop their `fields.` segment.
  */
 export function mssgOpTarget(op: MssgOp | null | undefined, path: string): MssgOpTarget {
-  let p = path.replace(/^site\./, '')
+  const m = /^pages\.([^.]+)(?:\.blocks\.([^.]+))?(?:\.(.*))?$/.exec(path)
+  if (m) {
+    let field = m[3] ?? ''
+    if (m[2]) field = field === 'fields' ? '' : field.replace(/^fields\./, '')
+    return { pageId: m[1]!, blockId: m[2] ?? null, field }
+  }
   let pageId: string | null = null
   let blockId: string | null = null
-  const m = /^pages\.([^.]+)(?:\.blocks\.([^.]+))?(?:\.(.*))?$/.exec(p)
-  if (m) {
-    pageId = m[1]!
-    blockId = m[2] ?? null
-    p = m[3] ?? ''
-  }
   if (op) {
     const o = op as unknown as Record<string, string | undefined>
     if (op.op.startsWith('page.')) {
-      pageId = o.pageId ?? o.tempId ?? pageId
-      blockId = null
+      pageId = o.pageId ?? o.tempId ?? null
     } else if (op.op.startsWith('block.')) {
-      pageId = o.pageId ?? pageId
-      blockId = op.op === 'block.create' ? o.tempId! : (o.blockId ?? blockId)
+      pageId = o.pageId ?? null
+      blockId = op.op === 'block.create' ? o.tempId! : (o.blockId ?? null)
     }
   }
-  p = p.replace(/^fields\./, '')
-  if (p === 'fields') p = ''
-  return { pageId, blockId, field: p }
+  const field = path === 'fields' ? '' : path.replace(/^fields\./, '')
+  return { pageId, blockId, field }
 }
 
 const PAGE_FIELD_LABEL: Record<string, string> = {
@@ -759,7 +758,7 @@ export function mssgBlockFieldLabel(field: string): string {
  * (the caller falls back to the site field labels). Names come from `sites` (the first that knows the id).
  */
 export function mssgPageBlockLabel(op: MssgOp | null | undefined, path: string, sites: (MssgSiteProjection | null | undefined)[]): string | null {
-  const isPageOrBlock = (op && (op.op.startsWith('page.') || op.op.startsWith('block.'))) || /^(site\.)?pages\./.test(path)
+  const isPageOrBlock = (op && (op.op.startsWith('page.') || op.op.startsWith('block.'))) || /^pages\./.test(path)
   if (!isPageOrBlock) return null
   const t = mssgOpTarget(op, path)
   const page = t.pageId ? sites.map(s => s?.pages.find(p => p.id === t.pageId)).find(Boolean) : undefined
