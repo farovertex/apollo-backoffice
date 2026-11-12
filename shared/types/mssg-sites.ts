@@ -448,3 +448,41 @@ export interface MssgUploadView {
   /** `/mssg-sites/:id/uploads/<id>` — relative to the API, read through `useApi()` (auth + area) */
   previewUrl: string
 }
+
+// ── analytics (contract §4.7, M6) ───────────────────────────────────────────────────────────────────────────────────
+export type MssgAnalyticsRange = 'day' | 'week' | 'month'
+
+export interface MssgAnalyticsItem {
+  /** e.g. `page.view`, `link.click`, `menu.click`; unknown actions are shown generically */
+  action: string
+  key: string
+  label: string
+  value: number
+}
+
+export interface MssgAnalyticsData {
+  /** Asia/Bangkok dates `YYYY-MM-DD` */
+  from: string
+  to: string
+  readAt: string
+  current: {
+    visits: number
+    clicks: number
+    /** clicks / visits, 0..1 (0 at 0 visits) */
+    clickRate: number
+    byAction: { action: string, value: number }[]
+    items: MssgAnalyticsItem[]
+  }
+  previous: { from: string, to: string, visits: number, clicks: number, clickRate: number }
+}
+
+/** `GET /mssg-sites/:id/analytics?range=` — `data: null` before the first read of that range */
+export interface MssgAnalyticsView {
+  range: MssgAnalyticsRange
+  data: MssgAnalyticsData | null
+}
+
+/** `POST /mssg-sites/:id/analytics` body */
+export interface MssgAnalyticsBody {
+  range: MssgAnalyticsRange
+}

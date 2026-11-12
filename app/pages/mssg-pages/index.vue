@@ -124,6 +124,15 @@ function upsert(view: MssgAccountView) {
   accounts.value = next
 }
 
+/** FEAT-101 (B6) — an Analytics read was ordered / ended: re-read the one account so its job state (AC-19) is current; the poll watcher takes over */
+async function rereadAccount(id: string) {
+  try {
+    upsert(await api<MssgAccountView>(`/mssg-accounts/${encodeURIComponent(id)}`, { retry: 0 }))
+  } catch {
+    // transient: the card keeps its last state, the next action or "ดึงข้อมูลใหม่" re-reads
+  }
+}
+
 function removeAccount(id: string) {
   poll.stop(id)
   accounts.value = accounts.value.filter(a => a.id !== id)
@@ -704,6 +713,7 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
                 :area-workspace-id="isOtherArea ? otherWorkspaceId : ''"
                 :new-site-ids="newSiteIds"
                 @create="openCreate(acc)"
+                @analytics-changed="rereadAccount(acc.id)"
                 @refresh="syncOne(acc)"
                 @relogin="openRelogin(acc)"
                 @rename="openRename(acc)"

@@ -11,7 +11,8 @@
  * Test ids inside the card are fixed (`mp-status`, `mp-plan`, …) — QA scopes them by `mp-card-<id>`.
  * FEAT-101 (B1): "แก้ไขเว็บ" (`mp-site-edit`) is a link to the editor `/mssg-pages/sites/<site.id>` (`?workspaceId=`
  * when a GOD is in another area). It is disabled with its reason (`title` + `data-reason`) when the site has no Apollo
- * document yet (`id: null`) or the account is not `connected`. "Analytics" stays disabled until B6.
+ * document yet (`id: null`) or the account is not `connected`. FEAT-101 (B6, AC-39): "Analytics" (`mp-site-analytics`) toggles the
+ * inline `MssgPagesAnalyticsPanel` under the row; disabled with its reason on the same terms as "แก้ไขเว็บ".
  * FEAT-101 (B5, AC-37): "+ สร้างเว็บ" (`mp-create-site`) only emits `create` (the page opens the name dialog); it is
  * disabled with its reason (`title`, `data-reason`, visible `mp-create-site-reason`) when the account is not
  * `connected`, a job of the account is open (any type, contract v1.6 #9), a request of the card is in flight, or the
@@ -44,7 +45,15 @@ const emit = defineEmits<{
   unlink: []
   reload: []
   create: []
+  /** FEAT-101 (B6) — an Analytics read was ordered / ended: the page re-reads this account */
+  analyticsChanged: []
 }>()
+
+/** the Apollo site id whose Analytics panel is open (one at a time per card) */
+const analyticsOpenId = ref<string | null>(null)
+function toggleAnalytics(site: MssgSite) {
+  analyticsOpenId.value = analyticsOpenId.value === site.id ? null : (site.id ?? null)
+}
 
 const a = computed(() => props.account)
 const busy = computed(() => mssgNeedsPoll(a.value))
@@ -80,6 +89,12 @@ const createBlockedReason = computed<string | null>(() => {
 /** FEAT-101 — why "แก้ไขเว็บ" is disabled for a site, or `null` */
 function editBlockedReason(site: MssgSite): string | null {
   if (a.value.status !== 'connected') return 'แก้ไขเว็บได้เมื่อบัญชีเชื่อมแล้วเท่านั้น'
+  if (!site.id) return 'ยังไม่มีข้อมูลเว็บนี้ในระบบ กด "ดึงข้อมูลใหม่" ก่อน'
+  return null
+}
+/** FEAT-101 (B6) — why "Analytics" is disabled for a site, or `null` */
+function analyticsBlockedReason(site: MssgSite): string | null {
+  if (a.value.status !== 'connected') return 'ดู Analytics ได้เมื่อบัญชีเชื่อมแล้วเท่านั้น'
   if (!site.id) return 'ยังไม่มีข้อมูลเว็บนี้ในระบบ กด "ดึงข้อมูลใหม่" ก่อน'
   return null
 }
@@ -306,17 +321,17 @@ function isNew(site: MssgSite): boolean {
         <div v-if="!readonly" class="flex flex-wrap items-center gap-1.5">
           <UButton
             label="Analytics"
+            icon="i-lucide-chart-no-axes-column"
             color="neutral"
             variant="outline"
             size="xs"
-            disabled
-            :title="MSSG_SOON"
+            :disabled="!!analyticsBlockedReason(site)"
+            :title="analyticsBlockedReason(site) ?? 'ดูตัวเลขคนเข้าเว็บและคนกดลิงก์'"
+            :data-reason="analyticsBlockedReason(site) ?? ''"
+            :aria-expanded="!!site.id && analyticsOpenId === site.id"
             data-testid="mp-site-analytics"
-          >
-            <template #trailing>
-              <span class="text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
-            </template>
-          </UButton>
+            @click="toggleAnalytics(site)"
+          />
           <UButton
             v-if="editBlockedReason(site)"
             label="แก้ไขเว็บ"
@@ -351,6 +366,13 @@ function isNew(site: MssgSite): boolean {
           :to="editTo(site)"
           title="เปิดตัวแก้ไขเว็บในพื้นที่ของเจ้าของ"
           :data-testid="`mp-overview-site-edit-${site.id}`"
+        />
+        <MssgPagesAnalyticsPanel
+          v-if="!readonly && site.id && analyticsOpenId === site.id"
+          :site-id="site.id"
+          :site-name="site.name"
+          @changed="emit('analyticsChanged')"
+          @close="analyticsOpenId = null"
         />
       </li>
     </ul>
