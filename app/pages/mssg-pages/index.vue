@@ -21,6 +21,9 @@
  * mssg inside the profile) — the card shows "กำลังออกจากระบบ…" with its controls disabled and is polled like any job;
  * the 404 of `GET /mssg-accounts/:id` that follows is the success: the card goes and a success toast shows. A 200
  * `{ ok: true }` (no profile was bound) removes the card at once.
+ *
+ * FEAT-101: moved from `pages/mssg-pages.vue` to `pages/mssg-pages/index.vue` (same URL and route name) so the editor
+ * `pages/mssg-pages/sites/[siteId].vue` is a sibling route, not a child. Each site's "แก้ไขเว็บ" opens the editor.
  */
 import type {
   MssgAccountsResponse,
@@ -615,6 +618,7 @@ const areaKind = computed(() => (isAll.value ? 'all' : isOwnArea.value ? 'own' :
                 :requesting="requestingIds.includes(acc.id)"
                 :page-syncing="syncAllRequesting"
                 :poll-timed-out="poll.hasTimedOut(acc.id)"
+                :area-workspace-id="isOtherArea ? otherWorkspaceId : ''"
                 @refresh="syncOne(acc)"
                 @relogin="openRelogin(acc)"
                 @rename="openRename(acc)"

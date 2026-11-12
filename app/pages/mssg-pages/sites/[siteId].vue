@@ -1,0 +1,728 @@
+<script setup lang="ts">
+/**
+ * FEAT-101 — mssg site editor (`/mssg-pages/sites/[siteId]`, test-id prefix `me-`; spec "UI behaviour", D4, D6, D11,
+ * D12, AC-10, AC-11, AC-15..19; api-contract.md v1 §2, §3, §5).
+ *
+ * One `GET /mssg-sites/:id` per open (`useMssgDraft`), plus one `GET /mssg-accounts/:accountId` for the account's own
+ * job (AC-19: a running job of the account disables "บันทึก") and the FEAT-100 relogin modal. Edits are a draft in
+ * Apollo: the composable autosaves the op list (`PUT …/draft`, debounced, `rev`), "ทิ้งร่าง" deletes it, "บันทึก"
+ * confirms destructive ops (AC-15) and starts one `mssgApply` job that is followed every 2 s until it ends; its
+ * outcome (ok / conflict / validation / partial / session expired / other) is shown here without a reload (AC-18).
+ *
+ * Area (FEAT-100): a site belongs to its account's area; the API scopes `/mssg-sites/:id` by it (Admin: other area →
+ * 404 → "ไม่พบเว็บนี้"). A GOD in another area sees the warning banner; `?workspaceId=` is navigation context only
+ * (the back link), never sent — contract v1 has no such query on site routes. Payment admins never get here
+ * (`mssg-pages-access`).
+ *
+ * Steps 2–5 show a placeholder until B2–B4. The current step lives in `?step=` so a reload stays on it.
+ */
+import type { MssgAccountView } from '#shared/types/mssg-accounts'
+import type { MssgSiteView, MssgStepNo } from '#shared/types/mssg-sites'
+import type { MssgSiteSettingsForm } from '~/utils/mssg-sites'
+
+useSeoMeta({ title: 'แก้ไขเว็บ · mssg Pages' })
+definePageMeta({ middleware: 'mssg-pages-access' })
+
+const api = useApi()
+const auth = useAuth()
+const route = useRoute()
+const router = useRouter()
+const toast = useToast()
+
+const siteId = computed(() => String(route.params.siteId ?? ''))
+const isGod = computed(() => (auth.admin.value?.roles ?? []).includes('GOD'))
+const meId = computed(() => auth.admin.value?.id ?? '')
+const homeWorkspaceId = computed(() => auth.context.value?.homeWorkspaceId ?? auth.admin.value?.homeWorkspaceId ?? '')
+
+// ── outcome of the followed job ──────────────────────────────────────────────────────────────────────────────────────
+const noticeOk = ref(false)
+
+function onJobEnd(v: MssgSiteView) {
+  const job = v.job
+  if (!job) return
+  if (job.type !== 'mssgApply') {
+    if (job.status === 'completed') toast.add({ title: 'งานเสร็จแล้ว', color: 'success' })
+    else toast.add({ title: 'งานไม่สำเร็จ', description: mssgErrorText(v.lastError?.code), color: 'error' })
+    return
+  }
+  const la = v.lastApply && v.lastApply.jobId === job.id ? v.lastApply : null
+  if (job.status === 'completed' && (!la || la.status === 'ok')) {
+    noticeOk.value = true
+    toast.add({ title: MSSG_EDITOR_TEXT.saved, color: 'success' })
+    return
+  }
+  if (job.status === 'cancelled') {
+    toast.add({ title: 'งานบันทึกถูกยกเลิก', description: 'ร่างยังอยู่ครบ กดบันทึกใหม่ได้', color: 'warning' })
+    return
+  }
+  if (la?.status === 'conflict' || v.conflict) {
+    toast.add({ title: 'ค่าบน mssg เปลี่ยนไป', description: MSSG_ERROR_TEXT.mssgConflict, color: 'warning' })
+    return
+  }
+  const code = la?.error?.code ?? v.lastError?.code
+  toast.add({
+    title: la?.status === 'partial' ? 'บันทึกได้บางส่วน' : 'บันทึกไปที่ mssg ไม่สำเร็จ',
+    description: mssgErrorText(code),
+    color: 'error'
+  })
+  if (code === 'mssgSessionExpired') void loadAccount()
+}
+
+const draft = useMssgDraft(siteId, {
+  onJobEnd,
+  onPollTimeout: () => toast.add({ title: MSSG_POLL_TIMEOUT_TEXT, color: 'warning' })
+})
+const view = draft.view
+
+// ── account (AC-19 busy state + relogin) ─────────────────────────────────────────────────────────────────────────────
+const account = ref<MssgAccountView | null>(null)
+let accountSeq = 0
+
+async function loadAccount() {
+  const id = view.value?.accountId
+  if (!id) return
+  const s = ++accountSeq
+  try {
+    const acc = await api<MssgAccountView>(`/mssg-accounts/${encodeURIComponent(id)}`, { retry: 0 })
+    if (s !== accountSeq) return
+    account.value = acc
+  } catch {
+    // non-fatal: the API still answers 409 `jobInProgress` on apply
+  }
+}
+
+const accountPoll = useMssgPoll({
+  read: id => api<MssgAccountView>(`/mssg-accounts/${encodeURIComponent(id)}`, { retry: 0 }),
+  onUpdate: (acc) => {
+    account.value = acc
+  },
+  onEnd: (acc) => {
+    // a relogin / sync of the account ended: the site view's account status (and maybe `live`) changed
+    if (acc.job?.status === 'completed') void draft.reload()
+  },
+  onGone: () => {
+    account.value = null
+    void draft.reload()
+  }
+})
+watch(() => account.value && mssgNeedsPoll(account.value) ? account.value.id : '', id => accountPoll.track(id ? [id] : []))
+watch(() => view.value?.accountId, (id, prev) => {
+  if (id && id !== prev) void loadAccount()
+})
+
+const accountBusy = computed(() => !!account.value && mssgNeedsPoll(account.value))
+
+// ── relogin (FEAT-100 modal) ─────────────────────────────────────────────────────────────────────────────────────────
+const reloginOpen = ref(false)
+const needsRelogin = computed(() => {
+  const v = view.value
+  if (!v) return false
+  return v.account?.status === 'expired' || v.account?.status === 'error'
+    || (v.lastApply?.error?.code === 'mssgSessionExpired' && v.account?.status !== 'connected')
+})
+async function openRelogin() {
+  if (!account.value) await loadAccount()
+  if (account.value) reloginOpen.value = true
+  else toast.add({ title: 'โหลดบัญชี mssg ไม่สำเร็จ', description: 'ลองใหม่อีกครั้ง', color: 'error' })
+}
+function onReloginRequested(acc: MssgAccountView) {
+  account.value = acc
+  accountPoll.follow(acc.id)
+}
+
+// ── steps (URL state) ───────────────────────────────────────────────────────────────────────────────────────────────
+const step = computed<MssgStepNo>(() => {
+  const n = Number(route.query.step)
+  return (n >= 1 && n <= 5 ? n : 1) as MssgStepNo
+})
+function goStep(n: number) {
+  const next = Math.min(5, Math.max(1, n))
+  void router.replace({ query: { ...route.query, step: next === 1 ? undefined : String(next) } })
+}
+const currentStep = computed(() => MSSG_EDITOR_STEPS[step.value - 1]!)
+
+/** field errors + conflict items per step (red counts in the nav) */
+const problems = computed(() => {
+  const out: Partial<Record<MssgStepNo, number>> = {}
+  for (const e of draft.fieldErrors.value) out[e.step] = (out[e.step] ?? 0) + 1
+  for (const item of view.value?.conflict?.items ?? []) {
+    const n = mssgConflictStep(item, draft.ops.value)
+    out[n] = (out[n] ?? 0) + 1
+  }
+  return out
+})
+
+const step1Errors = computed(() => {
+  const out: Partial<Record<keyof MssgSiteSettingsForm, string>> = {}
+  for (const e of draft.fieldErrors.value) {
+    if (e.step !== 1) continue
+    const key = mssgStep1Key(e.path)
+    if (key && !out[key]) out[key] = e.message
+  }
+  return out
+})
+/** field errors of step 1 that have no field of their own (shown above the form) */
+const otherStepErrors = computed(() => draft.fieldErrors.value.filter(e => e.step === step.value && (e.step !== 1 || !mssgStep1Key(e.path))))
+
+// ── header / banners ────────────────────────────────────────────────────────────────────────────────────────────────
+const isOtherArea = computed(() => isGod.value && !!view.value && !!homeWorkspaceId.value && view.value.workspaceId !== homeWorkspaceId.value)
+const backTo = computed(() => {
+  const ws = isOtherArea.value ? view.value!.workspaceId : (typeof route.query.workspaceId === 'string' ? route.query.workspaceId : '')
+  return ws && ws !== homeWorkspaceId.value ? { path: '/mssg-pages', query: { area: ws } } : { path: '/mssg-pages' }
+})
+const accountLabel = computed(() => (view.value ? (view.value.account?.nickname || view.value.account?.email || 'บัญชี mssg') : ''))
+const lastEdit = computed(() => {
+  const la = view.value?.lastApply
+  if (!la || (la.status !== 'ok' && la.status !== 'partial')) return null
+  return { by: la.by?.name ?? '—', at: formatDateTime(la.at) }
+})
+
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  clock = setInterval(() => {
+    now.value = Date.now()
+  }, 30_000)
+})
+const otherEditor = computed(() => mssgDraftOtherEditor(view.value?.draft, meId.value, now.value))
+
+const resultUrl = computed(() => {
+  const s = draft.localSite.value
+  return s ? mssgSiteUrl(s.subdomain, s.apexDomain, s.domain?.name) : ''
+})
+
+// ── apply outcome panels (persistent, from the view) ─────────────────────────────────────────────────────────────────
+const applyProblem = computed(() => {
+  const v = view.value
+  const la = v?.lastApply
+  if (!v || !la || draft.jobOpen.value || !v.draft) return null
+  if (la.status !== 'failed' && la.status !== 'partial') return null
+  return {
+    status: la.status,
+    code: la.error?.code ?? '',
+    text: mssgErrorText(la.error?.code),
+    detail: la.error?.code === 'mssgValidation' ? '' : (la.error?.message ?? ''),
+    applied: la.appliedCount,
+    remaining: v.draft.ops.length
+  }
+})
+
+// ── save / discard ───────────────────────────────────────────────────────────────────────────────────────────────────
+const destructive = computed(() => mssgDestructiveOps(draft.ops.value, view.value?.live))
+const confirmOpen = ref(false)
+const discardOpen = ref(false)
+
+const saveBlockedReason = computed<string | null>(() => {
+  const v = view.value
+  if (!v) return 'กำลังโหลด'
+  if (v.gone) return MSSG_CONFLICT_TEXT.siteGone
+  if (draft.jobOpen.value) return MSSG_EDITOR_TEXT.applying
+  if (v.account?.status !== 'connected') return MSSG_CONFLICT_TEXT.notConnected
+  if (accountBusy.value) return MSSG_CONFLICT_TEXT.jobInProgress
+  if (v.conflict) return MSSG_CONFLICT_TEXT.conflictPending
+  if (!draft.dirty.value) return MSSG_CONFLICT_TEXT.noDraft
+  return null
+})
+
+async function onSave() {
+  if (saveBlockedReason.value || draft.requesting.value) return
+  noticeOk.value = false
+  if (!(await draft.flush())) {
+    toast.add({ title: 'ยังบันทึกไม่ได้', description: draft.saveError.value ?? 'แก้ช่องที่ผิดก่อนแล้วลองใหม่', color: 'error' })
+    return
+  }
+  if (destructive.value.length) {
+    confirmOpen.value = true
+    return
+  }
+  await doApply(false)
+}
+
+async function doApply(confirmDestructive: boolean) {
+  const res = await draft.apply(confirmDestructive)
+  if (res.ok) {
+    confirmOpen.value = false
+    return
+  }
+  if (res.reason === 'confirmRequired') {
+    confirmOpen.value = true
+    return
+  }
+  confirmOpen.value = false
+  if (res.reason === 'jobInProgress') void loadAccount()
+  toast.add({ title: 'บันทึกไปที่ mssg ไม่ได้', description: res.message, color: res.status === 409 ? 'warning' : 'error' })
+}
+
+async function onDiscard() {
+  const res = await draft.discard()
+  discardOpen.value = false
+  if (res.ok) {
+    noticeOk.value = false
+    toast.add({ title: 'ทิ้งร่างแล้ว', description: 'กลับไปใช้ค่าปัจจุบันบน mssg', color: 'success' })
+  } else {
+    toast.add({ title: 'ทิ้งร่างไม่ได้', description: res.message, color: 'error' })
+  }
+}
+
+async function onResolve(take: 'live' | 'mine') {
+  const res = await draft.resolve(take)
+  if (res.ok) {
+    toast.add({
+      title: take === 'live' ? 'ใช้ค่าจาก mssg แล้ว' : 'ใช้ค่าของคุณแล้ว',
+      description: 'กด "บันทึก" อีกครั้งเพื่อส่งไปที่ mssg',
+      color: 'success'
+    })
+  } else {
+    toast.add({ title: 'เลือกค่าไม่ได้', description: res.message, color: 'error' })
+  }
+}
+
+const canDiscard = computed(() => draft.dirty.value && !draft.jobOpen.value && draft.requesting.value === null)
+
+// ── page state / lifecycle ───────────────────────────────────────────────────────────────────────────────────────────
+const pageState = computed(() => draft.loadState.value)
+
+onMounted(() => {
+  void draft.load()
+})
+
+watch(siteId, (id, prev) => {
+  if (id && id !== prev) {
+    account.value = null
+    void draft.load()
+  }
+})
+
+function beforeUnload(e: BeforeUnloadEvent) {
+  if (draft.pending.value) e.preventDefault()
+}
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', beforeUnload)
+  if (clock) clearInterval(clock)
+  accountSeq++
+})
+// leaving the editor: send a pending edit first (the PUT is ≤ 1 s behind anyway)
+onBeforeRouteLeave(async () => {
+  if (draft.pending.value) await draft.flush()
+})
+</script>
+
+<template>
+  <UDashboardPanel id="mssg-editor">
+    <template #header>
+      <UDashboardNavbar title="แก้ไขเว็บ" :ui="{ title: 'min-w-0 truncate' }">
+        <template #leading>
+          <UDashboardSidebarCollapse />
+          <UButton
+            icon="i-lucide-chevron-left"
+            color="neutral"
+            variant="outline"
+            size="sm"
+            :to="backTo"
+            aria-label="กลับไปรายการเว็บ"
+            data-testid="me-back"
+          />
+        </template>
+        <template #right>
+          <UButton
+            v-if="pageState === 'ready'"
+            label="ทิ้งร่าง"
+            icon="i-lucide-trash-2"
+            color="neutral"
+            variant="outline"
+            size="sm"
+            :disabled="!canDiscard"
+            :title="canDiscard ? undefined : (draft.jobOpen.value ? MSSG_EDITOR_TEXT.applying : 'ยังไม่มีร่าง')"
+            data-testid="me-discard"
+            @click="discardOpen = true"
+          />
+          <UButton
+            v-if="pageState === 'ready'"
+            label="บันทึก"
+            icon="i-lucide-save"
+            size="sm"
+            :loading="draft.requesting.value === 'apply' || draft.jobOpen.value"
+            :disabled="!!saveBlockedReason || draft.requesting.value !== null"
+            :title="saveBlockedReason ?? 'ส่งร่างทั้งหมดไปที่ mssg'"
+            :data-reason="saveBlockedReason ?? ''"
+            data-testid="me-save"
+            @click="onSave"
+          />
+        </template>
+      </UDashboardNavbar>
+    </template>
+
+    <template #body>
+      <div
+        data-testid="me-page"
+        :data-state="pageState"
+        :data-site-id="siteId"
+        :data-job-status="view?.job?.status ?? ''"
+        :data-polling="draft.polling.value ? 'true' : 'false'"
+        :data-rev="view?.draft?.rev ?? ''"
+        :data-readonly="draft.readOnly.value ? 'true' : 'false'"
+        class="flex min-w-0 flex-1 flex-col gap-4"
+      >
+        <!-- loading -->
+        <div v-if="pageState === 'loading'" class="flex flex-col gap-3" data-testid="me-loading">
+          <USkeleton class="h-14 w-full rounded-lg" />
+          <div class="flex flex-wrap gap-4">
+            <USkeleton class="h-72 min-w-0 flex-[1_1_210px] rounded-lg" />
+            <USkeleton class="h-72 min-w-0 flex-[999_1_420px] rounded-lg" />
+          </div>
+        </div>
+
+        <!-- 404 -->
+        <div
+          v-else-if="pageState === 'notFound'"
+          class="flex flex-col items-center gap-3 rounded-lg border border-dashed border-default px-4 py-10 text-center"
+          data-testid="me-notfound"
+        >
+          <UIcon name="i-lucide-search-x" class="size-8 text-dimmed" />
+          <p class="font-medium text-highlighted">
+            {{ MSSG_EDITOR_TEXT.notFound }}
+          </p>
+          <p class="text-sm text-muted">
+            เว็บนี้อาจถูกลบไปแล้ว หรืออยู่ในพื้นที่ที่คุณไม่มีสิทธิ์ดู
+          </p>
+          <UButton
+            label="กลับไปรายการเว็บ"
+            variant="soft"
+            to="/mssg-pages"
+            data-testid="me-notfound-back"
+          />
+        </div>
+
+        <!-- error -->
+        <UAlert
+          v-else-if="pageState === 'error'"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          :title="MSSG_EDITOR_TEXT.loadFailed"
+          :description="draft.loadError.value && draft.loadError.value !== MSSG_EDITOR_TEXT.loadFailed ? draft.loadError.value : undefined"
+          data-testid="me-error"
+        >
+          <template #actions>
+            <UButton
+              label="ลองใหม่"
+              icon="i-lucide-refresh-cw"
+              color="error"
+              size="xs"
+              :loading="draft.loading.value"
+              data-testid="me-error-retry"
+              @click="draft.reload()"
+            />
+          </template>
+        </UAlert>
+
+        <!-- ready -->
+        <template v-else-if="view">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2" data-testid="me-header">
+            <span class="flex min-w-0 flex-[1_1_240px] flex-col gap-0.5">
+              <span class="text-xs break-words text-muted" data-testid="me-owner">{{ view.owner?.name || '—' }} › {{ accountLabel }}</span>
+              <span class="text-lg font-semibold break-words text-highlighted">
+                <span data-testid="me-site-name">{{ view.name }}</span>
+                <span class="text-sm font-normal break-all text-muted"> · <span data-testid="me-site-url">{{ view.url }}</span></span>
+              </span>
+            </span>
+            <span v-if="lastEdit" class="text-xs text-muted" data-testid="me-last-edit">แก้ไขล่าสุดโดย {{ lastEdit.by }} · {{ lastEdit.at }}</span>
+            <UButton
+              v-if="view.url"
+              label="เปิดดูเว็บ"
+              icon="i-lucide-external-link"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              :to="view.url"
+              target="_blank"
+              rel="noopener noreferrer"
+              external
+              data-testid="me-open-site"
+            />
+          </div>
+
+          <div
+            v-if="isOtherArea"
+            role="status"
+            class="flex flex-wrap items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3"
+            data-testid="me-banner"
+          >
+            <span class="min-w-0 flex-1 basis-64 text-sm break-words text-warning">
+              เว็บนี้เป็นของ <strong data-testid="me-banner-name">{{ view.owner?.name || '…' }}</strong>
+              · คุณกำลังแก้ไขแทนในฐานะผู้ดูแล ทุกการแก้ไขจะบันทึกชื่อคุณ
+            </span>
+          </div>
+
+          <UAlert
+            v-if="otherEditor"
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-users"
+            :title="`${otherEditor} กำลังแก้ร่างนี้อยู่ · แก้พร้อมกันอาจทับกัน`"
+            data-testid="me-draft-other"
+          />
+
+          <UAlert
+            v-if="view.gone"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-circle-off"
+            :title="MSSG_EDITOR_TEXT.gone"
+            data-testid="me-gone"
+          />
+          <UAlert
+            v-else-if="draft.readOnlyReason.value && !draft.jobOpen.value"
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-lock"
+            :title="draft.readOnlyReason.value"
+            data-testid="me-readonly"
+          >
+            <template v-if="needsRelogin" #actions>
+              <UButton
+                label="เข้าสู่ระบบใหม่"
+                icon="i-lucide-log-in"
+                color="warning"
+                size="xs"
+                data-testid="me-relogin"
+                @click="openRelogin"
+              />
+            </template>
+          </UAlert>
+
+          <div
+            v-if="draft.jobOpen.value"
+            role="status"
+            class="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning"
+            data-testid="me-job-status"
+            :data-step="view.job?.step ?? ''"
+            :data-status="view.job?.status ?? ''"
+          >
+            <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin" />
+            <span class="min-w-0 break-words">{{ MSSG_EDITOR_TEXT.applying }} · {{ mssgJobProgressText(view.job) }}</span>
+          </div>
+          <div
+            v-if="draft.pollTimedOut.value"
+            role="status"
+            class="flex flex-wrap items-center gap-2 rounded-lg border border-default px-4 py-2 text-sm text-warning"
+            data-testid="me-poll-timeout"
+          >
+            <span class="min-w-0 flex-1">{{ MSSG_POLL_TIMEOUT_TEXT }}</span>
+            <UButton
+              label="รีเฟรช"
+              icon="i-lucide-rotate-cw"
+              color="warning"
+              variant="outline"
+              size="xs"
+              data-testid="me-poll-reload"
+              @click="draft.reload()"
+            />
+          </div>
+
+          <div
+            v-if="noticeOk"
+            role="status"
+            class="flex items-center gap-3 rounded-lg border border-success/40 bg-success/10 px-4 py-3 text-sm text-success"
+            data-testid="me-notice-ok"
+          >
+            <span class="min-w-0 flex-1">{{ MSSG_EDITOR_TEXT.saved }}</span>
+            <UButton
+              label="ปิด"
+              color="neutral"
+              variant="outline"
+              size="xs"
+              @click="noticeOk = false"
+            />
+          </div>
+
+          <UAlert
+            v-if="applyProblem"
+            :color="applyProblem.status === 'partial' ? 'warning' : 'error'"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            :title="applyProblem.status === 'partial' ? 'บันทึกไปที่ mssg ได้บางส่วน' : 'บันทึกไปที่ mssg ไม่สำเร็จ'"
+            :data-code="applyProblem.code"
+            :data-status="applyProblem.status"
+            data-testid="me-apply-error"
+          >
+            <template #description>
+              <span class="flex flex-col gap-1">
+                <span class="break-words">{{ applyProblem.text }}</span>
+                <span v-if="applyProblem.status === 'partial'" class="break-words" data-testid="me-partial">
+                  บันทึกไปแล้ว {{ applyProblem.applied }} รายการ · เหลือ {{ applyProblem.remaining }} รายการในร่าง (ยังไม่ได้ส่งไปที่ mssg)
+                </span>
+                <span v-if="applyProblem.detail" class="text-xs break-words opacity-80">{{ applyProblem.detail }}</span>
+              </span>
+            </template>
+            <template v-if="applyProblem.code === 'mssgSessionExpired'" #actions>
+              <UButton
+                label="เข้าสู่ระบบใหม่"
+                icon="i-lucide-log-in"
+                color="error"
+                size="xs"
+                data-testid="me-apply-relogin"
+                @click="openRelogin"
+              />
+            </template>
+          </UAlert>
+
+          <MssgEditorConflictPanel
+            v-if="view.conflict && view.conflict.items.length"
+            :conflict="view.conflict"
+            :ops="draft.ops.value"
+            :busy="draft.requesting.value === 'resolve'"
+            :disabled="draft.jobOpen.value || !!view.gone"
+            @take="onResolve"
+            @go-step="goStep"
+          />
+
+          <!-- draft state line -->
+          <div class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span
+              v-if="draft.dirty.value"
+              class="inline-flex items-center gap-1.5 text-warning"
+              data-testid="me-draft-dirty"
+              :data-pending="draft.pending.value ? 'true' : 'false'"
+            >
+              <span class="size-2 rounded-full bg-warning" aria-hidden="true" />
+              {{ MSSG_EDITOR_TEXT.draftDirty }}
+            </span>
+            <span v-else class="text-muted" data-testid="me-draft-clean">ร่างตรงกับค่าบน mssg</span>
+            <span v-if="draft.saving.value" class="text-muted" data-testid="me-draft-saving">{{ MSSG_EDITOR_TEXT.draftSaving }}</span>
+            <span
+              v-else-if="draft.saveError.value"
+              class="text-error"
+              role="alert"
+              data-testid="me-draft-error"
+            >{{ draft.saveError.value }}</span>
+            <span v-else-if="view.draft && !draft.pending.value" class="text-muted" data-testid="me-draft-saved">
+              เก็บร่างใน Apollo แล้ว · {{ formatDateTime(view.draft.updatedAt) }}
+            </span>
+          </div>
+
+          <!-- nav · sheet · preview -->
+          <div class="flex flex-wrap items-start gap-5">
+            <div class="min-w-0 flex-[1_1_210px] lg:sticky lg:top-0">
+              <MssgEditorStepsNav
+                :current="step"
+                :readiness="view.readiness"
+                :problems="problems"
+                @select="goStep"
+              />
+            </div>
+
+            <section
+              class="flex min-w-0 flex-[999_1_420px] flex-col rounded-lg border border-default bg-elevated/20"
+              :data-testid="`me-sheet`"
+              :data-step="step"
+            >
+              <div class="flex flex-wrap items-center gap-3 border-b border-default px-4 py-3.5">
+                <UBadge :label="`ขั้นที่ ${step}`" color="primary" variant="subtle" />
+                <h2 class="min-w-0 text-sm font-semibold break-words text-highlighted">
+                  {{ currentStep.sheet }}
+                </h2>
+              </div>
+              <div class="flex flex-col gap-4 px-4 pt-4">
+                <UAlert
+                  v-for="(e, i) in otherStepErrors"
+                  :key="`${i}-${e.path}`"
+                  color="error"
+                  variant="subtle"
+                  icon="i-lucide-circle-alert"
+                  :title="`${mssgFieldLabel(e.path)}: ${e.message}`"
+                  data-testid="me-step-error"
+                  :data-path="e.path"
+                />
+                <MssgEditorSettingsStep
+                  v-if="step === 1"
+                  :site="draft.localSite.value"
+                  :live-enabled="!!view.live?.enabled"
+                  :read-only="draft.readOnly.value"
+                  :errors="step1Errors"
+                  :reset-token="draft.resetToken.value"
+                  @update="draft.updateSite"
+                />
+                <div
+                  v-else
+                  class="flex flex-col items-center gap-2 rounded-lg border border-dashed border-default px-4 py-12 text-center"
+                  data-testid="me-step-placeholder"
+                >
+                  <UIcon name="i-lucide-hammer" class="size-7 text-dimmed" />
+                  <p class="text-sm text-muted">
+                    {{ MSSG_EDITOR_TEXT.placeholder }}
+                  </p>
+                </div>
+              </div>
+              <div class="mt-5 flex items-center justify-between gap-3 border-t border-default px-4 py-3">
+                <div>
+                  <UButton
+                    v-if="step > 1"
+                    label="ย้อนกลับ"
+                    color="neutral"
+                    variant="outline"
+                    data-testid="me-prev"
+                    @click="goStep(step - 1)"
+                  />
+                </div>
+                <UButton
+                  v-if="step < 5"
+                  label="ถัดไป"
+                  color="primary"
+                  variant="soft"
+                  data-testid="me-next"
+                  @click="goStep(step + 1)"
+                />
+                <UButton
+                  v-else
+                  label="บันทึก"
+                  color="primary"
+                  :disabled="!!saveBlockedReason || draft.requesting.value !== null"
+                  :title="saveBlockedReason ?? undefined"
+                  data-testid="me-next-save"
+                  @click="onSave"
+                />
+              </div>
+            </section>
+
+            <div class="min-w-0 flex-[1_1_300px] lg:sticky lg:top-0">
+              <MssgEditorPreview :site="draft.localSite.value" :url="resultUrl" />
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <MssgEditorConfirmModal
+        v-model:open="confirmOpen"
+        title="ยืนยันการเปลี่ยนที่ย้อนกลับไม่ได้"
+        description="ร่างนี้มีรายการด้านล่าง เมื่อบันทึกแล้วจะเปลี่ยนบน mssg ทันที"
+        :items="destructive.map(d => d.label)"
+        confirm-label="ยืนยันและบันทึก"
+        color="error"
+        :busy="draft.requesting.value === 'apply'"
+        testid="me-confirm-destructive"
+        @confirm="doApply(true)"
+      />
+      <MssgEditorConfirmModal
+        v-model:open="discardOpen"
+        title="ทิ้งร่างนี้?"
+        description="การแก้ไขทั้งหมดที่ยังไม่ได้บันทึกไปที่ mssg จะหายไป แล้วกลับไปใช้ค่าปัจจุบันบน mssg"
+        confirm-label="ทิ้งร่าง"
+        color="error"
+        :busy="draft.requesting.value === 'discard'"
+        testid="me-confirm-discard"
+        @confirm="onDiscard"
+      />
+      <MssgPagesConnectModal
+        v-model:open="reloginOpen"
+        :account="account"
+        relogin
+        workspace-id=""
+        :poll-timed-out="!!account && accountPoll.hasTimedOut(account.id)"
+        @requested="onReloginRequested"
+        @renamed="account = $event"
+      />
+    </template>
+  </UDashboardPanel>
+</template>

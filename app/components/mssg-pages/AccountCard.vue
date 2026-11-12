@@ -9,8 +9,11 @@
  * v2: while `disconnecting` (unlink requested, logout job not finished) the card shows "กำลังออกจากระบบ…" and every
  * control is disabled; the page removes it when the account answers 404.
  * Test ids inside the card are fixed (`mp-status`, `mp-plan`, …) — QA scopes them by `mp-card-<id>`.
+ * FEAT-101 (B1): "แก้ไขเว็บ" (`mp-site-edit`) is a link to the editor `/mssg-pages/sites/<site.id>` (`?workspaceId=`
+ * when a GOD is in another area). It is disabled with its reason (`title` + `data-reason`) when the site has no Apollo
+ * document yet (`id: null`) or the account is not `connected`. "Analytics" stays disabled until B6.
  */
-import type { MssgAccountView } from '#shared/types/mssg-accounts'
+import type { MssgAccountView, MssgSite } from '#shared/types/mssg-accounts'
 
 const props = withDefaults(defineProps<{
   account: MssgAccountView
@@ -22,7 +25,9 @@ const props = withDefaults(defineProps<{
   pageSyncing?: boolean
   /** the 15 min follow-up of this account's job gave up */
   pollTimedOut?: boolean
-}>(), { readonly: false, requesting: false, pageSyncing: false, pollTimedOut: false })
+  /** FEAT-101 — GOD in another area: carried to the editor as `?workspaceId=` (navigation context only) */
+  areaWorkspaceId?: string
+}>(), { readonly: false, requesting: false, pageSyncing: false, pollTimedOut: false, areaWorkspaceId: '' })
 
 const emit = defineEmits<{
   refresh: []
@@ -49,6 +54,19 @@ const refreshHint = computed(() => {
 })
 const lastSyncText = computed(() => (a.value.lastSyncAt ? formatDateTime(a.value.lastSyncAt) : 'ยังไม่เคยดึง'))
 const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
+
+/** FEAT-101 — why "แก้ไขเว็บ" is disabled for a site, or `null` */
+function editBlockedReason(site: MssgSite): string | null {
+  if (a.value.status !== 'connected') return 'แก้ไขเว็บได้เมื่อบัญชีเชื่อมแล้วเท่านั้น'
+  if (!site.id) return 'ยังไม่มีข้อมูลเว็บนี้ในระบบ กด "ดึงข้อมูลใหม่" ก่อน'
+  return null
+}
+function editTo(site: MssgSite) {
+  return {
+    path: `/mssg-pages/sites/${encodeURIComponent(site.id ?? '')}`,
+    query: props.areaWorkspaceId ? { workspaceId: props.areaWorkspaceId } : undefined
+  }
+}
 </script>
 
 <template>
@@ -234,6 +252,7 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
         :data-index="i"
         :data-url="site.url"
         :data-status="site.status"
+        :data-site-id="site.id ?? ''"
       >
         <span class="flex min-w-0 flex-1 basis-40 flex-col">
           <span class="text-sm break-words text-highlighted" data-testid="mp-site-name">{{ site.name }}</span>
@@ -244,7 +263,7 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
           :class="site.status === 'published' ? 'text-success' : 'text-muted'"
           data-testid="mp-site-status"
         >{{ mssgSiteStatusText(site.status) }}</span>
-        <div v-if="!readonly" class="flex items-center gap-1.5">
+        <div v-if="!readonly" class="flex flex-wrap items-center gap-1.5">
           <UButton
             label="Analytics"
             color="neutral"
@@ -253,17 +272,33 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
             disabled
             :title="MSSG_SOON"
             data-testid="mp-site-analytics"
-          />
+          >
+            <template #trailing>
+              <span class="text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
+            </template>
+          </UButton>
           <UButton
+            v-if="editBlockedReason(site)"
             label="แก้ไขเว็บ"
+            icon="i-lucide-pencil"
             color="neutral"
             variant="outline"
             size="xs"
             disabled
-            :title="MSSG_SOON"
+            :title="editBlockedReason(site) ?? undefined"
+            :data-reason="editBlockedReason(site)"
             data-testid="mp-site-edit"
           />
-          <span class="text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
+          <UButton
+            v-else
+            label="แก้ไขเว็บ"
+            icon="i-lucide-pencil"
+            color="primary"
+            variant="soft"
+            size="xs"
+            :to="editTo(site)"
+            data-testid="mp-site-edit"
+          />
         </div>
       </li>
     </ul>
