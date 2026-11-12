@@ -1,17 +1,19 @@
 <script setup lang="ts">
 /**
  * FEAT-101 (AC-12, AC-13) — the apply found values on mssg that changed since the draft began: nothing was written.
- * Each item: step + Thai field label, "ค่าบน mssg" vs "ร่างของคุณ" (`gone` = the object no longer exists on mssg).
+ * Each item: step + Thai field label (B2: page / block / block order items name the page and the block), "ค่าบน mssg" vs "ร่างของคุณ" (`gone` = the object no longer exists on mssg).
  * Contract v1 `POST …/draft/resolve { take }` resolves **all** items at once, so the panel has one pair of buttons:
  * "ใช้ค่าจาก mssg" (`take: live`) / "ใช้ค่าของฉัน" (`take: mine`), then the user saves again.
  * Test ids: `me-conflict`, `me-conflict-item` (`data-path`, `data-kind`, `data-step`), `me-conflict-take-live`,
  * `me-conflict-take-mine`.
  */
-import type { MssgConflict, MssgOp } from '#shared/types/mssg-sites'
+import type { MssgConflict, MssgOp, MssgSiteProjection } from '#shared/types/mssg-sites'
 
 const props = defineProps<{
   conflict: MssgConflict
   ops: MssgOp[]
+  /** B2: projections to name pages / blocks in (draft preview first, then live) */
+  sites: (MssgSiteProjection | null | undefined)[]
   busy: boolean
   disabled: boolean
 }>()
@@ -21,7 +23,7 @@ const emit = defineEmits<{ take: [take: 'live' | 'mine'], goStep: [n: number] }>
 const items = computed(() => props.conflict.items.map(item => ({
   ...item,
   step: mssgConflictStep(item, props.ops),
-  label: mssgFieldLabel(item.path)
+  label: mssgConflictLabel(item, props.ops, props.sites)
 })))
 </script>
 
@@ -58,6 +60,7 @@ const items = computed(() => props.conflict.items.map(item => ({
           <span class="font-medium break-words text-highlighted">{{ item.label }}</span>
         </span>
         <span v-if="item.kind === 'gone'" class="break-words text-muted">ส่วนนี้ถูกลบไปแล้วบน mssg</span>
+        <span v-else-if="/(^|\.)order$/.test(item.path)" class="break-words text-muted" data-testid="me-conflict-order">ลำดับ block ในหน้านี้ถูกเปลี่ยนบน mssg หลังจากเริ่มร่าง · การเลื่อน block ในร่างจึงยังไม่ถูกส่ง</span>
         <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <span class="flex min-w-0 flex-col gap-0.5">
             <span class="text-xs text-muted">ค่าบน mssg</span>

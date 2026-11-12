@@ -4,7 +4,7 @@
  * codes). The projection never holds a token, a cookie or a payment key (D5, D10); `conflict.items[].live/mine` are
  * the user's own site content.
  */
-import type { MssgAccountStatus, MssgJobStatus } from './mssg-accounts'
+import type { MssgAccountStatus, MssgAccountView, MssgJobStatus } from './mssg-accounts'
 
 // ── site projection (contract §2.1) ─────────────────────────────────────────────────────────────────────────────────
 export type MssgApexDomain = 'mssg.me' | 'stick.ws' | 'linksbio.site' | 'lnkbio.site' | 'shopbio.site'
@@ -257,6 +257,13 @@ export interface MssgSiteView {
     nickname: string | null
     status: MssgAccountStatus
     plan: { name: string } | null
+    /** v1.1 — as the account view */
+    quota?: MssgAccountView['quota']
+    /**
+     * v1.1/v1.2 — the account's current / last mssg job of **any** type (FEAT-100 job shape, `null` when none); the
+     * BO's account-wide busy state (AC-19). The type may be any FEAT-100 / FEAT-101 type, unknown ones are generic.
+     */
+    job?: MssgSiteJobView | null
   }
   owner: MssgActorRef
   name: string
@@ -271,6 +278,8 @@ export interface MssgSiteView {
   readiness: MssgReadiness
   conflict: MssgConflict | null
   lastApply: MssgLastApply | null
+  /** v1.1 — the last apply with status `ok` or `partial` ("แก้ไขล่าสุดโดย", AC-16); kept when a later apply fails */
+  lastSuccessfulApply?: { at: string, by: MssgActorRef | null } | null
   /** M4 (section 4.4) — typed by B4 */
   store: unknown
   /** M5 (section 4.6) */
@@ -310,3 +319,25 @@ export type MssgSiteConflictReason
     | 'conflictPending'
     | 'noConflict'
     | 'quotaReached'
+
+// ── uploads (contract §3.1, D7) ─────────────────────────────────────────────────────────────────────────────────────
+/** `POST /mssg-sites/:id/uploads` */
+export interface MssgUploadBody {
+  filename: string
+  mime: string
+  /** base64 without the data-URI prefix */
+  data: string
+}
+
+/** 201 of `POST /mssg-sites/:id/uploads` */
+export interface MssgUploadView {
+  uploadId: string
+  /** `upload:<id>` — what goes into a 🖼 field of an op */
+  ref: string
+  mime: string
+  size: number
+  width: number | null
+  height: number | null
+  /** `/mssg-sites/:id/uploads/<id>` — relative to the API, read through `useApi()` (auth + area) */
+  previewUrl: string
+}

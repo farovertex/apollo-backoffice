@@ -1,0 +1,65 @@
+<script setup lang="ts">
+/**
+ * FEAT-101 — one text field of a page / block form inside a `UForm` (zod path `name`, Thai message under it).
+ * Test ids: `<testid>-<name>` on the input, `<testid>-error-<name>` on the message (rendered only with a message).
+ */
+const props = withDefaults(defineProps<{
+  name: string
+  label: string
+  /** test-id prefix, e.g. `me-block-field` → `me-block-field-title` / `me-block-field-error-title` */
+  testid: string
+  textarea?: boolean
+  rows?: number
+  maxlength?: number
+  placeholder?: string
+  description?: string
+  type?: string
+  required?: boolean
+  /** a server message for this field (overrides the form's own) */
+  error?: string | null
+  /** `n/max` counter under the field */
+  counter?: boolean
+}>(), { textarea: false, rows: 3, maxlength: undefined, placeholder: '', description: undefined, type: 'text', required: false, error: null, counter: false })
+
+const model = defineModel<string>({ default: '' })
+const errorTestid = computed(() => `${props.testid}-error-${props.name}`)
+</script>
+
+<template>
+  <UFormField
+    :label="label"
+    :name="name"
+    :required="required"
+    :description="description"
+    :error="error || undefined"
+    eager-validation
+    :ui="{ label: 'break-words', description: 'break-words' }"
+  >
+    <UTextarea
+      v-if="textarea"
+      v-model="model"
+      :rows="rows"
+      autoresize
+      :maxrows="12"
+      :maxlength="maxlength"
+      :placeholder="placeholder"
+      class="w-full"
+      :data-testid="`${testid}-${name}`"
+    />
+    <UInput
+      v-else
+      v-model="model"
+      :type="type"
+      :maxlength="maxlength"
+      :placeholder="placeholder"
+      class="w-full"
+      :data-testid="`${testid}-${name}`"
+    />
+    <template v-if="counter && maxlength" #hint>
+      <span class="text-xs text-muted tabular-nums">{{ model.length }}/{{ maxlength }}</span>
+    </template>
+    <template #error="{ error: e }">
+      <span v-if="e" :data-testid="errorTestid">{{ e }}</span>
+    </template>
+  </UFormField>
+</template>

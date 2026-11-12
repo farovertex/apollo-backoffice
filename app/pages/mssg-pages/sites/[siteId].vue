@@ -3,8 +3,9 @@
  * FEAT-101 — mssg site editor (`/mssg-pages/sites/[siteId]`, test-id prefix `me-`; spec "UI behaviour", D4, D6, D11,
  * D12, AC-10, AC-11, AC-15..19; api-contract.md v1 §2, §3, §5).
  *
- * One `GET /mssg-sites/:id` per open (`useMssgDraft`), plus one `GET /mssg-accounts/:accountId` for the account's own
- * job (AC-19: a running job of the account disables "บันทึก") and the FEAT-100 relogin modal. Edits are a draft in
+ * One `GET /mssg-sites/:id` per open (`useMssgDraft`). Contract v1.1: the account-wide busy state (AC-19) comes from
+ * `view.account.job` (any mssg job type; the site view is re-read every 2 s while it is open); `GET /mssg-accounts/:id`
+ * is read only for the FEAT-100 relogin modal (and followed while that relogin runs). Edits are a draft in
  * Apollo: the composable autosaves the op list (`PUT …/draft`, debounced, `rev`), "ทิ้งร่าง" deletes it, "บันทึก"
  * confirms destructive ops (AC-15) and starts one `mssgApply` job that is followed every 2 s until it ends; its
  * outcome (ok / conflict / validation / partial / session expired / other) is shown here without a reload (AC-18).
@@ -14,7 +15,9 @@
  * (the back link), never sent — contract v1 has no such query on site routes. Payment admins never get here
  * (`mssg-pages-access`).
  *
- * Steps 2–5 show a placeholder until B2–B4. The current step lives in `?step=` so a reload stays on it.
+ * Step 2 (B2): pages and blocks (`MssgEditorPagesStep`); the page selected there is also the one the mobile preview
+ * shows. Steps 3–5 show a placeholder until B3–B4. The current step lives in `?step=` so a reload stays on it.
+ * "แก้ไขล่าสุดโดย" = `lastSuccessfulApply` (v1.1; kept after a failed save).
  */
 import type { MssgAccountView } from '#shared/types/mssg-accounts'
 import type { MssgSiteView, MssgStepNo } from '#shared/types/mssg-sites'
@@ -70,11 +73,15 @@ function onJobEnd(v: MssgSiteView) {
 
 const draft = useMssgDraft(siteId, {
   onJobEnd,
-  onPollTimeout: () => toast.add({ title: MSSG_POLL_TIMEOUT_TEXT, color: 'warning' })
+  onPollTimeout: () => toast.add({ title: MSSG_POLL_TIMEOUT_TEXT, color: 'warning' }),
+  onAccountJobEnd: () => {
+    // a relogin modal that is open shows the account: refresh it
+    if (account.value) void loadAccount()
+  }
 })
 const view = draft.view
 
-// ── account (AC-19 busy state + relogin) ─────────────────────────────────────────────────────────────────────────────
+// ── account (relogin modal only; the busy state comes from `view.account.job`, v1.1) ────────────────────────────────
 const account = ref<MssgAccountView | null>(null)
 let accountSeq = 0
 
@@ -106,11 +113,15 @@ const accountPoll = useMssgPoll({
   }
 })
 watch(() => account.value && mssgNeedsPoll(account.value) ? account.value.id : '', id => accountPoll.track(id ? [id] : []))
-watch(() => view.value?.accountId, (id, prev) => {
-  if (id && id !== prev) void loadAccount()
-})
 
-const accountBusy = computed(() => !!account.value && mssgNeedsPoll(account.value))
+/** AC-19: a job of the account is open (v1.1 `view.account.job`, or the relogin this page started) */
+const accountBusy = computed(() => draft.accountJobOpen.value || (!!account.value && mssgNeedsPoll(account.value)))
+/** the account's job when it is not this site's own (that one has its own progress line) */
+const accountJobLine = computed(() => {
+  const job = view.value?.account?.job
+  if (!job || !mssgJobIsOpen(job) || draft.jobOpen.value || job.id === view.value?.job?.id) return null
+  return { type: job.type, text: mssgJobTypeText(job.type), progress: mssgJobProgressText(job) }
+})
 
 // ── relogin (FEAT-100 modal) ─────────────────────────────────────────────────────────────────────────────────────────
 const reloginOpen = ref(false)
@@ -161,8 +172,21 @@ const step1Errors = computed(() => {
   }
   return out
 })
-/** field errors of step 1 that have no field of their own (shown above the form) */
-const otherStepErrors = computed(() => draft.fieldErrors.value.filter(e => e.step === step.value && (e.step !== 1 || !mssgStep1Key(e.path))))
+/** B2: step-2 errors that land on a page / block of the draft (the sheet shows them in place) */
+const step2Errors = computed(() => draft.fieldErrors.value.filter(e => e.step === 2))
+function placedOnStep2(e: { target: { pageId: string | null } }) {
+  return !!e.target.pageId && !!draft.localSite.value?.pages.some(p => p.id === e.target.pageId)
+}
+/** field errors of the current step that have no field of their own (shown above the form) */
+const otherStepErrors = computed(() => draft.fieldErrors.value.filter((e) => {
+  if (e.step !== step.value) return false
+  if (e.step === 1) return !mssgStep1Key(e.path)
+  if (e.step === 2) return !placedOnStep2(e)
+  return true
+}))
+/** the page selected in step 2 (also shown by the mobile preview while on step 2) */
+const selectedPageId = ref('')
+const errorSites = computed(() => [draft.localSite.value, view.value?.live])
 
 // ── header / banners ────────────────────────────────────────────────────────────────────────────────────────────────
 const isOtherArea = computed(() => isGod.value && !!view.value && !!homeWorkspaceId.value && view.value.workspaceId !== homeWorkspaceId.value)
@@ -172,7 +196,13 @@ const backTo = computed(() => {
 })
 const accountLabel = computed(() => (view.value ? (view.value.account?.nickname || view.value.account?.email || 'บัญชี mssg') : ''))
 const lastEdit = computed(() => {
-  const la = view.value?.lastApply
+  const v = view.value
+  // v1.1: the last successful apply, kept after a failed one; older views without the key fall back to `lastApply`
+  if (v && v.lastSuccessfulApply !== undefined) {
+    const ls = v.lastSuccessfulApply
+    return ls ? { by: ls.by?.name ?? '—', at: formatDateTime(ls.at) } : null
+  }
+  const la = v?.lastApply
   if (!la || (la.status !== 'ok' && la.status !== 'partial')) return null
   return { by: la.by?.name ?? '—', at: formatDateTime(la.at) }
 })
@@ -249,7 +279,6 @@ async function doApply(confirmDestructive: boolean) {
     return
   }
   confirmOpen.value = false
-  if (res.reason === 'jobInProgress') void loadAccount()
   toast.add({ title: 'บันทึกไปที่ mssg ไม่ได้', description: res.message, color: res.status === 409 ? 'warning' : 'error' })
 }
 
@@ -504,6 +533,16 @@ onBeforeRouteLeave(async () => {
             <span class="min-w-0 break-words">{{ MSSG_EDITOR_TEXT.applying }} · {{ mssgJobProgressText(view.job) }}</span>
           </div>
           <div
+            v-if="accountJobLine"
+            role="status"
+            class="flex items-center gap-2 rounded-lg border border-info/40 bg-info/10 px-4 py-3 text-sm text-info"
+            data-testid="me-account-busy"
+            :data-type="accountJobLine.type"
+          >
+            <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin" />
+            <span class="min-w-0 break-words">{{ accountJobLine.text }} · {{ accountJobLine.progress }} · แก้ร่างต่อได้ กด "บันทึก" ได้เมื่องานนี้เสร็จ</span>
+          </div>
+          <div
             v-if="draft.pollTimedOut.value"
             role="status"
             class="flex flex-wrap items-center gap-2 rounded-lg border border-default px-4 py-2 text-sm text-warning"
@@ -572,6 +611,7 @@ onBeforeRouteLeave(async () => {
             v-if="view.conflict && view.conflict.items.length"
             :conflict="view.conflict"
             :ops="draft.ops.value"
+            :sites="errorSites"
             :busy="draft.requesting.value === 'resolve'"
             :disabled="draft.jobOpen.value || !!view.gone"
             @take="onResolve"
@@ -631,7 +671,7 @@ onBeforeRouteLeave(async () => {
                   color="error"
                   variant="subtle"
                   icon="i-lucide-circle-alert"
-                  :title="`${mssgFieldLabel(e.path)}: ${e.message}`"
+                  :title="`${mssgFieldErrorLabel(e, draft.ops.value, errorSites)}: ${e.message}`"
                   data-testid="me-step-error"
                   :data-path="e.path"
                 />
@@ -643,6 +683,19 @@ onBeforeRouteLeave(async () => {
                   :errors="step1Errors"
                   :reset-token="draft.resetToken.value"
                   @update="draft.updateSite"
+                />
+                <MssgEditorPagesStep
+                  v-else-if="step === 2"
+                  v-model:page="selectedPageId"
+                  :site-id="view.id"
+                  :site="draft.localSite.value"
+                  :ops="draft.ops.value"
+                  :read-only="draft.readOnly.value"
+                  :errors="step2Errors"
+                  :reset-token="draft.resetToken.value"
+                  @page-update="draft.updatePage"
+                  @block-update="draft.updateBlock"
+                  @ops="draft.editOps"
                 />
                 <div
                   v-else
@@ -687,7 +740,12 @@ onBeforeRouteLeave(async () => {
             </section>
 
             <div class="min-w-0 flex-[1_1_300px] lg:sticky lg:top-0">
-              <MssgEditorPreview :site="draft.localSite.value" :url="resultUrl" />
+              <MssgEditorPreview
+                :site="draft.localSite.value"
+                :url="resultUrl"
+                :site-id="view.id"
+                :page-id="step === 2 ? selectedPageId : ''"
+              />
             </div>
           </div>
         </template>

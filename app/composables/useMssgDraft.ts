@@ -15,11 +15,19 @@
  * carries the `mssgApply` job, which is followed with `useMssgPoll` (2 s, 15 min cap, stopped on leave). While the job
  * is open the draft is read-only (D12); its end is handed to `onJobEnd` (ok / conflict / validation / partial / …).
  * Every request goes through `useApi()` with `retry: 0`.
+ *
+ * B2 (M2): `localSite` = the server's `preview` with the not-yet-saved ops laid over it (`mssgLocalPreview`, the client
+ * copy of "base + ops"), so page / block edits show at once in the step sheet and the mobile preview. Page / block
+ * edits fold through `updatePage()` / `updateBlock()` (one op per object, edits of an object created in the draft go
+ * into its create op). Contract v1.1: the account's job of any type (`view.account.job`) is followed too — the site
+ * view is re-read every 2 s while it is open (AC-19 busy state) without touching local edits; only the end of the
+ * site's own job (`mssgApply` …) is handed to `onJobEnd`.
  */
 import type {
   MssgApplyBody,
   MssgDraftPutBody,
   MssgOp,
+  MssgOpPageUpdate,
   MssgOpSiteUpdate,
   MssgResolveBody,
   MssgSiteProjection,
@@ -35,6 +43,8 @@ export interface MssgDraftOptions {
   onJobEnd?: (view: MssgSiteView) => void
   /** the 15 min follow-up gave up */
   onPollTimeout?: () => void
+  /** v1.1: a job of the account (not this site's own) ended — the page may refresh account data */
+  onAccountJobEnd?: (view: MssgSiteView) => void
 }
 
 export interface MssgRequestResult {
@@ -76,7 +86,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   const saveError = ref<string | null>(null)
   /** errors of the last PUT (400 `validation`) */
   const putErrors = ref<MssgFieldError[]>([])
-  /** apply-error paths the user edited since (hidden) — reset per apply job */
+  /** apply errors the user edited since (hidden, keyed by `errKey`) — reset per apply job */
   const dismissedApplyPaths = ref<string[]>([])
   /** bumped whenever `ops` is replaced from the server (load, reload, discard, resolve, job end) — forms re-init */
   const resetToken = ref(0)
@@ -85,6 +95,8 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   let timer: ReturnType<typeof setTimeout> | null = null
   let inflight: Promise<void> | null = null
   let loadSeq = 0
+  /** the site's own job is being followed (its end goes to `onJobEnd`; an account-only job does not) */
+  let ownJobFollowed = false
 
   // ── derived ───────────────────────────────────────────────────────────────────────────────────────────────────────
   const jobOpen = computed(() => mssgSiteJobOpen(view.value))
@@ -92,21 +104,14 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   /** the draft holds changes not yet written to mssg (server draft or local edits) */
   const dirty = computed(() => ops.value.length > 0 || (view.value?.draft?.ops.length ?? 0) > 0)
 
-  /** merged fields of every `site.update` op (later wins) */
-  const siteFields = computed<MssgSiteUpdateFields>(() => {
-    let out: Record<string, unknown> = {}
-    for (const op of ops.value) {
-      if (op.op === 'site.update') out = mssgMergeFields(out, op.fields as Record<string, unknown>)
-    }
-    return out as MssgSiteUpdateFields
-  })
-
-  /** server preview + local site fields (instant form / preview values) */
+  /** server preview + the local ops it has not seen yet (instant form / preview values) */
   const localSite = computed<MssgSiteProjection | null>(() => {
-    const preview = view.value?.preview ?? view.value?.live
-    if (!preview) return null
-    return mssgMergeFields(preview as unknown as Record<string, unknown>, siteFields.value as Record<string, unknown>) as unknown as MssgSiteProjection
+    const v = view.value
+    if (!v) return null
+    return mssgLocalPreview(v.preview ?? v.live, v.draft?.ops ?? [], v.live, ops.value)
   })
+  /** v1.1: a job of the account is open (any type, also another site's) — "บันทึก" waits (AC-19) */
+  const accountJobOpen = computed(() => mssgJobIsOpen(view.value?.account?.job))
 
   const readOnlyReason = computed<string | null>(() => {
     const v = view.value
@@ -118,12 +123,12 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   })
   const readOnly = computed(() => !!readOnlyReason.value || requesting.value !== null)
 
-  const applyErrors = computed<MssgFieldError[]>(() => {
+  const applyErrorsAll = computed<MssgFieldError[]>(() => {
     const la = view.value?.lastApply
     if (!la?.error || la.error.code !== 'mssgValidation' || !view.value?.draft) return []
     return mssgApplyErrorsToFieldErrors(la.error.fields, ops.value)
-      .filter(e => !dismissedApplyPaths.value.includes(e.path))
   })
+  const applyErrors = computed<MssgFieldError[]>(() => applyErrorsAll.value.filter(e => !dismissedApplyPaths.value.includes(errKey(e))))
   const fieldErrors = computed<MssgFieldError[]>(() => [...putErrors.value, ...applyErrors.value])
 
   watch(() => view.value?.lastApply?.jobId, () => {
@@ -142,7 +147,17 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   function setView(v: MssgSiteView, replaceOps: boolean) {
     view.value = v
     if (replaceOps) takeServerOps(v)
-    if (mssgSiteJobOpen(v)) poll.follow(v.id)
+    if (mssgSiteJobOpen(v)) ownJobFollowed = true
+    if (mssgSiteJobOpen(v) || mssgJobIsOpen(v.account?.job)) poll.follow(v.id)
+  }
+
+  /** a poll answer while only the account's job runs: keep local edits, take the server's draft only when it moved */
+  function takeQuiet(v: MssgSiteView) {
+    const cur = view.value
+    const sameRev = (v.draft?.rev ?? null) === (cur?.draft?.rev ?? null)
+    if (sameRev) view.value = v
+    else if (!pending.value && !inflight) setView(v, true)
+    // else: a PUT of ours is on its way; its answer (or its 409 `draftChanged`) brings the newer view
   }
 
   async function load(opts: { replaceOps?: boolean } = {}) {
@@ -176,10 +191,20 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   // ── job follow-up ─────────────────────────────────────────────────────────────────────────────────────────────────
   const poll = useMssgPoll<MssgSiteView>({
     read: id => api<MssgSiteView>(`/mssg-sites/${encodeURIComponent(id)}`, { retry: 0 }),
-    needsPoll: v => mssgSiteJobOpen(v),
-    // the draft is frozen while the job is open (D12) — the server's ops are the truth
-    onUpdate: v => setView(v, true),
-    onEnd: v => options.onJobEnd?.(v),
+    needsPoll: v => mssgSiteJobOpen(v) || mssgJobIsOpen(v.account?.job),
+    // the draft is frozen while the site's own job is open (D12) — the server's ops are the truth
+    onUpdate: (v) => {
+      if (mssgSiteJobOpen(v) || ownJobFollowed) setView(v, true)
+      else takeQuiet(v)
+    },
+    onEnd: (v) => {
+      if (ownJobFollowed) {
+        ownJobFollowed = false
+        options.onJobEnd?.(v)
+      } else {
+        options.onAccountJobEnd?.(v)
+      }
+    },
     onGone: () => {
       loadState.value = 'notFound'
       view.value = null
@@ -190,12 +215,24 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   const pollTimedOut = computed(() => poll.timedOut.value.length > 0)
 
   // ── edits ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+  function errKey(e: MssgFieldError): string {
+    return `${e.target.pageId ?? ''}|${e.target.blockId ?? ''}|${e.path}`
+  }
+
+  function under(field: string, fields: string[]): boolean {
+    return fields.some(f => field === f || field.startsWith(`${f}.`) || f.startsWith(`${field}.`))
+  }
+
+  /** the errors an edit answers are hidden right away (server errors return with the next 400 / apply) */
+  function clearErrors(pred: (e: MssgFieldError) => boolean) {
+    putErrors.value = putErrors.value.filter(e => !pred(e))
+    const keys = applyErrorsAll.value.filter(pred).map(errKey)
+    if (keys.length) dismissedApplyPaths.value = [...new Set([...dismissedApplyPaths.value, ...keys])]
+  }
+
   function touch(paths: string[] = []) {
     localVersion.value++
-    if (paths.length) {
-      putErrors.value = putErrors.value.filter(e => !paths.some(p => e.path === p || e.path.startsWith(`${p}.`)))
-      dismissedApplyPaths.value = [...new Set([...dismissedApplyPaths.value, ...paths])]
-    }
+    if (paths.length) clearErrors(e => !e.target.pageId && !e.target.blockId && under(e.path, paths))
     schedule()
   }
 
@@ -229,6 +266,32 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
 
   function pushOp(op: MssgOp, paths: string[] = []) {
     setOps([...ops.value, op], paths)
+  }
+
+  /** B2: a page edit (folded, see `mssgFoldPageUpdate`); clears the errors of those page fields */
+  function updatePage(pageId: string, fields: MssgOpPageUpdate['fields']) {
+    if (readOnly.value) return
+    ops.value = mssgFoldPageUpdate(ops.value, pageId, fields)
+    const touched = leafPaths(fields as Record<string, unknown>)
+    clearErrors(e => e.target.pageId === pageId && !e.target.blockId && under(e.target.field, touched))
+    touch()
+  }
+
+  /** B2: a block edit / hide / show (folded, see `mssgFoldBlockUpdate`); clears the errors of those block fields */
+  function updateBlock(pageId: string, blockId: string, patch: { fields?: Record<string, unknown>, enabled?: boolean }) {
+    if (readOnly.value) return
+    ops.value = mssgFoldBlockUpdate(ops.value, pageId, blockId, patch)
+    const touched = [...Object.keys(patch.fields ?? {}), ...(patch.enabled === undefined ? [] : ['enabled'])]
+    clearErrors(e => e.target.blockId === blockId && (e.target.field === '' || under(e.target.field, touched)))
+    touch()
+  }
+
+  /** B2: replace the op list after a structural change (add / clone / move / delete of a page or block) */
+  function editOps(next: MssgOp[], clear?: (e: MssgFieldError) => boolean) {
+    if (readOnly.value) return
+    ops.value = next
+    if (clear) clearErrors(clear)
+    touch()
   }
 
   // ── autosave ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -375,7 +438,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
     loading,
     ops,
     localSite,
-    siteFields,
+    accountJobOpen,
     saving,
     saveError,
     pending,
@@ -393,6 +456,9 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
     updateSite,
     setOps,
     pushOp,
+    updatePage,
+    updateBlock,
+    editOps,
     flush,
     discard,
     resolve,

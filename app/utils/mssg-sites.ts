@@ -14,6 +14,7 @@ import type {
   MssgSiteView,
   MssgStepNo
 } from '#shared/types/mssg-sites'
+import type { MssgOpTarget } from './mssg-blocks'
 
 /** a draft change by another user younger than this shows "กำลังแก้ร่างนี้อยู่" (spec "UI behaviour") */
 export const MSSG_DRAFT_OTHER_MS = 10 * 60 * 1000
@@ -158,6 +159,8 @@ export interface MssgFieldError {
   path: string
   message: string
   step: MssgStepNo
+  /** B2: page / block the error belongs to (`null` for site fields) and the field inside it */
+  target: MssgOpTarget
 }
 
 export function mssgIssuesToFieldErrors(issues: { path: string, message: string }[] | undefined, ops: MssgOp[]): MssgFieldError[] {
@@ -166,19 +169,29 @@ export function mssgIssuesToFieldErrors(issues: { path: string, message: string 
     const opIndex = m ? Number(m[1]) : null
     const path = mssgNormalizePath(m ? m[2]! : (issue.path ?? ''))
     const op = opIndex !== null ? ops[opIndex] : undefined
-    return { opIndex, path, message: issue.message, step: mssgStepOf(op, path) }
+    return { opIndex, path, message: issue.message, step: mssgStepOf(op, path), target: mssgOpTarget(op, m ? m[2]! : (issue.path ?? '')) }
   })
 }
 
 export function mssgApplyErrorsToFieldErrors(fields: { opIndex: number, path: string, message: string }[] | undefined, ops: MssgOp[]): MssgFieldError[] {
   return (fields ?? []).map((f) => {
     const path = mssgNormalizePath(f.path)
-    return { opIndex: f.opIndex, path, message: f.message, step: mssgStepOf(ops[f.opIndex], path) }
+    return { opIndex: f.opIndex, path, message: f.message, step: mssgStepOf(ops[f.opIndex], path), target: mssgOpTarget(ops[f.opIndex], f.path) }
   })
 }
 
 export function mssgConflictStep(item: MssgConflictItem, ops: MssgOp[]): MssgStepNo {
   return mssgStepOf(ops[item.opIndex], item.path)
+}
+
+/** Thai label of a conflict item: page / block / order items name the page and block (B2), else the site field */
+export function mssgConflictLabel(item: MssgConflictItem, ops: MssgOp[], sites: (MssgSiteProjection | null | undefined)[]): string {
+  return mssgConflictItemLabel(item, ops, sites) ?? mssgFieldLabel(item.path)
+}
+
+/** Thai label of a field error (site field, or page / block field with its names) */
+export function mssgFieldErrorLabel(e: MssgFieldError, ops: MssgOp[], sites: (MssgSiteProjection | null | undefined)[]): string {
+  return (e.opIndex !== null ? mssgPageBlockLabel(ops[e.opIndex], e.path, sites) : mssgPageBlockLabel(null, e.path, sites)) ?? mssgFieldLabel(e.path)
 }
 
 // ── ops ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -192,14 +205,16 @@ export interface MssgDestructiveOp {
 /** contract §3.1: `page.delete`, `block.delete`, `product.delete`, `site.update` with `enabled: false` while live is on */
 export function mssgDestructiveOps(ops: MssgOp[], live: Pick<MssgSiteProjection, 'enabled' | 'pages'> | null | undefined): MssgDestructiveOp[] {
   const out: MssgDestructiveOp[] = []
+  const pageName = (id: string) => live?.pages?.find(p => p.id === id)?.name ?? id
   ops.forEach((op, index) => {
     if (op.op === 'site.update' && op.fields.enabled === false && live?.enabled === true) {
       out.push({ index, type: op.op, label: 'ปิดการเผยแพร่เว็บ (Unpublish)' })
     } else if (op.op === 'page.delete') {
-      const page = live?.pages.find(p => p.id === op.pageId)
-      out.push({ index, type: op.op, label: `ลบหน้า "${page?.name ?? op.pageId}"` })
+      out.push({ index, type: op.op, label: `ลบหน้า "${pageName(op.pageId)}"` })
     } else if (op.op === 'block.delete') {
-      out.push({ index, type: op.op, label: `ลบ block ${op.blockId}` })
+      const block = live?.pages?.find(p => p.id === op.pageId)?.blocks.find(b => b.id === op.blockId)
+      const what = block ? `${mssgBlockKindLabel(block.kind)}${mssgBlockSummary(block) ? ` · ${mssgBlockSummary(block)}` : ''}` : op.blockId
+      out.push({ index, type: op.op, label: `ลบ block "${what}" ในหน้า "${pageName(op.pageId)}"` })
     } else if (op.op === 'product.delete') {
       out.push({ index, type: op.op, label: `ลบสินค้า ${op.productId}` })
     }
@@ -257,47 +272,27 @@ export function mssgValueText(value: unknown): string {
   }
 }
 
-// ── blocks (labels for the preview; B2 adds the editors) ────────────────────────────────────────────────────────────
-export const MSSG_BLOCK_KIND_LABEL: Record<string, string> = {
-  Hat: 'ภาพปก/โปรไฟล์',
-  Link: 'ลิงก์',
-  TextRich: 'ข้อความ',
-  Image: 'รูปภาพ',
-  ImageGallery: 'แกลเลอรี',
-  Video: 'วิดีโอ',
-  VideoGallery: 'คลังวิดีโอ',
-  AudioEmbed: 'เพลง',
-  Giphy: 'Giphy',
-  Map: 'แผนที่',
-  Timer: 'นับถอยหลัง',
-  Divider: 'เส้นคั่น',
-  Accordion: 'คำถามพบบ่อย',
-  Features: 'จุดเด่น',
-  Messengers: 'ปุ่มแชท',
-  Socials: 'โซเชียล',
-  Products: 'สินค้า',
-  SubscriptionForm: 'ฟอร์ม',
-  CustomCode: 'โค้ด HTML'
-}
-
-export function mssgBlockKindLabel(kind: string): string {
-  return MSSG_BLOCK_KIND_LABEL[kind] ?? kind
-}
-
-/** one short line of text of a block for the simple preview (B2 renders each kind properly) */
-export function mssgBlockPreviewText(fields: Record<string, unknown> | null | undefined): string {
-  if (!fields) return ''
-  for (const key of ['title', 'header', 'label', 'address', 'url', 'content']) {
-    const v = fields[key]
-    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 80)
-  }
-  const html = fields.html
-  if (typeof html === 'string') return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)
-  return ''
-}
-
 /** the home page of a projection (by `homePageId`, else the first page) */
 export function mssgHomePage(site: Pick<MssgSiteProjection, 'pages' | 'homePageId'> | null | undefined) {
   if (!site?.pages?.length) return null
   return site.pages.find(p => p.id === site.homePageId) ?? site.pages[0]!
+}
+
+// ── account job (contract v1.1 / v1.2: `view.account.job` may be any mssg job type) ─────────────────────────────────
+export const MSSG_JOB_TYPE_TEXT: Record<string, string> = {
+  mssgConnect: 'กำลังเชื่อมบัญชี mssg…',
+  mssgSync: 'กำลังดึงข้อมูลจาก mssg…',
+  mssgLogout: 'กำลังออกจากระบบ mssg…',
+  mssgApply: 'กำลังบันทึกเว็บไปที่ mssg…',
+  mssgSiteCreate: 'กำลังสร้างเว็บ…',
+  mssgSiteDuplicate: 'กำลังทำสำเนาเว็บ…',
+  mssgSiteDelete: 'กำลังลบเว็บ…',
+  mssgDomain: 'กำลังตั้งค่าโดเมน…',
+  mssgStoreRead: 'กำลังดึงข้อมูลร้านค้า…',
+  mssgAnalytics: 'กำลังดึงสถิติ…'
+}
+
+/** what a job of the account is doing; an unknown type → "กำลังทำงานกับ mssg…" */
+export function mssgJobTypeText(type: string | null | undefined): string {
+  return (type && MSSG_JOB_TYPE_TEXT[type]) || 'กำลังทำงานกับ mssg…'
 }

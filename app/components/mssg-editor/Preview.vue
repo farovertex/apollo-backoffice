@@ -1,21 +1,29 @@
 <script setup lang="ts">
 /**
- * FEAT-101 — mobile preview (design aside "ตัวอย่างบนมือถือ"), rendered from the draft's preview (server `preview` +
- * local site fields). B1 renders the site name, the resulting URL and the home page's blocks in a simple form (kind +
- * one line of text, hidden blocks dimmed); B2 refines the rendering per block kind. Approximate, not pixel-exact.
- * Test ids: `me-preview` (`data-page-id`, `data-blocks`), `me-preview-block` (`data-kind`, `data-enabled`).
+ * FEAT-101 — mobile preview (design aside "ตัวอย่างบนมือถือ"), rendered from the draft (server `preview` + the local
+ * ops not yet saved), so it follows every edit at once. Shows the page selected in step 2 (else the home page).
+ * B2: each block kind is drawn recognisably — Profile (image + title), Link (button), Text (paragraphs), Image /
+ * Gallery (pictures), Video / Music / Map / Giphy / Code (labelled boxes), FAQ / Features / Form / Socials /
+ * Messengers (their items), Timer (countdown), Divider (line); **hidden blocks are omitted**. Text is rendered as
+ * text (never `v-html`). Approximate, not pixel-exact.
+ * Test ids: `me-preview` (`data-page-id`, `data-blocks` = shown blocks), `me-preview-name`, `me-preview-url`,
+ * `me-preview-page`, `me-preview-block` (`data-kind`, `data-block-id`), `me-preview-empty`.
  */
-import type { MssgSiteProjection } from '#shared/types/mssg-sites'
+import type { MssgBlockProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   site: MssgSiteProjection | null
   url: string
-}>()
+  siteId: string
+  /** the page to show (step 2 selection); empty → the home page */
+  pageId?: string
+}>(), { pageId: '' })
 
 const home = computed(() => mssgHomePage(props.site))
-const blocks = computed(() => home.value?.blocks ?? [])
+const page = computed(() => (props.pageId && props.site?.pages.find(p => p.id === props.pageId)) || home.value)
+const blocks = computed(() => (page.value?.blocks ?? []).filter(b => b.enabled))
 const bg = computed(() => {
-  const c = home.value?.theme?.page?.backgroundColor
+  const c = page.value?.theme?.page?.backgroundColor
   return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : '#FFFFFF'
 })
 /** dark text on a light background and vice versa */
@@ -24,6 +32,38 @@ const fg = computed(() => {
   const [r, g, b] = [0, 2, 4].map(i => Number.parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number]
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.6 ? '#18181B' : '#FAFAFA'
 })
+
+// ── per-kind helpers (fields are mssg's, so every read is defensive) ────────────────────────────────────────────────
+function str(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}
+function arr(v: unknown): Record<string, unknown>[] {
+  return Array.isArray(v) ? v.filter(x => x && typeof x === 'object') as Record<string, unknown>[] : []
+}
+function host(url: unknown): string {
+  try {
+    return new URL(str(url)).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+function paragraphs(b: MssgBlockProjection): string[] {
+  return mssgHtmlToText(str(b.fields.html)).split(/\n+/).filter(Boolean).slice(0, 6)
+}
+function linkTarget(b: MssgBlockProjection): string {
+  const a = b.fields.action as Record<string, unknown> | undefined
+  if (a?.type === 'page') return `→ ${props.site?.pages.find(p => p.id === a.page)?.name ?? 'หน้าภายใน'}`
+  return host(a?.url)
+}
+function countdown(b: MssgBlockProjection): string {
+  const t = new Date(str(b.fields.expireDate)).getTime()
+  if (Number.isNaN(t)) return '--:--:--'
+  const s = Math.max(0, Math.floor((t - Date.now()) / 1000))
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return `${d} วัน ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
 </script>
 
 <template>
@@ -31,7 +71,7 @@ const fg = computed(() => {
     aria-label="ตัวอย่างหน้าเว็บ"
     class="flex min-w-0 flex-col items-center gap-3 rounded-lg border border-default bg-elevated/40 p-4"
     data-testid="me-preview"
-    :data-page-id="home?.id ?? ''"
+    :data-page-id="page?.id ?? ''"
     :data-blocks="blocks.length"
   >
     <div class="flex w-full items-center justify-between gap-2">
@@ -50,25 +90,124 @@ const fg = computed(() => {
       <div class="flex flex-col gap-0.5 border-b border-current/10 px-4 py-2 text-center">
         <span class="text-sm font-semibold break-words" data-testid="me-preview-name">{{ site?.name || '—' }}</span>
         <span class="truncate text-[11px] opacity-70" data-testid="me-preview-url">{{ url }}</span>
+        <span v-if="page && page.id !== home?.id" class="truncate text-[11px] opacity-70" data-testid="me-preview-page">หน้า: {{ page.name }} (/{{ page.slug }})</span>
       </div>
       <div class="flex flex-1 flex-col gap-2.5 p-4">
-        <p v-if="!home" class="py-10 text-center text-xs opacity-70">
+        <p v-if="!page" class="py-10 text-center text-xs opacity-70" data-testid="me-preview-empty">
           เว็บนี้ยังไม่มีหน้า
         </p>
-        <p v-else-if="!blocks.length" class="py-10 text-center text-xs opacity-70">
-          หน้าแรกยังไม่มี block
+        <p v-else-if="!blocks.length" class="py-10 text-center text-xs opacity-70" data-testid="me-preview-empty">
+          หน้านี้ยังไม่มี block ที่แสดงอยู่
         </p>
         <div
-          v-for="block in blocks"
-          :key="block.id"
-          class="flex min-h-11 flex-col justify-center gap-0.5 rounded-lg border border-current/20 px-3 py-2"
-          :class="block.enabled ? '' : 'opacity-40'"
+          v-for="b in blocks"
+          :key="b.id"
+          class="min-w-0"
           data-testid="me-preview-block"
-          :data-kind="block.kind"
-          :data-enabled="block.enabled ? 'true' : 'false'"
+          :data-kind="b.kind"
+          :data-block-id="b.id"
         >
-          <span class="text-[11px] opacity-70">{{ mssgBlockKindLabel(block.kind) }}<template v-if="!block.enabled"> · ซ่อนอยู่</template></span>
-          <span v-if="mssgBlockPreviewText(block.fields)" class="text-sm font-medium break-words">{{ mssgBlockPreviewText(block.fields) }}</span>
+          <!-- Profile -->
+          <div v-if="b.kind === 'Hat'" class="flex flex-col items-center gap-1.5 py-1 text-center">
+            <MssgEditorImage
+              v-if="str(b.fields.image)"
+              :site-id="siteId"
+              :value="str(b.fields.image)"
+              alt=""
+              class="size-16 rounded-full"
+            />
+            <span v-if="str(b.fields.header)" class="text-base font-semibold break-words">{{ b.fields.header }}</span>
+            <span v-if="str(b.fields.subheader)" class="text-xs break-words opacity-75">{{ b.fields.subheader }}</span>
+          </div>
+          <!-- Link -->
+          <div v-else-if="b.kind === 'Link'" class="flex min-h-11 flex-col items-center justify-center rounded-xl bg-current/10 px-3 py-2 text-center">
+            <span class="text-sm font-medium break-words">{{ str(b.fields.title) || 'ลิงก์' }}</span>
+            <span v-if="linkTarget(b)" class="max-w-full truncate text-[10px] opacity-60">{{ linkTarget(b) }}</span>
+          </div>
+          <!-- Text -->
+          <div v-else-if="b.kind === 'TextRich'" class="flex flex-col gap-1 text-sm">
+            <p v-for="(t, k) in paragraphs(b)" :key="k" class="break-words">
+              {{ t }}
+            </p>
+          </div>
+          <!-- Image -->
+          <MssgEditorImage
+            v-else-if="b.kind === 'Image'"
+            :site-id="siteId"
+            :value="str(b.fields.url)"
+            alt=""
+            class="aspect-video w-full rounded-lg"
+          />
+          <!-- Gallery -->
+          <div v-else-if="b.kind === 'ImageGallery'" class="grid grid-cols-3 gap-1">
+            <MssgEditorImage
+              v-for="(img, k) in arr(b.fields.images).slice(0, 6)"
+              :key="k"
+              :site-id="siteId"
+              :value="str(img.url)"
+              alt=""
+              class="aspect-square w-full rounded"
+            />
+          </div>
+          <!-- Video / Video gallery / Music / Giphy / Map / Code / Products -->
+          <div
+            v-else-if="['Video', 'VideoGallery', 'AudioEmbed', 'Giphy', 'Map', 'CustomCode', 'Products'].includes(b.kind)"
+            class="flex items-center gap-2 rounded-lg bg-current/10 px-3 py-2.5"
+            :class="b.kind === 'Video' || b.kind === 'VideoGallery' ? 'aspect-video justify-center' : ''"
+          >
+            <UIcon
+              :name="{ Video: 'i-lucide-play', VideoGallery: 'i-lucide-film', AudioEmbed: 'i-lucide-music', Giphy: 'i-lucide-sticker', Map: 'i-lucide-map-pin', CustomCode: 'i-lucide-code', Products: 'i-lucide-shopping-bag' }[b.kind]"
+              class="size-5 shrink-0 opacity-70"
+            />
+            <span class="min-w-0 text-xs break-words opacity-80">
+              <template v-if="b.kind === 'Map'">{{ str(b.fields.address) }}</template>
+              <template v-else-if="b.kind === 'VideoGallery'">{{ arr(b.fields.videos).length }} วิดีโอ</template>
+              <template v-else-if="b.kind === 'Products'">สินค้าของร้าน</template>
+              <template v-else-if="b.kind === 'CustomCode'">โค้ด HTML</template>
+              <template v-else-if="b.kind === 'Giphy'">GIF · {{ str(b.fields.giphyId) }}</template>
+              <template v-else>{{ host(b.fields.url) || mssgBlockKindLabel(b.kind) }}</template>
+            </span>
+          </div>
+          <!-- Timer -->
+          <div v-else-if="b.kind === 'Timer'" class="rounded-lg bg-current/10 px-3 py-2 text-center font-mono text-lg tabular-nums">
+            {{ countdown(b) }}
+          </div>
+          <!-- Divider -->
+          <hr v-else-if="b.kind === 'Divider'" class="my-1 border-current/30">
+          <!-- FAQ -->
+          <div v-else-if="b.kind === 'Accordion'" class="flex flex-col divide-y divide-current/15 rounded-lg border border-current/20">
+            <div v-for="(it, k) in arr(b.fields.items).slice(0, 5)" :key="k" class="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+              <span class="min-w-0 break-words">{{ str(it.title) }}</span>
+              <UIcon name="i-lucide-chevron-down" class="size-4 shrink-0 opacity-60" />
+            </div>
+          </div>
+          <!-- Features -->
+          <div v-else-if="b.kind === 'Features'" class="flex flex-col gap-1.5">
+            <div v-for="(it, k) in arr(b.fields.items).slice(0, 5)" :key="k" class="flex gap-2 text-sm">
+              <span aria-hidden="true">{{ str((it.glyph as Record<string, unknown> | undefined)?.value) || '•' }}</span>
+              <span class="flex min-w-0 flex-col">
+                <span class="font-medium break-words">{{ str(it.title) }}</span>
+                <span v-if="str(it.text)" class="text-xs break-words opacity-75">{{ str(it.text) }}</span>
+              </span>
+            </div>
+          </div>
+          <!-- Messengers / Socials -->
+          <div v-else-if="b.kind === 'Messengers' || b.kind === 'Socials'" class="flex flex-wrap justify-center gap-1.5">
+            <span
+              v-for="(it, k) in arr(b.kind === 'Messengers' ? b.fields.messengers : b.fields.items).filter(x => x.enabled !== false).slice(0, 8)"
+              :key="k"
+              class="rounded-full bg-current/10 px-2.5 py-1 text-[11px]"
+            >{{ b.kind === 'Messengers' ? str(it.platform) : (host(it.url) || 'link') }}</span>
+          </div>
+          <!-- Form -->
+          <div v-else-if="b.kind === 'SubscriptionForm'" class="flex flex-col gap-1.5 rounded-lg border border-current/20 p-2.5">
+            <span v-for="(it, k) in arr(b.fields.items).slice(0, 5)" :key="k" class="rounded border border-current/20 px-2 py-1 text-xs opacity-70">{{ str(it.label) }}{{ it.required ? ' *' : '' }}</span>
+            <span class="rounded bg-current/15 px-2 py-1.5 text-center text-xs font-medium">{{ str(b.fields.sendLabel) || 'Send' }}</span>
+          </div>
+          <!-- unknown kind -->
+          <div v-else class="rounded-lg border border-dashed border-current/30 px-3 py-2 text-xs opacity-70">
+            {{ mssgBlockKindLabel(b.kind) }}
+          </div>
         </div>
       </div>
     </div>
