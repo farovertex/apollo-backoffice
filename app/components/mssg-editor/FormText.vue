@@ -22,7 +22,9 @@ const props = withDefaults(defineProps<{
   /** a soft limit for the counter and its red state — no native `maxlength`, so the Thai message can show (M3) */
   limit?: number
   mono?: boolean
-}>(), { textarea: false, rows: 3, maxlength: undefined, placeholder: '', description: undefined, type: 'text', required: false, error: null, counter: false, limit: undefined, mono: false })
+  /** M4: virtual keyboard hint (`decimal` for a price) — a text input, so a decimal never trips the native step check */
+  inputmode?: 'text' | 'decimal' | 'numeric'
+}>(), { textarea: false, rows: 3, maxlength: undefined, placeholder: '', description: undefined, type: 'text', required: false, error: null, counter: false, limit: undefined, mono: false, inputmode: undefined })
 
 const model = defineModel<string>({ default: '' })
 const errorTestid = computed(() => `${props.testid}-error-${props.name}`)
@@ -56,6 +58,7 @@ const max = computed(() => props.limit ?? props.maxlength)
       :type="type"
       :maxlength="maxlength"
       :placeholder="placeholder"
+      :inputmode="inputmode"
       class="w-full"
       :data-testid="`${testid}-${name}`"
     />

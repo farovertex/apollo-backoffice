@@ -7,13 +7,15 @@
  * Test ids: `me-conflict`, `me-conflict-item` (`data-path`, `data-kind`, `data-step`), `me-conflict-take-live`,
  * `me-conflict-take-mine`.
  */
-import type { MssgConflict, MssgOp, MssgSiteProjection } from '#shared/types/mssg-sites'
+import type { MssgConflict, MssgOp, MssgSiteProjection, MssgStoreProduct } from '#shared/types/mssg-sites'
 
 const props = defineProps<{
   conflict: MssgConflict
   ops: MssgOp[]
   /** B2: projections to name pages / blocks in (draft preview first, then live) */
   sites: (MssgSiteProjection | null | undefined)[]
+  /** M4: products to name a product item in (draft products first, then the last store read) */
+  products?: (MssgStoreProduct | null | undefined)[]
   busy: boolean
   disabled: boolean
 }>()
@@ -23,7 +25,7 @@ const emit = defineEmits<{ take: [take: 'live' | 'mine'], goStep: [n: number] }>
 const items = computed(() => props.conflict.items.map(item => ({
   ...item,
   step: mssgConflictStep(item, props.ops),
-  label: mssgConflictLabel(item, props.ops, props.sites)
+  label: mssgConflictLabel(item, props.ops, props.sites, props.products ?? [])
 })))
 </script>
 

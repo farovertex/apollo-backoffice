@@ -218,16 +218,18 @@ export function mssgApplyOps(site: MssgSiteProjection, ops: MssgOp[]): MssgSiteP
   return out
 }
 
-type UpdateOp = Extract<MssgOp, { op: 'site.update' | 'page.update' | 'block.update' }>
+type UpdateOp = Extract<MssgOp, { op: 'site.update' | 'page.update' | 'block.update' | 'product.update' }>
 
 function isUpdate(op: MssgOp): op is UpdateOp {
-  return op.op === 'site.update' || op.op === 'page.update' || op.op === 'block.update'
+  return op.op === 'site.update' || op.op === 'page.update' || op.op === 'block.update' || op.op === 'product.update'
 }
 
 function sameTarget(a: UpdateOp, b: MssgOp): boolean {
   if (a.op !== b.op) return false
   if (a.op === 'site.update') return true
   if (a.op === 'page.update') return (b as MssgOpPageUpdate).pageId === a.pageId
+  // M4: a product edit folded further locally — the site projection does not hold products, so it never changes the preview
+  if (a.op === 'product.update') return (b as { productId?: string }).productId === a.productId
   return (b as MssgOpBlockUpdate).blockId === a.blockId && (b as MssgOpBlockUpdate).pageId === a.pageId
 }
 
@@ -679,6 +681,8 @@ export interface MssgOpTarget {
   blockId: string | null
   /** the field inside the page / block (`name`, `seo.title`, `title`, `items.0.title` …), `''` for the object */
   field: string
+  /** M4: the product a product op / `products.<id>.…` path belongs to (only set for products) */
+  productId?: string
 }
 
 /**
@@ -688,6 +692,13 @@ export interface MssgOpTarget {
  * at that index. Block fields drop their `fields.` segment.
  */
 export function mssgOpTarget(op: MssgOp | null | undefined, path: string): MssgOpTarget {
+  // M4 (v1.4): `products.<id>.<dotted key>`; a draft-400 issue of a product op takes the id from the op at that index
+  const pm = /^products\.([^.]+)(?:\.(.*))?$/.exec(path)
+  if (pm) return { pageId: null, blockId: null, field: pm[2] ?? '', productId: pm[1]! }
+  if (op && op.op.startsWith('product.')) {
+    const o = op as unknown as Record<string, string | undefined>
+    return { pageId: null, blockId: null, field: path === 'fields' ? '' : path.replace(/^fields\./, ''), productId: (op.op === 'product.create' ? o.tempId : o.productId) ?? '' }
+  }
   const m = /^pages\.([^.]+)(?:\.blocks\.([^.]+))?(?:\.(.*))?$/.exec(path)
   if (m) {
     let field = m[3] ?? ''

@@ -90,7 +90,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   const dismissedApplyPaths = ref<string[]>([])
   /** bumped whenever `ops` is replaced from the server (load, reload, discard, resolve, job end) — forms re-init */
   const resetToken = ref(0)
-  const requesting = ref<null | 'apply' | 'discard' | 'resolve'>(null)
+  const requesting = ref<null | 'apply' | 'discard' | 'resolve' | 'storeRead'>(null)
 
   let timer: ReturnType<typeof setTimeout> | null = null
   let inflight: Promise<void> | null = null
@@ -117,7 +117,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
     const v = view.value
     if (!v) return null
     if (v.gone) return MSSG_EDITOR_TEXT.gone
-    if (jobOpen.value) return `${MSSG_EDITOR_TEXT.applying} แก้ร่างได้อีกครั้งเมื่อเสร็จ`
+    if (jobOpen.value) return `${mssgOwnJobText(v.job)} แก้ร่างได้อีกครั้งเมื่อเสร็จ`
     if (v.account?.status && v.account.status !== 'connected') return MSSG_EDITOR_TEXT.notConnected
     return null
   })
@@ -370,7 +370,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
   }
 
   // ── discard / resolve / apply ─────────────────────────────────────────────────────────────────────────────────────
-  async function request(kind: 'discard' | 'resolve' | 'apply', run: () => Promise<MssgSiteView>, fallback: string): Promise<MssgRequestResult> {
+  async function request(kind: 'discard' | 'resolve' | 'apply' | 'storeRead', run: () => Promise<MssgSiteView>, fallback: string): Promise<MssgRequestResult> {
     requesting.value = kind
     try {
       const v = await run()
@@ -420,6 +420,19 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
     return res
   }
 
+  /**
+   * M4: "ดึงข้อมูลร้านค้าใหม่" → `POST …/store/read` → 202 view with the `mssgStoreRead` job (followed like an apply, the
+   * draft is read-only until it ends). A pending edit is sent first so the 202 view's draft is the one we hold.
+   */
+  async function readStore(): Promise<MssgRequestResult> {
+    const id = view.value?.id
+    if (!id) return { ok: false }
+    if (!(await flush())) return { ok: false, message: saveError.value ?? 'ร่างล่าสุดยังไม่ถูกบันทึก แก้ช่องที่ผิดก่อนแล้วลองใหม่' }
+    const res = await request('storeRead', () => api<MssgSiteView>(`/mssg-sites/${encodeURIComponent(id)}/store/read`, { method: 'POST', retry: 0 }), 'ดึงข้อมูลร้านค้าไม่สำเร็จ')
+    if (!res.ok && res.status === 409) await load({ replaceOps: true })
+    return res
+  }
+
   /** the user asked to read the view again (retry, poll timed out) */
   function reload() {
     poll.resetTimeouts()
@@ -462,6 +475,7 @@ export function useMssgDraft(siteId: Ref<string>, options: MssgDraftOptions = {}
     flush,
     discard,
     resolve,
-    apply
+    apply,
+    readStore
   }
 }

@@ -16,7 +16,7 @@
  * (`mssg-pages-access`).
  *
  * Step 2 (B2): pages and blocks (`MssgEditorPagesStep`); the page selected there is also the one the mobile preview
- * shows. Step 3 (B3) page look and step 4 (B3) SEO / tracking / embed code; step 5 shows a placeholder until B4. The current step lives in `?step=` so a reload stays on it.
+ * shows. Step 3 (B3) page look and step 4 (B3) SEO / tracking / embed code; step 5 (B4) store, products and customer data (`MssgEditorStoreStep`, "ดึงข้อมูลร้านค้าใหม่" = `POST …/store/read` followed like an apply). The current step lives in `?step=` so a reload stays on it.
  * "แก้ไขล่าสุดโดย" = `lastSuccessfulApply` (v1.1; kept after a failed save).
  */
 import type { MssgAccountView } from '#shared/types/mssg-accounts'
@@ -44,8 +44,11 @@ function onJobEnd(v: MssgSiteView) {
   const job = v.job
   if (!job) return
   if (job.type !== 'mssgApply') {
-    if (job.status === 'completed') toast.add({ title: 'งานเสร็จแล้ว', color: 'success' })
-    else toast.add({ title: 'งานไม่สำเร็จ', description: mssgErrorText(v.lastError?.code), color: 'error' })
+    const isStore = job.type === 'mssgStoreRead'
+    if (job.status === 'completed') toast.add({ title: isStore ? 'ดึงข้อมูลร้านค้าแล้ว' : 'งานเสร็จแล้ว', color: 'success' })
+    else toast.add({ title: isStore ? 'ดึงข้อมูลร้านค้าไม่สำเร็จ' : 'งานไม่สำเร็จ', description: mssgErrorText(v.lastError?.code), color: 'error' })
+    if (!isStore || job.status === 'completed') return
+    if (v.lastError?.code === 'mssgSessionExpired') void loadAccount()
     return
   }
   const la = v.lastApply && v.lastApply.jobId === job.id ? v.lastApply : null
@@ -179,6 +182,11 @@ function placedOnStep2(e: { target: { pageId: string | null } }) {
 }
 /** M3: step-3 errors (page background) land on the selected page's field; step-4 errors on their site field path */
 const step3Errors = computed(() => draft.fieldErrors.value.filter(e => e.step === 3))
+/** M4: step-5 errors on a product (draft 400 `ops.<n>.…` of a product op, apply `products.<id>.<key>`, v1.4) */
+const step5Errors = computed(() => draft.fieldErrors.value.filter(e => e.step === 5))
+const store = computed(() => view.value?.store ?? null)
+/** the products the editor shows: last store read + the draft's product ops (names for labels / the destructive list) */
+const localProducts = computed(() => mssgApplyProductOps(store.value?.products ?? [], draft.ops.value, mssgStoreCurrency(store.value)))
 const STEP4_FIELDS = ['seo.title', 'seo.description', 'seo.indexing', 'seo.faviconUrl', 'seo.ogImageUrl', 'tracking.tiktok', 'tracking.facebook', 'tracking.google', 'embeddedCode.content', 'embeddedCode.inHead', 'embeddedCode.onLoad']
 const step4Errors = computed(() => {
   const out: Record<string, string> = {}
@@ -194,11 +202,51 @@ const otherStepErrors = computed(() => draft.fieldErrors.value.filter((e) => {
   if (e.step === 2) return !placedOnStep2(e)
   if (e.step === 3) return !(e.target.pageId === selectedPageId.value && ['theme.page.backgroundColor', 'theme.page.backgroundImage'].includes(e.target.field))
   if (e.step === 4) return !STEP4_FIELDS.includes(e.path)
+  if (e.step === 5) return !(e.target.productId && localProducts.value.some(p => p.id === e.target.productId))
   return true
 }))
 /** the page selected in step 2 (also shown by the mobile preview while on step 2) */
 const selectedPageId = ref('')
 const errorSites = computed(() => [draft.localSite.value, view.value?.live])
+const errorProducts = computed(() => [...localProducts.value, ...(store.value?.products ?? [])])
+
+// ── step 5 (M4): store read, "+ เพิ่ม block Form" ─────────────────────────────────────────────────────────────────────
+const storeReading = computed(() => draft.jobOpen.value && view.value?.job?.type === 'mssgStoreRead')
+const storeReadError = computed(() => {
+  const j = view.value?.job
+  if (!j || j.type !== 'mssgStoreRead' || j.status !== 'failed') return null
+  const code = view.value?.lastError?.code ?? ''
+  return { code, text: mssgErrorText(code || undefined) }
+})
+/** a save went through after the last read: the stored list may not match mssg any more */
+const storeStale = computed(() => {
+  const at = view.value?.lastSuccessfulApply?.at
+  const read = store.value?.readAt
+  return !!at && !!read && new Date(at).getTime() > new Date(read).getTime()
+})
+const storeReadBlocked = computed<string | null>(() => {
+  const v = view.value
+  if (!v) return 'กำลังโหลด'
+  if (v.gone) return MSSG_CONFLICT_TEXT.siteGone
+  if (v.account?.status !== 'connected') return MSSG_CONFLICT_TEXT.notConnected
+  if (draft.jobOpen.value) return mssgOwnJobText(v.job)
+  if (accountBusy.value) return MSSG_CONFLICT_TEXT.jobInProgress
+  if (draft.requesting.value) return 'กำลังทำงานอยู่'
+  return null
+})
+async function onReadStore() {
+  if (storeReadBlocked.value) return
+  const res = await draft.readStore()
+  if (!res.ok) toast.add({ title: 'ดึงข้อมูลร้านค้าไม่ได้', description: res.message, color: res.status === 409 ? 'warning' : 'error' })
+}
+/** "+ เพิ่ม block Form" (Audience empty state): step 2 with the SubscriptionForm kind preselected */
+const startKind = ref<string | null>(null)
+const addFormDisabled = computed(() => draft.readOnly.value || !draft.localSite.value?.pages?.length)
+function onAddForm() {
+  if (addFormDisabled.value) return
+  startKind.value = 'SubscriptionForm'
+  goStep(2)
+}
 
 // ── header / banners ────────────────────────────────────────────────────────────────────────────────────────────────
 const isOtherArea = computed(() => isGod.value && !!view.value && !!homeWorkspaceId.value && view.value.workspaceId !== homeWorkspaceId.value)
@@ -250,7 +298,7 @@ const applyProblem = computed(() => {
 })
 
 // ── save / discard ───────────────────────────────────────────────────────────────────────────────────────────────────
-const destructive = computed(() => mssgDestructiveOps(draft.ops.value, view.value?.live))
+const destructive = computed(() => mssgDestructiveOps(draft.ops.value, view.value?.live, store.value?.products ?? []))
 const confirmOpen = ref(false)
 const discardOpen = ref(false)
 
@@ -258,7 +306,7 @@ const saveBlockedReason = computed<string | null>(() => {
   const v = view.value
   if (!v) return 'กำลังโหลด'
   if (v.gone) return MSSG_CONFLICT_TEXT.siteGone
-  if (draft.jobOpen.value) return MSSG_EDITOR_TEXT.applying
+  if (draft.jobOpen.value) return mssgOwnJobText(v.job)
   if (v.account?.status !== 'connected') return MSSG_CONFLICT_TEXT.notConnected
   if (accountBusy.value) return MSSG_CONFLICT_TEXT.jobInProgress
   if (v.conflict) return MSSG_CONFLICT_TEXT.conflictPending
@@ -374,7 +422,7 @@ onBeforeRouteLeave(async () => {
             variant="outline"
             size="sm"
             :disabled="!canDiscard"
-            :title="canDiscard ? undefined : (draft.jobOpen.value ? MSSG_EDITOR_TEXT.applying : 'ยังไม่มีร่าง')"
+            :title="canDiscard ? undefined : (draft.jobOpen.value ? mssgOwnJobText(view?.job) : 'ยังไม่มีร่าง')"
             data-testid="me-discard"
             @click="discardOpen = true"
           />
@@ -542,7 +590,7 @@ onBeforeRouteLeave(async () => {
             :data-status="view.job?.status ?? ''"
           >
             <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin" />
-            <span class="min-w-0 break-words">{{ MSSG_EDITOR_TEXT.applying }} · {{ mssgJobProgressText(view.job) }}</span>
+            <span class="min-w-0 break-words">{{ mssgOwnJobText(view.job) }} · {{ mssgJobProgressText(view.job) }}</span>
           </div>
           <div
             v-if="accountJobLine"
@@ -624,6 +672,7 @@ onBeforeRouteLeave(async () => {
             :conflict="view.conflict"
             :ops="draft.ops.value"
             :sites="errorSites"
+            :products="errorProducts"
             :busy="draft.requesting.value === 'resolve'"
             :disabled="draft.jobOpen.value || !!view.gone"
             @take="onResolve"
@@ -683,7 +732,7 @@ onBeforeRouteLeave(async () => {
                   color="error"
                   variant="subtle"
                   icon="i-lucide-circle-alert"
-                  :title="`${mssgFieldErrorLabel(e, draft.ops.value, errorSites)}: ${e.message}`"
+                  :title="`${mssgFieldErrorLabel(e, draft.ops.value, errorSites, errorProducts)}: ${e.message}`"
                   data-testid="me-step-error"
                   :data-path="e.path"
                 />
@@ -705,9 +754,11 @@ onBeforeRouteLeave(async () => {
                   :read-only="draft.readOnly.value"
                   :errors="step2Errors"
                   :reset-token="draft.resetToken.value"
+                  :start-kind="startKind"
                   @page-update="draft.updatePage"
                   @block-update="draft.updateBlock"
                   @ops="draft.editOps"
+                  @start-kind-handled="startKind = null"
                 />
                 <MssgEditorLookStep
                   v-else-if="step === 3"
@@ -728,16 +779,24 @@ onBeforeRouteLeave(async () => {
                   :reset-token="draft.resetToken.value"
                   @update="draft.updateSite"
                 />
-                <div
+                <MssgEditorStoreStep
                   v-else
-                  class="flex flex-col items-center gap-2 rounded-lg border border-dashed border-default px-4 py-12 text-center"
-                  data-testid="me-step-placeholder"
-                >
-                  <UIcon name="i-lucide-hammer" class="size-7 text-dimmed" />
-                  <p class="text-sm text-muted">
-                    {{ MSSG_EDITOR_TEXT.placeholder }}
-                  </p>
-                </div>
+                  :site-id="view.id"
+                  :store="store"
+                  :ops="draft.ops.value"
+                  :read-only="draft.readOnly.value"
+                  :errors="step5Errors"
+                  :reset-token="draft.resetToken.value"
+                  :read-blocked-reason="storeReadBlocked"
+                  :reading="storeReading"
+                  :read-progress="mssgJobProgressText(view.job)"
+                  :read-error="storeReadError"
+                  :stale="storeStale"
+                  :add-form-disabled="addFormDisabled"
+                  @ops="draft.editOps"
+                  @read-store="onReadStore"
+                  @add-form="onAddForm"
+                />
               </div>
               <div class="mt-5 flex items-center justify-between gap-3 border-t border-default px-4 py-3">
                 <div>

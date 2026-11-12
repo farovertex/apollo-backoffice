@@ -280,13 +280,69 @@ export interface MssgSiteView {
   lastApply: MssgLastApply | null
   /** v1.1 — the last apply with status `ok` or `partial` ("แก้ไขล่าสุดโดย", AC-16); kept when a later apply fails */
   lastSuccessfulApply?: { at: string, by: MssgActorRef | null } | null
-  /** M4 (section 4.4) — typed by B4 */
-  store: unknown
+  /** M4 (section 4.4): `null` = never read ("ดึงข้อมูลร้านค้า") */
+  store: MssgStore | null
   /** M5 (section 4.6) */
   domain: MssgSiteDomain | null
   job: MssgSiteJobView | null
   /** contract §5: last failed site job other than apply; cleared by the next successful site job */
   lastError?: { code: string, message: string, at: string } | null
+}
+
+// ── store (contract §4.4, M4) ───────────────────────────────────────────────────────────────────────────────────────
+/** products of a store read; `price.currency` = the store currency */
+export interface MssgStoreProduct {
+  id: string
+  name: string
+  photos: string[]
+  price: { amount: number, currency: string }
+  discount: number | null
+  description: string
+  notes: string
+  active: boolean
+}
+
+/** read-only projection of mssg's `crm` (D5): no payment key, only `payments.<provider>.enabled` */
+export interface MssgStoreSettings {
+  shopcart?: { enabled?: boolean, successMessage?: string, successUrl?: string } | null
+  productOptions?: unknown[]
+  currency?: string
+  messengers?: Record<string, boolean>
+  payments?: Record<string, { enabled?: boolean }>
+}
+
+/** contacts are masked by the API before they are stored (D8): `so***@gmail.com`, `08******12` */
+export interface MssgStoreAudienceRow {
+  id: string
+  createdAt: string
+  name?: string | null
+  email?: string | null
+  phone?: string | null
+  fields?: { label: string, value: string }[]
+}
+
+export interface MssgStoreRequestRow {
+  id: string
+  createdAt: string
+  title?: string | null
+  email?: string | null
+  phone?: string | null
+  total?: { amount: number, currency: string } | null
+}
+
+export type MssgRequestStatus = 'new' | 'inProgress' | 'done' | 'canceled'
+
+export interface MssgStore {
+  readAt: string
+  settings: MssgStoreSettings | null
+  products: MssgStoreProduct[]
+  productsTotal?: number
+  collectionsCount?: number
+  audience?: { total: number, rows: MssgStoreAudienceRow[] } | null
+  requests?: {
+    counts: Record<MssgRequestStatus, number>
+    rows: Record<MssgRequestStatus, MssgStoreRequestRow[]>
+  } | null
 }
 
 // ── bodies ──────────────────────────────────────────────────────────────────────────────────────────────────────────

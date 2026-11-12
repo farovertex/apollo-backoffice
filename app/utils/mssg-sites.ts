@@ -12,8 +12,10 @@ import type {
   MssgSiteLang,
   MssgSiteProjection,
   MssgSiteView,
-  MssgStepNo
+  MssgStepNo,
+  MssgStoreProduct
 } from '#shared/types/mssg-sites'
+import { mssgBlockKindLabel, mssgBlockSummary, mssgConflictItemLabel, mssgOpTarget, mssgPageBlockLabel } from './mssg-blocks'
 import type { MssgOpTarget } from './mssg-blocks'
 
 /** a draft change by another user younger than this shows "กำลังแก้ร่างนี้อยู่" (spec "UI behaviour") */
@@ -166,12 +168,35 @@ export function mssgNormalizePath(path: string): string {
   return mssgSitePath(path).replace(/^fields\./, '')
 }
 
+/** M4: Thai label per product field (the part after `products.<id>.` / a draft-400 field of a product op) */
+export const MSSG_PRODUCT_FIELD_LABEL: Record<string, string> = {
+  'name': 'ชื่อสินค้า',
+  'photos': 'รูปสินค้า',
+  'price': 'ราคา',
+  'price.amount': 'ราคา',
+  'price.currency': 'สกุลเงิน',
+  'discount': 'ส่วนลด',
+  'description': 'รายละเอียด',
+  'notes': 'หมายเหตุ',
+  'active': 'สถานะสินค้า (Active)'
+}
+
+/** "สินค้า "<name>" · ราคา" — the name comes from `products` (first that knows the id), else only the field */
+export function mssgProductLabel(productId: string, field: string, products: (MssgStoreProduct | null | undefined)[] = []): string {
+  const name = products.find(p => p?.id === productId)?.name
+  const f = field ? (MSSG_PRODUCT_FIELD_LABEL[field] ?? field.replace(/^photos\.\d+.*/, 'รูปสินค้า')) : ''
+  return `สินค้า${name ? ` "${name}"` : ''}${f ? ` · ${f}` : ''}`
+}
+
 export function mssgFieldLabel(path: string): string {
   const p = mssgSitePath(path)
   if (MSSG_FIELD_LABEL[p]) return MSSG_FIELD_LABEL[p]!
   if (/^pages\.[^.]+\.order$/.test(p)) return 'ลำดับ block ในหน้า'
   if (p.startsWith('pages.')) return 'หน้าเว็บ'
-  if (p.startsWith('products.')) return 'สินค้า'
+  if (p.startsWith('products.')) {
+    const m = /^products\.([^.]+)(?:\.(.*))?$/.exec(p)
+    return m ? mssgProductLabel(m[1]!, m[2] ?? '') : 'สินค้า'
+  }
   return p
 }
 
@@ -234,12 +259,15 @@ export function mssgConflictStep(item: MssgConflictItem, ops: MssgOp[]): MssgSte
 }
 
 /** Thai label of a conflict item: page / block / order items name the page and block (B2), else the site field */
-export function mssgConflictLabel(item: MssgConflictItem, ops: MssgOp[], sites: (MssgSiteProjection | null | undefined)[]): string {
+export function mssgConflictLabel(item: MssgConflictItem, ops: MssgOp[], sites: (MssgSiteProjection | null | undefined)[], products: (MssgStoreProduct | null | undefined)[] = []): string {
+  const t = mssgOpTarget(ops[item.opIndex], item.path)
+  if (t.productId) return mssgProductLabel(t.productId, t.field, products)
   return mssgConflictItemLabel(item, ops, sites) ?? mssgFieldLabel(item.path)
 }
 
 /** Thai label of a field error (site field, or page / block field with its names) */
-export function mssgFieldErrorLabel(e: MssgFieldError, ops: MssgOp[], sites: (MssgSiteProjection | null | undefined)[]): string {
+export function mssgFieldErrorLabel(e: MssgFieldError, ops: MssgOp[], sites: (MssgSiteProjection | null | undefined)[], products: (MssgStoreProduct | null | undefined)[] = []): string {
+  if (e.target.productId) return mssgProductLabel(e.target.productId, e.target.field, products)
   return (e.opIndex !== null ? mssgPageBlockLabel(ops[e.opIndex], e.path, sites) : mssgPageBlockLabel(null, e.path, sites)) ?? mssgFieldLabel(e.path)
 }
 
@@ -252,7 +280,7 @@ export interface MssgDestructiveOp {
 }
 
 /** contract §3.1: `page.delete`, `block.delete`, `product.delete`, `site.update` with `enabled: false` while live is on */
-export function mssgDestructiveOps(ops: MssgOp[], live: Pick<MssgSiteProjection, 'enabled' | 'pages'> | null | undefined): MssgDestructiveOp[] {
+export function mssgDestructiveOps(ops: MssgOp[], live: Pick<MssgSiteProjection, 'enabled' | 'pages'> | null | undefined, products: (MssgStoreProduct | null | undefined)[] = []): MssgDestructiveOp[] {
   const out: MssgDestructiveOp[] = []
   const pageName = (id: string) => live?.pages?.find(p => p.id === id)?.name ?? id
   ops.forEach((op, index) => {
@@ -265,7 +293,8 @@ export function mssgDestructiveOps(ops: MssgOp[], live: Pick<MssgSiteProjection,
       const what = block ? `${mssgBlockKindLabel(block.kind)}${mssgBlockSummary(block) ? ` · ${mssgBlockSummary(block)}` : ''}` : op.blockId
       out.push({ index, type: op.op, label: `ลบ block "${what}" ในหน้า "${pageName(op.pageId)}"` })
     } else if (op.op === 'product.delete') {
-      out.push({ index, type: op.op, label: `ลบสินค้า ${op.productId}` })
+      const name = products.find(p => p?.id === op.productId)?.name
+      out.push({ index, type: op.op, label: `ลบสินค้า "${name ?? op.productId}"` })
     }
   })
   return out
@@ -339,6 +368,11 @@ export const MSSG_JOB_TYPE_TEXT: Record<string, string> = {
   mssgDomain: 'กำลังตั้งค่าโดเมน…',
   mssgStoreRead: 'กำลังดึงข้อมูลร้านค้า…',
   mssgAnalytics: 'กำลังดึงสถิติ…'
+}
+
+/** what the site's own job is doing: the apply keeps its B1 text, every other type its job-type text (M4: store read) */
+export function mssgOwnJobText(job: { type: string } | null | undefined): string {
+  return !job || job.type === 'mssgApply' ? MSSG_EDITOR_TEXT.applying : mssgJobTypeText(job.type)
 }
 
 /** what a job of the account is doing; an unknown type → "กำลังทำงานกับ mssg…" */

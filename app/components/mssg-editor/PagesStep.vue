@@ -28,12 +28,15 @@ const props = defineProps<{
   errors: MssgFieldError[]
   /** bumped when the draft was replaced from the server — forms re-read */
   resetToken: number
+  /** M4: a block kind to start adding as soon as the step shows ("+ เพิ่ม block Form" of step 5 → `SubscriptionForm`) */
+  startKind?: string | null
 }>()
 
 const emit = defineEmits<{
   pageUpdate: [pageId: string, fields: Extract<MssgOp, { op: 'page.update' }>['fields']]
   blockUpdate: [pageId: string, blockId: string, patch: { fields?: Record<string, unknown>, enabled?: boolean }]
   ops: [next: MssgOp[], clear?: (e: MssgFieldError) => boolean]
+  startKindHandled: []
 }>()
 
 const selectedId = defineModel<string>('page', { default: '' })
@@ -78,7 +81,10 @@ function fromPage() {
   pageState.enabled = p.enabled !== false
   pageState.seo = { title: p.seo?.title ?? '', description: p.seo?.description ?? '' }
 }
-watch(() => [page.value?.id, props.resetToken] as const, fromPage, { immediate: true })
+// the form re-reads the page when it opens, when another page is selected and when the draft was replaced from the
+// server — never because an unrelated edit rebuilt the preview (an invalid, unsent name / slug must survive an edit of
+// another field; see `mssgWatchFormReset`)
+mssgWatchFormReset([() => page.value?.id, () => props.resetToken], fromPage)
 
 const otherSlugs = computed(() => pages.value.filter(p => p.id !== page.value?.id).map(p => p.slug))
 const pageSchema = computed(() => mssgPageSchema.extend({
@@ -243,6 +249,16 @@ function addBlock(payload: { fields: Record<string, unknown>, enabled: boolean }
   newKind.value = null
   newIndex.value = undefined
 }
+
+// M4: "+ เพิ่ม block Form" of step 5 lands here with the kind preselected — open its new-block form once, then tell the parent
+watch([() => props.startKind, () => !!page.value], ([kind, hasPage]) => {
+  if (!kind) return
+  if (hasPage && !props.readOnly && mssgIsKnownKind(kind)) {
+    startAdd(kind)
+    void nextTick(() => document.querySelector('[data-testid="me-block-new"]')?.scrollIntoView({ block: 'nearest' }))
+  }
+  emit('startKindHandled')
+}, { immediate: true })
 
 // new errors arrive (draft 400 / apply): show the page and open the block of the first **new** one (fewer errors —
 // the user fixing them — never moves the view)
