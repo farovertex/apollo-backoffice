@@ -36,16 +36,23 @@ const running = ref(false)
 const runningJob = ref<MssgSiteView['job']>(null)
 
 const data = computed(() => views.value[range.value]?.data ?? null)
-const rangeInfo = computed(() => mssgAnalyticsRange(range.value))
+const unitRunning = computed(() => data.value ? mssgAnalyticsRunning(data.value) : false)
+const prevLabel = computed(() => data.value ? mssgAnalyticsPreviousLabel(range.value, data.value) : '')
+const dates = computed(() => data.value ? mssgAnalyticsDatesText(range.value, data.value) : null)
+const periodName = computed(() => mssgAnalyticsRange(range.value).period)
+const readTime = computed(() => data.value ? (formatDateTime(data.value.readAt).split(' ')[1] ?? '') : '')
+const unitNote = computed(() => unitRunning.value
+  ? `${periodName.value}ยังไม่จบ · นับถึงเวลาที่ดึง ${readTime.value}`
+  : `ช่วงนี้จบแล้ว · ตัวเลขตามที่ดึงเมื่อ ${readTime.value}`)
 
 const visitsDelta = computed(() => data.value
-  ? mssgDelta(data.value.current.visits, data.value.previous.visits, rangeInfo.value.previous, 'ครั้ง', { withPct: true })
+  ? mssgDelta(data.value.current.visits, data.value.previous.visits, prevLabel.value, 'ครั้ง', { withPct: true })
   : null)
 const clicksDelta = computed(() => data.value
-  ? mssgDelta(data.value.current.clicks, data.value.previous.clicks, rangeInfo.value.previous, 'ครั้ง', { withPct: true })
+  ? mssgDelta(data.value.current.clicks, data.value.previous.clicks, prevLabel.value, 'ครั้ง', { withPct: true })
   : null)
 const rateDelta = computed(() => data.value
-  ? mssgDelta(mssgPercent(data.value.current.clickRate), mssgPercent(data.value.previous.clickRate), rangeInfo.value.previous, 'จุด', { digits: 1 })
+  ? mssgDelta(mssgPercent(data.value.current.clickRate), mssgPercent(data.value.previous.clickRate), prevLabel.value, 'จุด', { digits: 1 })
   : null)
 const buttons = computed(() => data.value ? mssgAnalyticsButtons(data.value) : [])
 const maxButton = computed(() => Math.max(1, ...buttons.value.map(b => b.value)))
@@ -184,10 +191,7 @@ onMounted(() => load(range.value))
         {{ mssgAnalyticsSummary(range, data) }}
       </p>
       <p class="text-xs text-muted" data-testid="an-dates">
-        {{ mssgAnalyticsDate(data.from) }}<template v-if="data.from !== data.to">
-          – {{ mssgAnalyticsDate(data.to) }}
-        </template>
-        <span class="text-dimmed"> · เทียบกับ{{ rangeInfo.previous }}</span>
+        {{ dates!.current }}<span class="text-dimmed"> · {{ dates!.previous }}</span>
       </p>
 
       <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -222,6 +226,13 @@ onMounted(() => load(range.value))
           >{{ rateDelta!.text }}</span>
         </div>
       </div>
+
+      <p
+        class="text-xs text-muted"
+        :data-testid="unitRunning ? 'an-running' : 'an-ended'"
+      >
+        {{ unitNote }}
+      </p>
 
       <div class="flex flex-col gap-1.5" data-testid="an-buttons">
         <h5 class="text-xs font-semibold text-highlighted">

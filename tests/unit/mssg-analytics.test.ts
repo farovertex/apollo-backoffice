@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
-  mssgAnalyticsActionLabel, mssgAnalyticsButtons, mssgAnalyticsGroups, mssgAnalyticsSummary, mssgDelta, mssgPercentText
+  MSSG_ANALYTICS_RANGES, mssgAnalyticsActionLabel, mssgAnalyticsButtons, mssgAnalyticsDatesText, mssgAnalyticsGroups,
+  mssgAnalyticsPeriodText, mssgAnalyticsPreviousLabel, mssgAnalyticsRunning, mssgAnalyticsSummary, mssgDelta, mssgPercentText
 } from '../../app/utils/mssg-analytics'
 import type { MssgAnalyticsData } from '../../shared/types/mssg-sites'
 
 const data: MssgAnalyticsData = {
-  from: '2026-11-06', to: '2026-11-12', readAt: '2026-11-12T09:00:00.000Z',
+  from: '2026-11-08', to: '2026-11-14', readAt: '2026-11-13T09:00:00.000Z',
   current: {
     visits: 120, clicks: 30, clickRate: 0.25,
     byAction: [{ action: 'page.view', value: 120 }],
@@ -15,7 +16,7 @@ const data: MssgAnalyticsData = {
       { action: 'menu.click', key: 'm1', label: 'About', value: 5 }
     ]
   },
-  previous: { from: '2026-10-30', to: '2026-11-05', visits: 150, clicks: 20, clickRate: 0.1333 }
+  previous: { from: '2026-11-01', to: '2026-11-07', visits: 150, clicks: 20, clickRate: 0.1333 }
 }
 
 describe('mssg analytics helpers', () => {
@@ -54,11 +55,37 @@ describe('mssg analytics helpers', () => {
     expect(mssgPercentText(0.25)).toBe('25%')
     expect(mssgPercentText(0.3077)).toBe('30.8%')
     expect(mssgPercentText(0)).toBe('0%')
-    expect(mssgAnalyticsSummary('week', data)).toContain('120')
+    expect(mssgAnalyticsSummary('week', data)).toBe('สัปดาห์นี้ถึงตอนนี้ มีคนเข้าเว็บ 120 ครั้ง และกดลิงก์หรือปุ่ม 30 ครั้ง (25%)')
+    expect(mssgAnalyticsSummary('week', { ...data, to: '2026-11-12' })).toBe('สัปดาห์นี้ มีคนเข้าเว็บ 120 ครั้ง และกดลิงก์หรือปุ่ม 30 ครั้ง (25%)')
+    expect(mssgAnalyticsSummary('day', { ...data, current: { ...data.current, visits: 0, clicks: 0 } })).toBe('วันนี้ถึงตอนนี้ ยังไม่มีคนเข้าเว็บ')
     expect(mssgAnalyticsSummary('week', { ...data, current: { ...data.current, visits: 0, clicks: 0 } })).toContain('ยังไม่มีคนเข้าเว็บ')
   })
   it('buttons are the click items, largest first, never page views', () => {
     const b = mssgAnalyticsButtons(data)
     expect(b.map(i => i.key)).toEqual(['l1', 'm1'])
+  })
+  it('calendar labels, no rolling wording', () => {
+    expect(MSSG_ANALYTICS_RANGES.map(r => r.label)).toEqual(['วันนี้', 'สัปดาห์นี้', 'เดือนนี้'])
+    expect(MSSG_ANALYTICS_RANGES.map(r => r.previous)).toEqual(['เมื่อวาน', 'สัปดาห์ก่อน', 'เดือนก่อน'])
+    expect(JSON.stringify(MSSG_ANALYTICS_RANGES)).not.toMatch(/7 วัน|30 วัน|ที่ผ่านมา/)
+  })
+  it('date range text from the stored dates', () => {
+    expect(mssgAnalyticsPeriodText('2026-11-13', '2026-11-13')).toBe('13 พ.ย. 2569')
+    expect(mssgAnalyticsPeriodText('2026-11-08', '2026-11-14')).toBe('8–14 พ.ย. 2569')
+    expect(mssgAnalyticsPeriodText('2026-11-01', '2026-11-30')).toBe('1–30 พ.ย. 2569')
+    expect(mssgAnalyticsPeriodText('2026-11-29', '2026-12-05')).toBe('29 พ.ย. – 5 ธ.ค. 2569')
+    expect(mssgAnalyticsPeriodText('2026-12-27', '2027-01-02')).toBe('27 ธ.ค. 2569 – 2 ม.ค. 2570')
+    expect(mssgAnalyticsDatesText('week', data)).toEqual({ current: 'สัปดาห์นี้ 8–14 พ.ย. 2569', previous: 'สัปดาห์ก่อน 1–7 พ.ย. 2569' })
+    expect(mssgAnalyticsDatesText('week', { ...data, from: '2026-12-27', to: '2027-01-02', previous: { ...data.previous, from: '2026-12-20', to: '2026-12-26' } }))
+      .toEqual({ current: 'สัปดาห์นี้ 27 ธ.ค. 2569 – 2 ม.ค. 2570', previous: 'สัปดาห์ก่อน 20–26 ธ.ค. 2569' })
+  })
+  it('running only while the stored end is on / after the Bangkok date of readAt', () => {
+    expect(mssgAnalyticsRunning(data)).toBe(true)
+    expect(mssgAnalyticsRunning({ to: '2026-11-14', readAt: '2026-11-14T16:59:00.000Z' })).toBe(true)
+    expect(mssgAnalyticsRunning({ to: '2026-11-14', readAt: '2026-11-14T17:00:00.000Z' })).toBe(false)
+    expect(mssgAnalyticsPreviousLabel('week', data)).toBe('สัปดาห์ก่อนทั้งสัปดาห์')
+    expect(mssgAnalyticsPreviousLabel('month', { to: '2026-11-30', readAt: '2026-12-02T00:00:00.000Z' })).toBe('เดือนก่อน')
+    expect(mssgDelta(120, 150, mssgAnalyticsPreviousLabel('week', data), 'ครั้ง', { withPct: true }).text).toBe('▼ น้อยกว่าสัปดาห์ก่อนทั้งสัปดาห์ 30 ครั้ง (20%)')
+    expect(mssgDelta(5, 5, 'เมื่อวานทั้งวัน', 'ครั้ง').text).toBe('เท่ากับเมื่อวานทั้งวัน')
   })
 })
