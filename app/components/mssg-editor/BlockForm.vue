@@ -4,7 +4,8 @@
  * of one block kind, used both for a new block ("เพิ่ม block นี้ (Add)" / "ยกเลิก", design `gf.isDraft`) and for
  * editing an existing one.
  *
- * Rules: one zod schema per kind (`MSSG_BLOCK_SCHEMAS`, Thai messages), `UForm` validates on input.
+ * Rules: one zod schema per kind (`MSSG_BLOCK_SCHEMAS`, Thai messages), `UForm` validates on input only (BUG-091: `change`/blur
+ * validation removed the error line on mousedown, the submit button shifted and the click was lost; submit validates all).
  * - new: `submit` fires only through `UForm` (valid), with the block `fields` and "แสดง block นี้ทันที" (`enabled`).
  * - edit: every change that leaves the whole form valid emits `change` with the keys changed since the form opened
  *   (a key once changed keeps being sent, so changing it back also reaches the draft); an invalid state sends nothing.
@@ -185,7 +186,7 @@ const T = 'me-block-field'
   <UForm
     :schema="schema ?? undefined"
     :state="state"
-    :validate-on="['input', 'change']"
+    :validate-on="['input']"
     :disabled="readOnly"
     class="flex min-w-0 flex-col gap-4 rounded-lg border border-primary/40 bg-default p-3 sm:p-4"
     data-testid="me-block-form"
