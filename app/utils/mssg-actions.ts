@@ -1,8 +1,8 @@
 /**
- * FEAT-101 M2 reopen (B2r; api-contract.md v1.6 §3.4, AC-46, AC-47) — block actions, Messengers platform → type pairs and
- * Features icons. Pure helpers (explicit imports, no Nuxt auto-imports) so `tests/unit/mssg-reopen.test.ts` can run them.
+ * FEAT-101 M2 reopen (B2r; api-contract.md v1.6 §3.4, AC-46, AC-47) — block actions and Messengers platform → type pairs
+ * (Link / Features icons: `mssg-glyphs.ts`, v1.9). Pure helpers (explicit imports, no Nuxt auto-imports) so `tests/unit/mssg-reopen.test.ts` can run them.
  *
- * Actions (`Link.action`, `Image.action`, `ImageGallery.images[].action`), contract §3.4:
+ * Actions (`Link.items[].action` since v1.9, `Image.action`, `ImageGallery.images[].action`), contract §3.4:
  * - `url` `{ type, url }` http/https ≤ 2 000 · `page` `{ type, page }` a page of the preview (real or temp id)
  * - `tel` / `sms` `{ type, url: "<phone>" }` raw `^\+?[0-9 ()-]{3,30}$` (⚠K18, no `tel:` prefix)
  * - `email` `{ type, url: "<address>" }` raw address ≤ 254 (⚠K18, no `mailto:` prefix)
@@ -228,33 +228,4 @@ export function mssgMessengerIssue(row: { platform?: unknown, type?: unknown }):
   if (!mssgMessengerEditable(row.platform)) return null
   const allowed = MSSG_MESSENGER_TYPES[row.platform as string]!
   return typeof row.type === 'string' && allowed.includes(row.type) ? null : { path: 'type', message: `แบบของปุ่ม ${MSSG_MESSENGER_PLATFORM_LABEL[row.platform as string]} เลือกได้: ${allowed.join(', ')}` }
-}
-
-// ── Features icons (⚠K20) ───────────────────────────────────────────────────────────────────────────────────────────
-export const MSSG_ICON_RE = /^[a-z0-9_-]{1,64}$/
-
-/** icon names already used on the site's Features blocks (sorted, unique) — the suggestions of the icon field */
-export function mssgSiteIcons(sites: (Pick<MssgSiteProjection, 'pages'> | null | undefined)[]): string[] {
-  const out = new Set<string>()
-  for (const site of sites) {
-    for (const page of site?.pages ?? []) {
-      for (const b of page.blocks ?? []) {
-        if (b.kind !== 'Features' || !Array.isArray(b.fields.items)) continue
-        for (const it of b.fields.items as { glyph?: { type?: unknown, icon?: unknown } }[]) {
-          const icon = it?.glyph?.type === 'icon' ? it.glyph.icon : undefined
-          if (typeof icon === 'string' && MSSG_ICON_RE.test(icon)) out.add(icon)
-        }
-      }
-    }
-  }
-  return [...out].sort()
-}
-
-/** contract §3.3 Features glyph: `{ type: "icon", icon }`; a glyph of another type read from mssg is kept as read */
-export function mssgGlyphIssue(glyph: unknown): string | null {
-  const g = (glyph && typeof glyph === 'object' ? glyph : {}) as Record<string, unknown>
-  if (g.type !== undefined && g.type !== 'icon') return null
-  const icon = typeof g.icon === 'string' ? g.icon : ''
-  if (!icon) return 'ใส่ชื่อไอคอน'
-  return MSSG_ICON_RE.test(icon) ? null : 'ชื่อไอคอนใช้ได้เฉพาะ a-z ตัวเล็ก ตัวเลข _ และ - (ไม่เกิน 64 ตัว · ไม่รองรับ emoji)'
 }

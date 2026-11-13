@@ -150,16 +150,20 @@ export function mssgBangkokDate(iso: string): string {
   return Number.isNaN(t) ? '' : new Date(t + 7 * 3600_000).toISOString().slice(0, 10)
 }
 
-/** the current unit was still running when it was read: its stored end is on / after the Bangkok date of `readAt` */
-export function mssgAnalyticsRunning(data: Pick<MssgAnalyticsData, 'to' | 'readAt'>): boolean {
-  const read = mssgBangkokDate(data.readAt)
-  return !!read && data.to >= read
+/**
+ * AC-62 (D18 d): the stored current unit is still running **now** — its stored last day is today or later in Asia/Bangkok
+ * at render time (`now`, injectable for tests). Not compared with `readAt`: a fresh read of a finished unit is "ended", and
+ * an old read of last week never says "ยังไม่จบ".
+ */
+export function mssgAnalyticsRunning(data: Pick<MssgAnalyticsData, 'to'>, now: Date = new Date()): boolean {
+  const today = mssgBangkokDate(now.toISOString())
+  return !!today && !!data.to && data.to >= today
 }
 
 /** the previous unit's name for the comparison: "…ทั้งสัปดาห์" while the current one is running */
-export function mssgAnalyticsPreviousLabel(range: MssgAnalyticsRange, data: Pick<MssgAnalyticsData, 'to' | 'readAt'>): string {
+export function mssgAnalyticsPreviousLabel(range: MssgAnalyticsRange, data: Pick<MssgAnalyticsData, 'to'>, now: Date = new Date()): string {
   const r = mssgAnalyticsRange(range)
-  return mssgAnalyticsRunning(data) ? r.previousWhole : r.previous
+  return mssgAnalyticsRunning(data, now) ? r.previousWhole : r.previous
 }
 
 /** "สัปดาห์นี้ 8–14 พ.ย. 2569 · สัปดาห์ก่อน 1–7 พ.ย. 2569" — the stored dates, never computed here */
@@ -172,9 +176,9 @@ export function mssgAnalyticsDatesText(range: MssgAnalyticsRange, data: MssgAnal
 }
 
 /** "สัปดาห์นี้ถึงตอนนี้ มีคนเข้าเว็บ 120 ครั้ง และกดลิงก์หรือปุ่ม 30 ครั้ง (25%)" — "ถึงตอนนี้" while the unit still runs */
-export function mssgAnalyticsSummary(range: MssgAnalyticsRange, data: MssgAnalyticsData): string {
+export function mssgAnalyticsSummary(range: MssgAnalyticsRange, data: MssgAnalyticsData, now: Date = new Date()): string {
   const { visits, clicks, clickRate } = data.current
-  const period = mssgAnalyticsRange(range).period + (mssgAnalyticsRunning(data) ? 'ถึงตอนนี้' : '')
+  const period = mssgAnalyticsRange(range).period + (mssgAnalyticsRunning(data, now) ? 'ถึงตอนนี้' : '')
   if (!visits && !clicks) return `${period} ยังไม่มีคนเข้าเว็บ`
   return `${period} มีคนเข้าเว็บ ${visits.toLocaleString('th-TH')} ครั้ง และกดลิงก์หรือปุ่ม ${clicks.toLocaleString('th-TH')} ครั้ง (${mssgPercentText(clickRate)})`
 }

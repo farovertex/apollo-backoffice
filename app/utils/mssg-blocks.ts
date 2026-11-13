@@ -13,6 +13,9 @@
  * v1.6 (B2r): proven shapes (`Hat {title, subtitle, logoUrl, bgUrl}`, `Features.items[].glyph {type:"icon", icon}`,
  * `Messengers.messengers[] {platform, type, value, enabled}`, `ImageGallery.images[] {url, action}`), the actions of §3.4
  * (`mssg-actions.ts`), block style overrides folded key by key (`mssg-style.ts`), page presets / fonts (`mssg-look.ts`).
+ * v1.9 (B9, §3.5): a Link block = `items[]` 1–30 of `{ id?, title, action, glyph }` (item `image` read-only: never sent,
+ * kept in the local preview by id); legacy top-level `title` / `action` (old drafts, legacy reads) map onto item 0;
+ * Link / Features glyphs follow `mssg-glyphs.ts` (an unknown glyph read from mssg round-trips unchanged).
  */
 import * as z from 'zod'
 import type {
@@ -27,7 +30,8 @@ import type {
   MssgSiteProjection
 } from '../../shared/types/mssg-sites'
 import type { MssgActionContext } from './mssg-actions'
-import { mssgActionIssues, mssgActionOut, mssgGlyphIssue, mssgMessengerEditable, mssgMessengerIssue } from './mssg-actions'
+import { mssgActionIssues, mssgActionOut, mssgMessengerEditable, mssgMessengerIssue } from './mssg-actions'
+import { MSSG_GLYPH_FEATURES, MSSG_GLYPH_LINK, mssgGlyphIssue, mssgGlyphOut } from './mssg-glyphs'
 import { mssgMergeBlockTheme } from './mssg-style'
 
 // ── kinds ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -130,7 +134,86 @@ function mergeBlockFields(prev: Record<string, unknown>, patch: Record<string, u
     if (v === undefined) continue
     out[k] = k === 'theme' ? mssgMergeBlockTheme(prev.theme, v, dropNull) : clone(v)
   }
+  // v1.9: a Link item's card `image` is never sent — the preview keeps it by item id (the API's merge does the same)
+  if (dropNull && Array.isArray(patch.items) && Array.isArray(prev.items)) out.items = mssgKeepItemImages(prev.items, out.items as unknown[])
+  // v1.9: `items` replaces a legacy top-level `title` / `action` of a Link (never both in one op)
+  if (patch.items !== undefined && (patch.title === undefined && patch.action === undefined)) {
+    delete out.title
+    delete out.action
+  }
   return out
+}
+
+// ── Link items (v1.9 §3.5) ──────────────────────────────────────────────────────────────────────────────────────────
+/** max links in one Link block (assumption A8) */
+export const MSSG_LINK_ITEMS_MAX = 30
+
+/**
+ * The links of a Link block's `fields`: `items` as read, or — legacy (an old draft's op, a legacy read) — one item from the
+ * top-level `title` / `action` (no id, no glyph). Top-level `title` / `action` next to `items` set item 0 (legacy op on top).
+ */
+export function mssgLinkItems(fields: Record<string, unknown> | null | undefined): Record<string, unknown>[] {
+  const f = fields ?? {}
+  const items = Array.isArray(f.items) ? (f.items as unknown[]).filter(isPlain).map(it => clone(it)) : []
+  const legacy = f.title !== undefined || f.action !== undefined
+  if (!items.length && legacy) return [{ title: typeof f.title === 'string' ? f.title : '', action: clone(f.action) ?? { type: 'url', url: '' }, glyph: null }]
+  if (items.length && legacy) {
+    const first = { ...items[0]! }
+    if (f.title !== undefined) first.title = f.title
+    if (f.action !== undefined) first.action = clone(f.action)
+    items[0] = first
+  }
+  return items
+}
+
+/** `next` items with the card `image` of the `prev` item of the same id (when `next` has none) */
+export function mssgKeepItemImages(prev: unknown[], next: unknown[]): unknown[] {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const it of prev) if (isPlain(it) && typeof it.id === 'string') byId.set(it.id, it)
+  return next.map((it) => {
+    if (!isPlain(it) || typeof it.id !== 'string' || it.image !== undefined) return it
+    const old = byId.get(it.id)
+    return old?.image !== undefined ? { ...it, image: clone(old.image) } : it
+  })
+}
+
+/** a legacy Link patch (`title` / `action`, no `items`) → `items` with item 0 changed (preview of an old draft's op) */
+function linkLegacyPatch(prevFields: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  if (patch.items !== undefined || (patch.title === undefined && patch.action === undefined)) return patch
+  const { title, action, ...rest } = patch
+  const items = mssgLinkItems(prevFields)
+  const first: Record<string, unknown> = { ...(items[0] ?? { title: '', action: { type: 'url', url: '' }, glyph: null }) }
+  if (title !== undefined) first.title = title
+  if (action !== undefined) first.action = clone(action)
+  return { ...rest, items: [first, ...items.slice(1)] }
+}
+
+/** row `j` moved one place up (`-1`) / down (`1`); unchanged at the ends */
+export function mssgRowsMove<T>(rows: T[], j: number, dir: -1 | 1): T[] {
+  const to = j + dir
+  if (j < 0 || j >= rows.length || to < 0 || to >= rows.length) return rows
+  const next = rows.slice()
+  const [row] = next.splice(j, 1)
+  next.splice(to, 0, row!)
+  return next
+}
+
+/** row `j` removed — never the last one (a Link block keeps at least one link) */
+export function mssgRowsRemove<T>(rows: T[], j: number): T[] {
+  if (rows.length <= 1 || j < 0 || j >= rows.length) return rows
+  return rows.filter((_, k) => k !== j)
+}
+
+/** a link can be added while the block holds fewer than 30 (A8) */
+export function mssgLinkCanAdd(count: number): boolean {
+  return count < MSSG_LINK_ITEMS_MAX
+}
+
+let rowSeq = 0
+/** a local key of a form row (v-for only; never sent) */
+export function mssgRowKey(): string {
+  rowSeq += 1
+  return `r${rowSeq}`
 }
 
 // ── preview = base + ops (client copy of the API's rule) ────────────────────────────────────────────────────────────
@@ -205,7 +288,8 @@ function applyOne(site: MssgSiteProjection, op: MssgOp): void {
     case 'block.create': {
       const page = findPage(site, op.pageId)
       if (!page) return
-      const block: MssgBlockProjection = { id: op.tempId, kind: op.kind, enabled: op.enabled, fields: clone(op.fields) }
+      const fields = op.kind === 'Link' ? linkLegacyPatch({}, clone(op.fields)) : clone(op.fields)
+      const block: MssgBlockProjection = { id: op.tempId, kind: op.kind, enabled: op.enabled, fields }
       const at = op.index === undefined ? page.blocks.length : Math.max(0, Math.min(page.blocks.length, op.index))
       page.blocks.splice(at, 0, block)
       return
@@ -213,7 +297,7 @@ function applyOne(site: MssgSiteProjection, op: MssgOp): void {
     case 'block.update': {
       const block = findPage(site, op.pageId)?.blocks.find(b => b.id === op.blockId)
       if (!block) return
-      if (op.fields) block.fields = mergeBlockFields(block.fields, op.fields, true)
+      if (op.fields) block.fields = mergeBlockFields(block.fields, block.kind === 'Link' ? linkLegacyPatch(block.fields, op.fields) : op.fields, true)
       if (op.enabled !== undefined) block.enabled = op.enabled
       return
     }
@@ -495,7 +579,12 @@ const imageField = (what: string) => z.string().nullable().refine(v => !v || mss
 export function mssgBlockSchema(kind: string, ctx: MssgActionContext | null = null): z.ZodType | null {
   switch (kind) {
     case 'Hat': return z.object({ title: maxLen(250, 'ชื่อ'), subtitle: maxLen(500, 'คำอธิบายสั้น'), logoUrl: imageField('รูปโปรไฟล์'), bgUrl: imageField('ภาพปก') })
-    case 'Link': return z.object({ title: len(1, 250, 'ชื่อปุ่ม'), action: actionSchema(false, ctx) })
+    case 'Link': return z.object({
+      items: list(z.looseObject({ title: len(1, 250, 'ชื่อลิงก์'), action: actionSchema(false, ctx) }).superRefine((it, c) => {
+        const m = mssgGlyphIssue(it.glyph, it._glyph0, MSSG_GLYPH_LINK)
+        if (m) c.addIssue({ code: 'custom', path: ['glyph'], message: m })
+      }), 1, MSSG_LINK_ITEMS_MAX, 'ลิงก์')
+    })
     case 'TextRich': return z.object({ text: z.string().trim().min(1, 'กรอกข้อความ').max(20_000, 'ข้อความยาวได้ไม่เกิน 20,000 ตัวอักษร') })
     case 'Image': return z.object({ url: image('รูปภาพ'), action: actionSchema(true, ctx) })
     case 'ImageGallery': return z.object({ images: list(z.looseObject({ url: image('รูป'), action: actionSchema(true, ctx) }), 1, 20, 'รูป'), autoplay })
@@ -509,8 +598,8 @@ export function mssgBlockSchema(kind: string, ctx: MssgActionContext | null = nu
     case 'Accordion': return z.object({ items: list(z.looseObject({ title: len(3, 250, 'คำถาม'), content: len(3, 20_000, 'คำตอบ') }), 1, 50, 'คำถาม') })
     case 'Features': return z.object({
       items: list(z.looseObject({ title: len(1, 250, 'หัวข้อ'), content: maxLen(1000, 'คำอธิบาย') }).superRefine((it, c) => {
-        const m = mssgGlyphIssue(it.glyph)
-        if (m) c.addIssue({ code: 'custom', path: ['glyph', 'icon'], message: m })
+        const m = mssgGlyphIssue(it.glyph, it._glyph0, MSSG_GLYPH_FEATURES)
+        if (m) c.addIssue({ code: 'custom', path: ['glyph'], message: m })
       }), 1, 20, 'จุดเด่น')
     })
     case 'Messengers': return z.object({
@@ -584,7 +673,7 @@ export function mssgIsoToLocalInput(iso: unknown): string {
 export function mssgBlockDefaults(kind: string): Record<string, unknown> {
   switch (kind) {
     case 'Hat': return { title: '', subtitle: '', logoUrl: null, bgUrl: null }
-    case 'Link': return { title: '', action: { type: 'url', url: '' } }
+    case 'Link': return { items: [{ title: '', action: { type: 'url', url: '' }, glyph: null }] }
     case 'TextRich': return { html: '', editorState: null }
     case 'Image': return { url: '', action: { type: 'nothing' } }
     case 'ImageGallery': return { images: [{ url: '', action: { type: 'nothing' } }], autoplay: 0 }
@@ -595,7 +684,7 @@ export function mssgBlockDefaults(kind: string): Record<string, unknown> {
     case 'Map': return { address: '' }
     case 'Timer': return { expireDate: '' }
     case 'Accordion': return { items: [{ title: '', content: '' }] }
-    case 'Features': return { items: [{ title: '', content: '', glyph: { type: 'icon', icon: '' } }] }
+    case 'Features': return { items: [{ title: '', content: '', glyph: { type: 'emoticon', text: '⭐' } }] }
     case 'Messengers': return { messengers: [{ platform: 'whatsapp', type: 'auto', value: '', enabled: true }] }
     case 'Socials': return { items: [{ url: '' }] }
     case 'SubscriptionForm': return { items: [{ type: 'email', label: 'Email', required: true }], sendLabel: 'Send', sentText: 'ขอบคุณ เราได้รับข้อมูลแล้ว' }
@@ -607,7 +696,7 @@ export function mssgBlockDefaults(kind: string): Record<string, unknown> {
 /** the `fields` keys the form of a kind edits (only these are compared / sent) */
 export const MSSG_BLOCK_KEYS: Record<string, string[]> = {
   Hat: ['title', 'subtitle', 'logoUrl', 'bgUrl'],
-  Link: ['title', 'action'],
+  Link: ['items'],
   TextRich: ['html', 'editorState'],
   Image: ['url', 'action'],
   ImageGallery: ['images', 'autoplay'],
@@ -651,7 +740,16 @@ export function mssgBlockToForm(kind: string, fields: Record<string, unknown>): 
     }
     case 'TextRich': return { text: mssgHtmlToText(str(f.html)) }
     case 'Timer': return { local: mssgIsoToLocalInput(f.expireDate) }
-    case 'Link': return { title: str(f.title), action: actionToForm(f.action, 'url') }
+    case 'Link': return {
+      // `fields` as given (not the defaults): a legacy block holds `title` / `action` and no `items`
+      items: (mssgLinkItems(fields).length ? mssgLinkItems(fields) : mssgLinkItems(mssgBlockDefaults('Link'))).map((it) => {
+        const glyph = it.glyph === undefined ? null : clone(it.glyph)
+        const row: Record<string, unknown> = { _key: mssgRowKey(), title: str(it.title), action: actionToForm(it.action, 'url'), glyph, _glyph0: clone(glyph) }
+        if (typeof it.id === 'string' && it.id) row.id = it.id
+        if (it.image !== undefined) row.image = clone(it.image)
+        return row
+      })
+    }
     case 'Image': return { url: str(f.url), action: actionToForm(f.action, 'nothing') }
     case 'ImageGallery': return {
       ...f,
@@ -661,7 +759,9 @@ export function mssgBlockToForm(kind: string, fields: Record<string, unknown>): 
     case 'VideoGallery': return { ...f, autoplay: typeof f.autoplay === 'number' ? f.autoplay : 0 }
     case 'Features': return {
       ...f,
-      items: (Array.isArray(f.items) ? f.items : []).map(it => (isPlain(it) ? { ...it, title: str(it.title), content: str(it.content) } : it))
+      items: (Array.isArray(f.items) ? f.items : []).map(it => (isPlain(it)
+        ? { ...it, _key: mssgRowKey(), title: str(it.title), content: str(it.content), glyph: clone(it.glyph ?? null), _glyph0: clone(it.glyph ?? null) }
+        : it))
     }
     default: return f
   }
@@ -690,7 +790,15 @@ export function mssgFormToBlock(kind: string, form: Record<string, unknown>, ori
     if (!out.logoUrl) out.logoUrl = null
     if (!out.bgUrl) out.bgUrl = null
   }
-  if (kind === 'Link' || kind === 'Image') out.action = mssgActionOut(out.action)
+  if (kind === 'Image') out.action = mssgActionOut(out.action)
+  if (kind === 'Link') out.items = mssgLinkItemsOut(out.items)
+  if (kind === 'Features' && Array.isArray(out.items)) {
+    out.items = (out.items as unknown[]).map((it) => {
+      if (!isPlain(it)) return it
+      const { _key, _glyph0, ...rest } = it
+      return { ...rest, glyph: mssgGlyphOut(it.glyph, _glyph0) }
+    })
+  }
   if (kind === 'ImageGallery' && Array.isArray(out.images)) {
     out.images = (out.images as unknown[]).map(it => (isPlain(it) ? { ...it, action: mssgActionOut(it.action) } : it))
   }
@@ -698,6 +806,21 @@ export function mssgFormToBlock(kind: string, form: Record<string, unknown>, ori
     out.messengers = (out.messengers as unknown[]).map(it => (isPlain(it) && mssgMessengerEditable(it.platform) && typeof it.value === 'string' ? { ...it, value: it.value.trim() } : it))
   }
   return out
+}
+
+/**
+ * v1.9 §3.5: Link form rows → `fields.items` as sent — `{ id?, title, action, glyph }` in the rows' order; the local row key,
+ * the glyph read and the card `image` (read-only, ⚠K29) are never sent; a new row has no `id`.
+ */
+export function mssgLinkItemsOut(rows: unknown): Record<string, unknown>[] {
+  return (Array.isArray(rows) ? rows : []).filter(isPlain).map((row) => {
+    const out: Record<string, unknown> = {}
+    if (typeof row.id === 'string' && row.id) out.id = row.id
+    out.title = typeof row.title === 'string' ? row.title.trim() : ''
+    out.action = mssgActionOut(row.action)
+    out.glyph = mssgGlyphOut(row.glyph, row._glyph0)
+    return out
+  })
 }
 
 /**
@@ -745,6 +868,11 @@ function blockSummaryText(kind: string, f: Record<string, unknown>): string {
       return mssgHtmlToText(s(f.html)).replace(/\s+/g, ' ')
     case 'Hat':
       return s(f.title) || s(f.subtitle)
+    case 'Link': {
+      const items = mssgLinkItems(f)
+      const first = s(items[0]?.title)
+      return items.length > 1 ? `${first} และอีก ${items.length - 1} ลิงก์` : first
+    }
     case 'Accordion':
     case 'Features':
     case 'Socials':
@@ -852,7 +980,13 @@ const BLOCK_FIELD_LABEL: Record<string, string> = {
   'platform': 'แอปแชท',
   'type': 'แบบ',
   'value': 'ช่องทางติดต่อ',
+  'glyph': 'ไอคอน',
   'glyph.icon': 'ไอคอน',
+  'glyph.type': 'ไอคอน',
+  'glyph.text': 'ไอคอน',
+  'glyph.url': 'ไอคอน',
+  'id': 'รหัสรายการ',
+  'image': 'รูปการ์ด',
   'action.url': 'ปลายทาง',
   'action.page': 'หน้าปลายทาง',
   'action.anchor': 'block ปลายทาง',
@@ -865,12 +999,13 @@ export function mssgPageFieldLabel(field: string): string {
   return PAGE_FIELD_LABEL[field] ?? field
 }
 
-export function mssgBlockFieldLabel(field: string): string {
+export function mssgBlockFieldLabel(field: string, kind = ''): string {
   // v1.6 style override: `theme.blocks.<kind>.<key>`
   const st = /^theme\.blocks\.[^.]+\.(.+)$/.exec(field)
   if (st) return `รูปแบบ · ${st[1]}`
   const [head, idx, ...rest] = field.split('.')
-  const base = BLOCK_FIELD_LABEL[head!] ?? head ?? ''
+  // v1.9: the items of a Link are its links
+  const base = kind === 'Link' && head === 'items' ? 'ลิงก์' : (BLOCK_FIELD_LABEL[head!] ?? head ?? '')
   if (idx !== undefined && /^\d+$/.test(idx)) return `${base} ที่ ${Number(idx) + 1}${rest.length ? ` · ${BLOCK_FIELD_LABEL[rest.join('.')] ?? rest.join('.')}` : ''}`
   return field.includes('.') && !BLOCK_FIELD_LABEL[field] ? `${base} · ${field.split('.').slice(1).join('.')}` : base
 }
@@ -890,7 +1025,7 @@ export function mssgPageBlockLabel(op: MssgOp | null | undefined, path: string, 
     const block = sites.map(s => s?.pages.flatMap(p => p.blocks).find(b => b.id === t.blockId)).find(Boolean)
     const kind = block?.kind ?? (op?.op === 'block.create' ? op.kind : '')
     const name = `block ${kind ? mssgBlockKindLabel(kind) : ''}`.trim()
-    return `${name} ใน${pageName}${t.field ? ` · ${mssgBlockFieldLabel(t.field)}` : ''}`
+    return `${name} ใน${pageName}${t.field ? ` · ${mssgBlockFieldLabel(t.field, kind)}` : ''}`
   }
   return `${pageName}${t.field ? ` · ${mssgPageFieldLabel(t.field)}` : ''}`
 }

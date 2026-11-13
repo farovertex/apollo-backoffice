@@ -70,7 +70,9 @@ describe('mssgApplyOps', () => {
     expect(out.pages.map(p => p.id)).toEqual(['p1', 'p2', 'tmp-aaaa1'])
     expect(out.pages[0]!.blocks.map(b => b.id)).toEqual(['b3', 'tmp-cccc1', 'b2'])
     const b2 = out.pages[0]!.blocks[2]!
-    expect(b2.fields).toMatchObject({ title: 'Buy', schemaVersion: 2 })
+    // v1.9: a legacy Link op (`title`) sets item 0 of the preview's items; no top-level title stays
+    expect(b2.fields).toMatchObject({ schemaVersion: 2, items: [{ title: 'Buy', action: { type: 'url', url: 'https://a.b' }, glyph: null }] })
+    expect(b2.fields.title).toBeUndefined()
     expect(b2.enabled).toBe(false)
     expect(out.pages[1]).toMatchObject({ name: 'About us', seo: { title: 'T', description: '' } })
     expect(out.pages[2]!.blocks).toHaveLength(1)
@@ -163,15 +165,16 @@ describe('dropping temp objects', () => {
 
 describe('rules', () => {
   const ok = (kind: string, form: unknown) => MSSG_BLOCK_SCHEMAS[kind]!.safeParse(form).success
-  it('Link: title 1–250 and an http(s) url or an internal page', () => {
-    expect(ok('Link', { title: 'Go', action: { type: 'url', url: 'https://x.y' } })).toBe(true)
-    expect(ok('Link', { title: 'Go', action: { type: 'url', url: 'ftp://x.y' } })).toBe(false)
-    expect(ok('Link', { title: '', action: { type: 'page', page: 'p1' } })).toBe(false)
-    expect(ok('Link', { title: 'Go', action: { type: 'page', page: 'p1' } })).toBe(true)
+  it('Link: each item title 1–250 and an http(s) url or an internal page (v1.9 items)', () => {
+    const link = (title: string, action: unknown) => ({ items: [{ title, action, glyph: null }] })
+    expect(ok('Link', link('Go', { type: 'url', url: 'https://x.y' }))).toBe(true)
+    expect(ok('Link', link('Go', { type: 'url', url: 'ftp://x.y' }))).toBe(false)
+    expect(ok('Link', link('', { type: 'page', page: 'p1' }))).toBe(false)
+    expect(ok('Link', link('Go', { type: 'page', page: 'p1' }))).toBe(true)
     // v1.6: tel / email / sms / anchor are editable (a type mssg holds that Apollo does not know stays as read)
-    expect(ok('Link', { title: 'Go', action: { type: 'tel', url: '+66 81 234 5678' } })).toBe(true)
-    expect(ok('Link', { title: 'Go', action: { type: 'tel', url: 'tel:0812' } })).toBe(false)
-    expect(ok('Link', { title: 'Go', action: { type: 'whatsappChat', phone: '1' } })).toBe(true)
+    expect(ok('Link', link('Go', { type: 'tel', url: '+66 81 234 5678' }))).toBe(true)
+    expect(ok('Link', link('Go', { type: 'tel', url: 'tel:0812' }))).toBe(false)
+    expect(ok('Link', link('Go', { type: 'whatsappChat', phone: '1' }))).toBe(true)
   })
   it('Map 10–300, Accordion items 3+, AudioEmbed hosts, Image needs an upload or url', () => {
     expect(ok('Map', { address: 'short' })).toBe(false)

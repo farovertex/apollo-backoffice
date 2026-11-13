@@ -8,6 +8,8 @@
  * text (never `v-html`). Approximate, not pixel-exact.
  * Test ids: `me-preview` (`data-page-id`, `data-blocks` = shown blocks), `me-preview-name`, `me-preview-url`,
  * `me-preview-page`, `me-preview-block` (`data-kind`, `data-block-id`), `me-preview-empty`, `me-preview-screen` (M3: `data-bg` = background colour, `data-bg-image`).
+ * v1.9 (B9): a Link shows every link (`me-preview-link-item`, `data-glyph-type`) with its icon (emoji text, the BO's icon,
+ * a tiny image; unknown = a "?" mark); Features show their emoji / icon.
  * v1.6 (B2r / B3r): Hat `title / subtitle / logoUrl / bgUrl`, Features icon names, every action type of §3.4; a block's
  * style override (colours, radius, border, width, mode — approximate) with `data-style-mode` / `data-styled` on
  * `me-preview-block`; the menu bar `me-preview-menu` (shown items, when the menu is on); the page font
@@ -78,17 +80,18 @@ function host(url: unknown): string {
 function paragraphs(b: MssgBlockProjection): string[] {
   return mssgHtmlToText(str(b.fields.html)).split(/\n+/).filter(Boolean).slice(0, 6)
 }
-function linkTarget(b: MssgBlockProjection): string {
-  return mssgActionText(b.fields.action, props.site)
+/** v1.9: the links of a Link block (legacy `title` / `action` → one link) */
+function linkItems(b: MssgBlockProjection): Record<string, unknown>[] {
+  return mssgLinkItems(b.fields)
 }
 /** v1.6: the block's style override (approximate) */
 function blockStyle(b: MssgBlockProjection) {
   return mssgPreviewStyle(b.fields, b.kind)
 }
+/** Features: the emoji, or the icon's name as a short label (unknown glyphs: their raw name) */
 function glyphText(it: Record<string, unknown>): string {
-  const g = (it.glyph ?? {}) as Record<string, unknown>
-  if (g.type === 'icon' && typeof g.icon === 'string') return g.icon
-  return str(g.value) || '•'
+  const g = mssgGlyphInfo(it.glyph)
+  return g.value || '•'
 }
 function countdown(b: MssgBlockProjection): string {
   const t = new Date(str(b.fields.expireDate)).getTime()
@@ -183,15 +186,38 @@ function countdown(b: MssgBlockProjection): string {
             <span v-if="str(b.fields.title)" class="text-base font-semibold break-words">{{ b.fields.title }}</span>
             <span v-if="str(b.fields.subtitle)" class="text-xs break-words opacity-75">{{ b.fields.subtitle }}</span>
           </div>
-          <!-- Link -->
+          <!-- Link (v1.9: every link of the block, in order, with its icon) -->
           <div
             v-else-if="b.kind === 'Link'"
-            class="mx-auto flex min-h-11 w-full flex-col items-center justify-center rounded-xl bg-current/10 px-3 py-2 text-center"
-            :class="{ 'shadow-md': blockStyle(b).mode === 'card', 'aspect-square max-w-[50%]': blockStyle(b).mode === 'square' || blockStyle(b).mode === 'grid', 'min-h-20': blockStyle(b).mode === 'tall' }"
-            :style="blockStyle(b).style"
+            class="flex flex-col gap-1.5"
+            :class="{ 'grid grid-cols-2': blockStyle(b).mode === 'square' || blockStyle(b).mode === 'grid' }"
           >
-            <span class="text-sm font-medium break-words">{{ str(b.fields.title) || 'ลิงก์' }}</span>
-            <span v-if="linkTarget(b)" class="max-w-full truncate text-[10px] opacity-60">{{ linkTarget(b) }}</span>
+            <div
+              v-for="(it, k) in linkItems(b)"
+              :key="k"
+              class="relative mx-auto flex min-h-11 w-full min-w-0 items-center justify-center gap-2 rounded-xl bg-current/10 px-3 py-2 text-center"
+              :class="{ 'shadow-md': blockStyle(b).mode === 'card', 'aspect-square flex-col': blockStyle(b).mode === 'square' || blockStyle(b).mode === 'grid', 'min-h-20': blockStyle(b).mode === 'tall' }"
+              :style="blockStyle(b).style"
+              data-testid="me-preview-link-item"
+              :data-glyph-type="mssgGlyphInfo(it.glyph).type"
+            >
+              <span class="flex size-5 shrink-0 items-center justify-center" aria-hidden="true">
+                <UIcon v-if="mssgGlyphInfo(it.glyph).type === 'icon'" :name="mssgGlyphInfo(it.glyph).ui!" class="size-4" />
+                <span v-else-if="mssgGlyphInfo(it.glyph).type === 'emoticon'" class="text-base leading-none">{{ mssgGlyphInfo(it.glyph).value }}</span>
+                <MssgEditorImage
+                  v-else-if="mssgGlyphInfo(it.glyph).type === 'image'"
+                  :site-id="siteId"
+                  :value="mssgGlyphInfo(it.glyph).value"
+                  class="size-5 rounded"
+                />
+                <UIcon v-else-if="mssgGlyphInfo(it.glyph).type === 'unknown'" name="i-lucide-circle-help" class="size-4 opacity-60" />
+              </span>
+              <span class="flex min-w-0 flex-1 flex-col">
+                <span class="text-sm font-medium break-words">{{ str(it.title) || 'ลิงก์' }}</span>
+                <span v-if="mssgActionText(it.action, site)" class="max-w-full truncate text-[10px] opacity-60">{{ mssgActionText(it.action, site) }}</span>
+              </span>
+              <span class="size-5 shrink-0" aria-hidden="true" />
+            </div>
           </div>
           <!-- Text -->
           <div v-else-if="b.kind === 'TextRich'" class="flex flex-col gap-1 text-sm">
@@ -253,7 +279,9 @@ function countdown(b: MssgBlockProjection): string {
           <!-- Features -->
           <div v-else-if="b.kind === 'Features'" class="flex flex-col gap-1.5">
             <div v-for="(it, k) in arr(b.fields.items).slice(0, 5)" :key="k" class="flex gap-2 text-sm">
-              <span class="shrink-0 rounded bg-current/10 px-1 text-[10px] leading-5 opacity-80" aria-hidden="true">{{ glyphText(it) }}</span>
+              <UIcon v-if="mssgGlyphInfo(it.glyph).type === 'icon'" :name="mssgGlyphInfo(it.glyph).ui!" class="mt-0.5 size-4 shrink-0 opacity-80" />
+              <span v-else-if="mssgGlyphInfo(it.glyph).type === 'emoticon'" class="shrink-0 text-base leading-5" aria-hidden="true">{{ glyphText(it) }}</span>
+              <span v-else class="shrink-0 rounded bg-current/10 px-1 text-[10px] leading-5 opacity-80" aria-hidden="true">{{ glyphText(it) }}</span>
               <span class="flex min-w-0 flex-col">
                 <span class="font-medium break-words">{{ str(it.title) }}</span>
                 <span v-if="str(it.content)" class="text-xs break-words opacity-75">{{ str(it.content) }}</span>

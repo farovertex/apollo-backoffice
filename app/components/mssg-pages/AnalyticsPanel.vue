@@ -36,14 +36,16 @@ const running = ref(false)
 const runningJob = ref<MssgSiteView['job']>(null)
 
 const data = computed(() => views.value[range.value]?.data ?? null)
-const unitRunning = computed(() => data.value ? mssgAnalyticsRunning(data.value) : false)
-const prevLabel = computed(() => data.value ? mssgAnalyticsPreviousLabel(range.value, data.value) : '')
+/** AC-62: "now" at render time (re-evaluated every minute), so a unit that ends while the panel is open turns "ended" */
+const now = useNow({ interval: 60_000 })
+const unitRunning = computed(() => data.value ? mssgAnalyticsRunning(data.value, now.value) : false)
+const prevLabel = computed(() => data.value ? mssgAnalyticsPreviousLabel(range.value, data.value, now.value) : '')
 const dates = computed(() => data.value ? mssgAnalyticsDatesText(range.value, data.value) : null)
 const periodName = computed(() => mssgAnalyticsRange(range.value).period)
 const readTime = computed(() => data.value ? (formatDateTime(data.value.readAt).split(' ')[1] ?? '') : '')
 const unitNote = computed(() => unitRunning.value
   ? `${periodName.value}ยังไม่จบ · นับถึงเวลาที่ดึง ${readTime.value}`
-  : `ช่วงนี้จบแล้ว · ตัวเลขตามที่ดึงเมื่อ ${readTime.value}`)
+  : `ช่วงนี้จบแล้ว · ตัวเลขตามที่ดึงเมื่อ ${data.value ? formatDateTime(data.value.readAt) : ''}`)
 
 const visitsDelta = computed(() => data.value
   ? mssgDelta(data.value.current.visits, data.value.previous.visits, prevLabel.value, 'ครั้ง', { withPct: true })
@@ -188,7 +190,7 @@ onMounted(() => load(range.value))
 
     <template v-if="data">
       <p class="text-sm break-words text-toned" data-testid="an-summary">
-        {{ mssgAnalyticsSummary(range, data) }}
+        {{ mssgAnalyticsSummary(range, data, now) }}
       </p>
       <p class="text-xs text-muted" data-testid="an-dates">
         {{ dates!.current }}<span class="text-dimmed"> · {{ dates!.previous }}</span>

@@ -19,6 +19,9 @@ const data: MssgAnalyticsData = {
   previous: { from: '2026-11-01', to: '2026-11-07', visits: 150, clicks: 20, clickRate: 0.1333 }
 }
 
+/** render time injected (13 Nov 2026 16:00 Bangkok) */
+const NOW = new Date('2026-11-13T09:00:00.000Z')
+
 describe('mssg analytics helpers', () => {
   it('labels known actions in Thai and unknown ones generically', () => {
     expect(mssgAnalyticsActionLabel({ action: 'page.view', label: 'Homepage' })).toBe('เข้าหน้า Homepage')
@@ -55,10 +58,10 @@ describe('mssg analytics helpers', () => {
     expect(mssgPercentText(0.25)).toBe('25%')
     expect(mssgPercentText(0.3077)).toBe('30.8%')
     expect(mssgPercentText(0)).toBe('0%')
-    expect(mssgAnalyticsSummary('week', data)).toBe('สัปดาห์นี้ถึงตอนนี้ มีคนเข้าเว็บ 120 ครั้ง และกดลิงก์หรือปุ่ม 30 ครั้ง (25%)')
-    expect(mssgAnalyticsSummary('week', { ...data, to: '2026-11-12' })).toBe('สัปดาห์นี้ มีคนเข้าเว็บ 120 ครั้ง และกดลิงก์หรือปุ่ม 30 ครั้ง (25%)')
-    expect(mssgAnalyticsSummary('day', { ...data, current: { ...data.current, visits: 0, clicks: 0 } })).toBe('วันนี้ถึงตอนนี้ ยังไม่มีคนเข้าเว็บ')
-    expect(mssgAnalyticsSummary('week', { ...data, current: { ...data.current, visits: 0, clicks: 0 } })).toContain('ยังไม่มีคนเข้าเว็บ')
+    expect(mssgAnalyticsSummary('week', data, NOW)).toBe('สัปดาห์นี้ถึงตอนนี้ มีคนเข้าเว็บ 120 ครั้ง และกดลิงก์หรือปุ่ม 30 ครั้ง (25%)')
+    expect(mssgAnalyticsSummary('week', { ...data, to: '2026-11-12' }, NOW)).toBe('สัปดาห์นี้ มีคนเข้าเว็บ 120 ครั้ง และกดลิงก์หรือปุ่ม 30 ครั้ง (25%)')
+    expect(mssgAnalyticsSummary('day', { ...data, current: { ...data.current, visits: 0, clicks: 0 } }, NOW)).toBe('วันนี้ถึงตอนนี้ ยังไม่มีคนเข้าเว็บ')
+    expect(mssgAnalyticsSummary('week', { ...data, current: { ...data.current, visits: 0, clicks: 0 } }, NOW)).toContain('ยังไม่มีคนเข้าเว็บ')
   })
   it('buttons are the click items, largest first, never page views', () => {
     const b = mssgAnalyticsButtons(data)
@@ -79,13 +82,32 @@ describe('mssg analytics helpers', () => {
     expect(mssgAnalyticsDatesText('week', { ...data, from: '2026-12-27', to: '2027-01-02', previous: { ...data.previous, from: '2026-12-20', to: '2026-12-26' } }))
       .toEqual({ current: 'สัปดาห์นี้ 27 ธ.ค. 2569 – 2 ม.ค. 2570', previous: 'สัปดาห์ก่อน 20–26 ธ.ค. 2569' })
   })
-  it('running only while the stored end is on / after the Bangkok date of readAt', () => {
-    expect(mssgAnalyticsRunning(data)).toBe(true)
-    expect(mssgAnalyticsRunning({ to: '2026-11-14', readAt: '2026-11-14T16:59:00.000Z' })).toBe(true)
-    expect(mssgAnalyticsRunning({ to: '2026-11-14', readAt: '2026-11-14T17:00:00.000Z' })).toBe(false)
-    expect(mssgAnalyticsPreviousLabel('week', data)).toBe('สัปดาห์ก่อนทั้งสัปดาห์')
-    expect(mssgAnalyticsPreviousLabel('month', { to: '2026-11-30', readAt: '2026-12-02T00:00:00.000Z' })).toBe('เดือนก่อน')
-    expect(mssgDelta(120, 150, mssgAnalyticsPreviousLabel('week', data), 'ครั้ง', { withPct: true }).text).toBe('▼ น้อยกว่าสัปดาห์ก่อนทั้งสัปดาห์ 30 ครั้ง (20%)')
+  it('AC-62: running only while the stored end is today or later in Bangkok at render time (not readAt)', () => {
+    // running week (8–14 Nov), now = 13 Nov Bangkok
+    expect(mssgAnalyticsRunning(data, NOW)).toBe(true)
+    // the same read rendered after the week ended (15 Nov 00:00 Bangkok = 14 Nov 17:00Z): ended, though readAt was inside it
+    expect(mssgAnalyticsRunning(data, new Date('2026-11-14T16:59:00.000Z'))).toBe(true)
+    expect(mssgAnalyticsRunning(data, new Date('2026-11-14T17:00:00.000Z'))).toBe(false)
+    // stored earlier week / month / day, read fresh today (readAt = now): ended — the old rule said "running"
+    const freshRead = { readAt: NOW.toISOString() }
+    expect(mssgAnalyticsRunning({ ...freshRead, to: '2026-11-07' }, NOW)).toBe(false)
+    expect(mssgAnalyticsRunning({ ...freshRead, to: '2026-10-31' }, NOW)).toBe(false)
+    expect(mssgAnalyticsRunning({ ...freshRead, to: '2026-11-12' }, NOW)).toBe(false)
+    // an old read of last week stays ended, also when it was read while that week ran
+    expect(mssgAnalyticsRunning({ to: '2026-11-07', readAt: '2026-11-05T03:00:00.000Z' }, NOW)).toBe(false)
+    // today's day / this month running
+    expect(mssgAnalyticsRunning({ to: '2026-11-13' }, NOW)).toBe(true)
+    expect(mssgAnalyticsRunning({ to: '2026-11-30' }, NOW)).toBe(true)
+    // Bangkok day boundary: 13 Nov 16:59Z = 23:59 Bangkok (running), 17:00Z = 14 Nov (a stored day of 13 Nov has ended)
+    expect(mssgAnalyticsRunning({ to: '2026-11-13' }, new Date('2026-11-13T16:59:00.000Z'))).toBe(true)
+    expect(mssgAnalyticsRunning({ to: '2026-11-13' }, new Date('2026-11-13T17:00:00.000Z'))).toBe(false)
+    expect(mssgAnalyticsRunning({ to: '' }, NOW)).toBe(false)
+    expect(mssgAnalyticsPreviousLabel('week', data, NOW)).toBe('สัปดาห์ก่อนทั้งสัปดาห์')
+    expect(mssgAnalyticsPreviousLabel('week', { to: '2026-11-07' }, NOW)).toBe('สัปดาห์ก่อน')
+    expect(mssgAnalyticsPreviousLabel('month', { to: '2026-10-31' }, NOW)).toBe('เดือนก่อน')
+    expect(mssgAnalyticsPreviousLabel('day', { to: '2026-11-12' }, NOW)).toBe('เมื่อวาน')
+    expect(mssgAnalyticsSummary('month', { ...data, to: '2026-10-31' }, NOW)).toMatch(/^เดือนนี้ มีคนเข้าเว็บ/)
+    expect(mssgDelta(120, 150, mssgAnalyticsPreviousLabel('week', data, NOW), 'ครั้ง', { withPct: true }).text).toBe('▼ น้อยกว่าสัปดาห์ก่อนทั้งสัปดาห์ 30 ครั้ง (20%)')
     expect(mssgDelta(5, 5, 'เมื่อวานทั้งวัน', 'ครั้ง').text).toBe('เท่ากับเมื่อวานทั้งวัน')
   })
 })
