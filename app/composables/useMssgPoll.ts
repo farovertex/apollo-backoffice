@@ -8,6 +8,9 @@
  * (account gone), on `stop()` / `stopAll()` and when the owning scope is disposed (leaving the page). Like
  * `useProfilesPoll`, each loop has a hard deadline (15 min): when it passes the loop stops, the id is kept in
  * `timedOut` and `onTimeout` fires once; a timed-out id is not restarted by `track()` until `resetTimeouts()`.
+ *
+ * FEAT-101: generic over the followed view. The editor follows `GET /mssg-sites/:id` with `needsPoll` = "the site's
+ * job is open"; without `needsPoll` the FEAT-100 account rule (`mssgNeedsPoll`) applies, so `/mssg-pages` is unchanged.
  */
 import type { MssgAccountView } from '#shared/types/mssg-accounts'
 
@@ -17,20 +20,23 @@ interface Loop {
   deadline: number
 }
 
-export interface MssgPollHandlers {
+export interface MssgPollHandlers<T = MssgAccountView> {
   /** one read of the account (the page passes `api('/mssg-accounts/:id', { retry: 0 })`) */
-  read: (id: string) => Promise<MssgAccountView>
+  read: (id: string) => Promise<T>
   /** every answer, open or terminal */
-  onUpdate: (view: MssgAccountView) => void
+  onUpdate: (view: T) => void
   /** the answer that ended the loop (terminal job and not `disconnecting`, or no job at all) */
-  onEnd?: (view: MssgAccountView) => void
+  onEnd?: (view: T) => void
   /** 404: the account no longer exists — v2: the normal end of an unlink (`disconnecting`), else unlinked elsewhere */
   onGone?: (id: string) => void
   /** the 15 min deadline passed */
   onTimeout?: (id: string) => void
+  /** FEAT-101 — keep following after this answer? Default: the account rule `mssgNeedsPoll` */
+  needsPoll?: (view: T) => boolean
 }
 
-export function useMssgPoll(handlers: MssgPollHandlers) {
+export function useMssgPoll<T = MssgAccountView>(handlers: MssgPollHandlers<T>) {
+  const needsPoll = handlers.needsPoll ?? ((view: T) => mssgNeedsPoll(view as unknown as MssgAccountView))
   const loops = new Map<string, Loop>()
   /** ids with a running loop (reactive copy of `loops`' keys, for data attributes and the UI) */
   const polling = ref<string[]>([])
@@ -67,7 +73,7 @@ export function useMssgPoll(handlers: MssgPollHandlers) {
       const view = await handlers.read(id)
       if (loops.get(id) !== loop) return // stopped meanwhile (page left, area switched, unlinked)
       handlers.onUpdate(view)
-      if (!mssgNeedsPoll(view)) {
+      if (!needsPoll(view)) {
         stop(id)
         handlers.onEnd?.(view)
       }

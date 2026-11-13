@@ -9,8 +9,22 @@ export type MssgAccountStatus = 'connecting' | 'connected' | 'expired' | 'error'
 
 export type MssgSiteStatus = 'published' | 'unpublished' | 'unknown'
 
-/** v2: `mssgLogout` is created by `DELETE /mssg-accounts/:id` only */
-export type MssgJobType = 'mssgConnect' | 'mssgSync' | 'mssgLogout'
+/**
+ * v2: `mssgLogout` is created by `DELETE /mssg-accounts/:id` only. FEAT-101 (contract §4.1): `mssgSiteCreate` is the
+ * account's job of `POST /mssg-accounts/:id/sites`. Contract v1.6 #9: while any mssg job of the account is open the
+ * account view shows **that** job, so every FEAT-101 site job type may appear here too.
+ */
+export type MssgJobType
+  = | 'mssgConnect'
+    | 'mssgSync'
+    | 'mssgLogout'
+    | 'mssgSiteCreate'
+    | 'mssgApply'
+    | 'mssgSiteDuplicate'
+    | 'mssgSiteDelete'
+    | 'mssgDomain'
+    | 'mssgStoreRead'
+    | 'mssgAnalytics'
 
 export type MssgJobStatus = 'pending' | 'waiting' | 'active' | 'completed' | 'failed' | 'cancelled'
 
@@ -29,8 +43,20 @@ export type MssgErrorCode
     | 'workerLost'
     | 'claimLost'
     | 'browserUnreachable'
+    // FEAT-101 (contract §5, D3)
+    | 'mssgApiChanged'
+    | 'mssgValidation'
+    | 'mssgConflict'
+    | 'mssgGuardRefused'
+    | 'mssgPlanRequired'
+    | 'mssgQuotaReached'
+    | 'mssgNotFound'
 
 export interface MssgSite {
+  /** FEAT-101 — Apollo `mssgSites` id; `null` for a site without a document (the editor link is disabled then) */
+  id: string | null
+  /** FEAT-101 — mssg's own site id */
+  mssgId: string
   name: string
   url: string
   status: MssgSiteStatus
@@ -129,9 +155,31 @@ export interface MssgRenameBody {
   nickname: string | null
 }
 
-export type MssgConflictReason = 'emailAlreadyLinked' | 'jobInProgress' | 'notConnected'
+export type MssgConflictReason
+  = | 'emailAlreadyLinked'
+    | 'jobInProgress'
+    | 'notConnected'
+    // FEAT-101 site routes (contract §3.1, §4)
+    | 'draftChanged'
+    | 'siteGone'
+    | 'noDraft'
+    | 'confirmRequired'
+    | 'conflictPending'
+    | 'noConflict'
+    | 'quotaReached'
 
-/** 409 `{ error: 'conflict', reason }`, 400 `{ error: 'validation', issues }`, 502 `{ error: 'profileProvisionFailed' }` */
+/** FEAT-101 — 403 `{ error: 'forbidden', reason }` (contract §4.3: delete website only in the actor's own area) */
+export type MssgForbiddenReason = 'ownAreaOnly'
+
+/** FEAT-101 — `POST /mssg-accounts/:id/sites` (contract §4.1); no name → `{}` */
+export interface MssgSiteCreateBody {
+  name?: string
+}
+
+/**
+ * 409 `{ error: 'conflict', reason }`, 400 `{ error: 'validation', issues }`, 502 `{ error: 'profileProvisionFailed' }`;
+ * FEAT-101: 400 `{ error: 'confirmMismatch' }`, 403 `{ error: 'forbidden', reason: 'ownAreaOnly' }`
+ */
 export interface MssgErrorBody {
   error: string
   reason?: MssgConflictReason | string

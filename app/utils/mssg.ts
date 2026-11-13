@@ -10,6 +10,7 @@ import type {
   MssgConflictReason,
   MssgErrorBody,
   MssgErrorCode,
+  MssgForbiddenReason,
   MssgJobStatus,
   MssgJobView,
   MssgSiteStatus
@@ -40,7 +41,15 @@ export const MSSG_ERROR_TEXT: Record<MssgErrorCode, string> = {
   profileProvisionFailed: 'สร้างโปรไฟล์เบราว์เซอร์สำหรับบัญชีนี้ไม่สำเร็จ',
   workerLost: 'ระบบหยุดทำงานกลางคัน ลองใหม่อีกครั้ง',
   claimLost: 'งานหลุดจากคิวกลางคัน ลองใหม่อีกครั้ง',
-  browserUnreachable: 'เปิดโปรไฟล์เบราว์เซอร์ไม่ได้ ลองใหม่ภายหลัง'
+  browserUnreachable: 'เปิดโปรไฟล์เบราว์เซอร์ไม่ได้ ลองใหม่ภายหลัง',
+  // FEAT-101 (contract §5, D3)
+  mssgApiChanged: 'ระบบของ mssg ตอบกลับไม่ตรงรูปแบบที่รู้จัก ยังไม่ได้เขียนอะไรเพิ่ม แจ้งผู้ดูแลระบบ',
+  mssgValidation: 'mssg ไม่รับค่าบางช่อง ดูข้อความใต้ช่องที่ต้องแก้ แล้วบันทึกอีกครั้ง',
+  mssgConflict: 'ค่าบน mssg ถูกเปลี่ยนไปหลังจากเริ่มร่างนี้ ยังไม่ได้เขียนอะไร เลือกว่าจะใช้ค่าไหนแล้วบันทึกอีกครั้ง',
+  mssgGuardRefused: 'ระบบหยุดคำสั่งที่ไม่ได้รับอนุญาตไว้ก่อนส่งไปที่ mssg แจ้งผู้ดูแลระบบ',
+  mssgPlanRequired: 'ต้องใช้แพ็กเกจ Business ของ mssg สำหรับการตั้งค่านี้ (อัปเกรดแพ็กเกจที่ mssg ก่อนแล้วลองใหม่)',
+  mssgQuotaReached: 'mssg ไม่ให้สร้างเว็บเพิ่ม เพราะบัญชีนี้สร้างเว็บครบตามแพ็กเกจแล้ว ลบเว็บที่ไม่ใช้หรืออัปเกรดแพ็กเกจที่ mssg ก่อน',
+  mssgNotFound: 'ไม่พบเว็บนี้บน mssg แล้ว อาจถูกลบไปจาก mssg'
 }
 
 export const MSSG_ERROR_FALLBACK = 'ทำงานกับ mssg ไม่สำเร็จ ลองใหม่อีกครั้ง'
@@ -54,8 +63,24 @@ export function mssgErrorText(code: string | null | undefined): string {
 export const MSSG_CONFLICT_TEXT: Record<MssgConflictReason, string> = {
   emailAlreadyLinked: 'อีเมลนี้เชื่อมกับระบบอยู่แล้ว',
   jobInProgress: 'บัญชีนี้ยังมีงานกำลังทำอยู่ รอให้งานเสร็จก่อนแล้วลองใหม่',
-  notConnected: 'บัญชีนี้ยังไม่ได้เชื่อม ให้เข้าสู่ระบบใหม่ก่อน'
+  notConnected: 'บัญชีนี้ยังไม่ได้เชื่อม ให้เข้าสู่ระบบใหม่ก่อน',
+  // FEAT-101 site routes (contract §3.1, §4)
+  draftChanged: 'ร่างนี้ถูกแก้จากที่อื่นระหว่างนี้ โหลดร่างล่าสุดมาแล้ว ตรวจแล้วแก้ต่อได้',
+  siteGone: 'เว็บนี้ไม่มีอยู่บน mssg แล้ว ทำได้อย่างเดียวคือทิ้งร่าง',
+  noDraft: 'ยังไม่มีอะไรเปลี่ยนในร่าง',
+  confirmRequired: 'ร่างนี้มีการเปลี่ยนที่ย้อนกลับไม่ได้ ต้องยืนยันก่อนบันทึก',
+  conflictPending: 'ยังมีค่าที่ขัดกับ mssg ต้องเลือกว่าจะใช้ค่าไหนก่อนบันทึก',
+  noConflict: 'ไม่มีค่าที่ขัดกันแล้ว',
+  quotaReached: 'บัญชี mssg นี้สร้างเว็บครบตามแพ็กเกจแล้ว (ตามโควตาที่อ่านล่าสุด) ลบเว็บที่ไม่ใช้หรืออัปเกรดแพ็กเกจที่ mssg ก่อน'
 }
+
+/** FEAT-101 — 403 `reason` → Thai (contract §4.3) */
+export const MSSG_FORBIDDEN_TEXT: Record<MssgForbiddenReason, string> = {
+  ownAreaOnly: 'ลบเว็บได้เฉพาะเว็บในพื้นที่ของคุณเอง · เว็บนี้อยู่ในพื้นที่ของผู้ใช้อื่น'
+}
+
+/** FEAT-101 — 400 `{ error: 'confirmMismatch' }` of `DELETE /mssg-sites/:id` (contract §4.3) */
+export const MSSG_CONFIRM_MISMATCH_TEXT = 'ชื่อที่พิมพ์ไม่ตรงกับชื่อเว็บปัจจุบัน (ต้องตรงทุกตัวอักษร รวมตัวพิมพ์เล็ก-ใหญ่) ยังไม่ได้ลบอะไร'
 
 export const MSSG_STATUS_TEXT: Record<MssgAccountStatus, string> = {
   connecting: 'กำลังเชื่อม',
@@ -99,6 +124,14 @@ export const MSSG_STEP_TEXT: Record<string, string> = {
   readingPlan: 'กำลังอ่านแพ็กเกจและโควตา',
   readingSites: 'กำลังอ่านรายการเว็บ',
   loggingOut: 'กำลังออกจากระบบ mssg ในโปรไฟล์',
+  // FEAT-101 (contract §5)
+  checkingSession: 'กำลังตรวจการเข้าสู่ระบบ mssg',
+  reading: 'กำลังอ่านค่าล่าสุดจาก mssg',
+  checkingConflicts: 'กำลังตรวจว่าค่าบน mssg เปลี่ยนไปหรือไม่',
+  uploading: 'กำลังอัปโหลดรูป',
+  writing: 'กำลังเขียนไปที่ mssg',
+  creating: 'กำลังสร้างเว็บ',
+  deleting: 'กำลังลบเว็บ',
   done: 'เสร็จแล้ว'
 }
 
@@ -122,7 +155,7 @@ export const MSSG_UNLINK_BUSY_TEXT = 'ยกเลิกการเชื่อ
 export const MSSG_PROFILE_BOUND_TEXT = 'profile นี้ผูกกับบัญชี mssg อยู่ ให้ยกเลิกการเชื่อมก่อน'
 
 /** one line of progress for an open job: queue state first, then the worker's step */
-export function mssgJobProgressText(job: MssgJobView | null | undefined): string {
+export function mssgJobProgressText(job: (Omit<MssgJobView, 'type'> & { type: string }) | null | undefined): string {
   if (!job) return MSSG_STEP_TEXT.queued!
   if (job.type === 'mssgLogout' && job.status !== 'active') return job.status === 'pending' ? 'รอคิวออกจากระบบ' : 'กำลังออกจากระบบ…'
   if (job.status === 'pending') return 'รอคิว'
@@ -164,7 +197,7 @@ export interface MssgFailure {
   message: string
 }
 
-/** status + body + one Thai sentence for a failed request (409 reason, 502 provision, 404, else the API's text) */
+/** status + body + one Thai sentence for a failed request (409 reason, 502 provision, 403 reason, 400 confirmMismatch, 404, else the API's text) */
 export function mssgFailure(e: unknown, fallback: string): MssgFailure {
   const err = e as FetchError<Partial<MssgErrorBody>>
   const status = err.response?.status ?? err.statusCode
@@ -172,7 +205,10 @@ export function mssgFailure(e: unknown, fallback: string): MssgFailure {
   let message: string | undefined
   if (status === 409 && body?.reason) message = (MSSG_CONFLICT_TEXT as Record<string, string>)[body.reason]
   if (!message && status === 502 && body?.error === 'profileProvisionFailed') message = MSSG_ERROR_TEXT.profileProvisionFailed
+  if (!message && status === 403 && body?.reason) message = (MSSG_FORBIDDEN_TEXT as Record<string, string>)[body.reason]
+  if (!message && status === 400 && body?.error === 'confirmMismatch') message = MSSG_CONFIRM_MISMATCH_TEXT
   if (!message && status === 404) message = 'ไม่พบบัญชีหรือพื้นที่นี้'
+  if (!message && status === 413) message = 'ไฟล์ใหญ่เกินกำหนด'
   if (!message && status === 403) message = 'คุณไม่มีสิทธิ์ใช้งานส่วนนี้'
   if (!message && status === 400) message = body?.issues?.[0]?.message
   return { status, body, message: message ?? fallback }

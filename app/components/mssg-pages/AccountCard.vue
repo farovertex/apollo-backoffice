@@ -9,8 +9,18 @@
  * v2: while `disconnecting` (unlink requested, logout job not finished) the card shows "กำลังออกจากระบบ…" and every
  * control is disabled; the page removes it when the account answers 404.
  * Test ids inside the card are fixed (`mp-status`, `mp-plan`, …) — QA scopes them by `mp-card-<id>`.
+ * FEAT-101 (B1): "แก้ไขเว็บ" (`mp-site-edit`) is a link to the editor `/mssg-pages/sites/<site.id>` (`?workspaceId=`
+ * when a GOD is in another area). It is disabled with its reason (`title` + `data-reason`) when the site has no Apollo
+ * document yet (`id: null`) or the account is not `connected`. FEAT-101 (B6, AC-39): "Analytics" (`mp-site-analytics`) toggles the
+ * inline `MssgPagesAnalyticsPanel` under the row; disabled with its reason on the same terms as "แก้ไขเว็บ".
+ * FEAT-101 (B5, AC-37): "+ สร้างเว็บ" (`mp-create-site`) only emits `create` (the page opens the name dialog); it is
+ * disabled with its reason (`title`, `data-reason`, visible `mp-create-site-reason`) when the account is not
+ * `connected`, a job of the account is open (any type, contract v1.6 #9), a request of the card is in flight, or the
+ * known quota is full. Sites the page reports as just created / copied carry `data-new` + the "ใหม่" badge
+ * (`mp-site-new`). The overview (`readonly`) gets one navigation-only "แก้ไขเว็บ" per site
+ * (`mp-overview-site-edit-<siteId>`) into the owner's area editor.
  */
-import type { MssgAccountView } from '#shared/types/mssg-accounts'
+import type { MssgAccountView, MssgSite } from '#shared/types/mssg-accounts'
 
 const props = withDefaults(defineProps<{
   account: MssgAccountView
@@ -22,7 +32,11 @@ const props = withDefaults(defineProps<{
   pageSyncing?: boolean
   /** the 15 min follow-up of this account's job gave up */
   pollTimedOut?: boolean
-}>(), { readonly: false, requesting: false, pageSyncing: false, pollTimedOut: false })
+  /** FEAT-101 — GOD in another area: carried to the editor as `?workspaceId=` (navigation context only) */
+  areaWorkspaceId?: string
+  /** FEAT-101 (B5) — Apollo site ids created / copied while the page was open ("ใหม่" badge) */
+  newSiteIds?: string[]
+}>(), { readonly: false, requesting: false, pageSyncing: false, pollTimedOut: false, areaWorkspaceId: '', newSiteIds: () => [] })
 
 const emit = defineEmits<{
   refresh: []
@@ -30,7 +44,16 @@ const emit = defineEmits<{
   rename: []
   unlink: []
   reload: []
+  create: []
+  /** FEAT-101 (B6) — an Analytics read was ordered / ended: the page re-reads this account */
+  analyticsChanged: []
 }>()
+
+/** the Apollo site id whose Analytics panel is open (one at a time per card) */
+const analyticsOpenId = ref<string | null>(null)
+function toggleAnalytics(site: MssgSite) {
+  analyticsOpenId.value = analyticsOpenId.value === site.id ? null : (site.id ?? null)
+}
 
 const a = computed(() => props.account)
 const busy = computed(() => mssgNeedsPoll(a.value))
@@ -38,7 +61,10 @@ const disconnecting = computed(() => a.value.status === 'disconnecting')
 const unlinkBlocked = computed(() => disconnecting.value || a.value.job?.status === 'active')
 const progressLabel = computed(() => {
   if (disconnecting.value || a.value.job?.type === 'mssgLogout') return 'กำลังออกจากระบบ…'
-  return `${a.value.job?.type === 'mssgSync' ? 'กำลังดึง' : 'กำลังเข้าสู่ระบบ'} · ${mssgJobProgressText(a.value.job)}`
+  const type = a.value.job?.type
+  // FEAT-100 texts for its own jobs; FEAT-101 jobs (any type may show here, contract v1.6 #9) by their job-type text
+  const what = type === 'mssgSync' ? 'กำลังดึง' : (type === 'mssgConnect' || !type) ? 'กำลังเข้าสู่ระบบ' : mssgJobTypeText(type)
+  return `${what} · ${mssgJobProgressText(a.value.job)}`
 })
 const canRelogin = computed(() => a.value.status === 'expired' || a.value.status === 'error')
 const refreshDisabled = computed(() => a.value.status !== 'connected' || busy.value || props.requesting || props.pageSyncing)
@@ -49,6 +75,38 @@ const refreshHint = computed(() => {
 })
 const lastSyncText = computed(() => (a.value.lastSyncAt ? formatDateTime(a.value.lastSyncAt) : 'ยังไม่เคยดึง'))
 const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
+
+/** FEAT-101 (B5) — why "+ สร้างเว็บ" is disabled, or `null` (the API's 409 stays the authority) */
+const createBlockedReason = computed<string | null>(() => {
+  if (disconnecting.value) return 'กำลังออกจากระบบ…'
+  if (a.value.status !== 'connected') return 'สร้างเว็บได้เมื่อบัญชีเชื่อมแล้วเท่านั้น'
+  if (busy.value) return 'รอให้งานที่กำลังทำของบัญชีนี้เสร็จก่อน'
+  if (props.requesting) return 'กำลังส่งคำสั่ง…'
+  if (quotaFull.value) return MSSG_CONFLICT_TEXT.quotaReached
+  return null
+})
+
+/** FEAT-101 — why "แก้ไขเว็บ" is disabled for a site, or `null` */
+function editBlockedReason(site: MssgSite): string | null {
+  if (a.value.status !== 'connected') return 'แก้ไขเว็บได้เมื่อบัญชีเชื่อมแล้วเท่านั้น'
+  if (!site.id) return 'ยังไม่มีข้อมูลเว็บนี้ในระบบ กด "ดึงข้อมูลใหม่" ก่อน'
+  return null
+}
+/** FEAT-101 (B6) — why "Analytics" is disabled for a site, or `null` */
+function analyticsBlockedReason(site: MssgSite): string | null {
+  if (a.value.status !== 'connected') return 'ดู Analytics ได้เมื่อบัญชีเชื่อมแล้วเท่านั้น'
+  if (!site.id) return 'ยังไม่มีข้อมูลเว็บนี้ในระบบ กด "ดึงข้อมูลใหม่" ก่อน'
+  return null
+}
+function editTo(site: MssgSite) {
+  return {
+    path: `/mssg-pages/sites/${encodeURIComponent(site.id ?? '')}`,
+    query: props.areaWorkspaceId ? { workspaceId: props.areaWorkspaceId } : undefined
+  }
+}
+function isNew(site: MssgSite): boolean {
+  return !!site.id && props.newSiteIds.includes(site.id)
+}
 </script>
 
 <template>
@@ -186,17 +244,15 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
       <template v-if="!readonly">
         <UButton
           label="+ สร้างเว็บ"
-          color="neutral"
-          variant="outline"
+          color="primary"
+          variant="soft"
           size="xs"
-          disabled
-          :title="MSSG_SOON"
+          :disabled="!!createBlockedReason"
+          :title="createBlockedReason ?? 'สร้างเว็บใหม่ในบัญชีนี้'"
+          :data-reason="createBlockedReason ?? ''"
           data-testid="mp-create-site"
-        >
-          <template #trailing>
-            <span class="text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
-          </template>
-        </UButton>
+          @click="emit('create')"
+        />
         <UButton
           v-if="!mssgIsPro(a.plan)"
           label="อัปเกรดเป็น Pro"
@@ -212,6 +268,11 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
           </template>
         </UButton>
       </template>
+      <span
+        v-if="!readonly && createBlockedReason && !busy"
+        class="basis-full text-xs break-words text-muted"
+        data-testid="mp-create-site-reason"
+      >{{ createBlockedReason }}</span>
     </div>
 
     <div
@@ -234,9 +295,22 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
         :data-index="i"
         :data-url="site.url"
         :data-status="site.status"
+        :data-site-id="site.id ?? ''"
+        :data-new="isNew(site) ? 'true' : undefined"
       >
         <span class="flex min-w-0 flex-1 basis-40 flex-col">
-          <span class="text-sm break-words text-highlighted" data-testid="mp-site-name">{{ site.name }}</span>
+          <span class="text-sm break-words text-highlighted">
+            <span data-testid="mp-site-name">{{ site.name }}</span>
+            <UBadge
+              v-if="isNew(site)"
+              label="ใหม่"
+              color="success"
+              variant="subtle"
+              size="sm"
+              class="ms-1.5 align-middle"
+              data-testid="mp-site-new"
+            />
+          </span>
           <span class="truncate text-xs text-muted" :title="site.url" data-testid="mp-site-url">{{ site.url }}</span>
         </span>
         <span
@@ -244,27 +318,62 @@ const quotaFull = computed(() => mssgQuotaFull(a.value.quota))
           :class="site.status === 'published' ? 'text-success' : 'text-muted'"
           data-testid="mp-site-status"
         >{{ mssgSiteStatusText(site.status) }}</span>
-        <div v-if="!readonly" class="flex items-center gap-1.5">
+        <div v-if="!readonly" class="flex flex-wrap items-center gap-1.5">
           <UButton
             label="Analytics"
+            icon="i-lucide-chart-no-axes-column"
             color="neutral"
             variant="outline"
             size="xs"
-            disabled
-            :title="MSSG_SOON"
+            :disabled="!!analyticsBlockedReason(site)"
+            :title="analyticsBlockedReason(site) ?? 'ดูตัวเลขคนเข้าเว็บและคนกดลิงก์'"
+            :data-reason="analyticsBlockedReason(site) ?? ''"
+            :aria-expanded="!!site.id && analyticsOpenId === site.id"
             data-testid="mp-site-analytics"
+            @click="toggleAnalytics(site)"
           />
           <UButton
+            v-if="editBlockedReason(site)"
             label="แก้ไขเว็บ"
+            icon="i-lucide-pencil"
             color="neutral"
             variant="outline"
             size="xs"
             disabled
-            :title="MSSG_SOON"
+            :title="editBlockedReason(site) ?? undefined"
+            :data-reason="editBlockedReason(site)"
             data-testid="mp-site-edit"
           />
-          <span class="text-[10px] text-dimmed">{{ MSSG_SOON }}</span>
+          <UButton
+            v-else
+            label="แก้ไขเว็บ"
+            icon="i-lucide-pencil"
+            color="primary"
+            variant="soft"
+            size="xs"
+            :to="editTo(site)"
+            data-testid="mp-site-edit"
+          />
         </div>
+        <UButton
+          v-else-if="site.id"
+          label="แก้ไขเว็บ"
+          icon="i-lucide-arrow-right"
+          trailing
+          color="neutral"
+          variant="ghost"
+          size="xs"
+          :to="editTo(site)"
+          title="เปิดตัวแก้ไขเว็บในพื้นที่ของเจ้าของ"
+          :data-testid="`mp-overview-site-edit-${site.id}`"
+        />
+        <MssgPagesAnalyticsPanel
+          v-if="!readonly && site.id && analyticsOpenId === site.id"
+          :site-id="site.id"
+          :site-name="site.name"
+          @changed="emit('analyticsChanged')"
+          @close="analyticsOpenId = null"
+        />
       </li>
     </ul>
     <p v-else class="px-3 py-3 text-center text-xs text-muted" data-testid="mp-sites-empty">
