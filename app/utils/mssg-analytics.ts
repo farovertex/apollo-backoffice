@@ -33,14 +33,45 @@ export function mssgIsClickAction(action: string): boolean {
   return action.endsWith('.click')
 }
 
+/** the five actions of the real app, in display order (contract §4.7); unknown actions follow */
+export const MSSG_ANALYTICS_ACTIONS = ['page.view', 'link.click', 'messenger.click', 'internal.click', 'menu.click'] as const
+
+/** Thai label of an action as a group heading ("คนเข้าเว็บ" for page views); unknown actions keep the raw name */
+export function mssgAnalyticsGroupLabel(action: string): string {
+  switch (action) {
+    case 'page.view': return 'คนเข้าเว็บ'
+    case 'link.click': return 'คลิกลิงก์'
+    case 'messenger.click': return 'คลิกปุ่มแชท'
+    case 'internal.click': return 'คลิกลิงก์ภายในเว็บ'
+    case 'menu.click': return 'คลิกเมนู'
+    default: return `${mssgIsClickAction(action) ? 'คลิก' : 'การกระทำ'} ${action}`
+  }
+}
+
 /** Thai label of one detail row; unknown actions get a generic label that still shows the raw action name */
 export function mssgAnalyticsActionLabel(item: Pick<MssgAnalyticsItem, 'action' | 'label'>): string {
-  const { action, label } = item
-  if (action === 'page.view') return `เข้าหน้า ${label}`.trim()
-  if (action === 'link.click') return 'คลิกลิงก์'
-  if (action === 'menu.click') return 'คลิกเมนูภายใน'
-  if (/^messengers?\./.test(action) && action.endsWith('.click')) return 'คลิกปุ่มแชท'
-  return `${mssgIsClickAction(action) ? 'คลิก' : 'การกระทำ'} ${action}`
+  if (item.action === 'page.view') return `เข้าหน้า ${item.label}`.trim()
+  return mssgAnalyticsGroupLabel(item.action)
+}
+
+export interface MssgAnalyticsGroup {
+  action: string
+  label: string
+  /** from `current.byAction`, else the sum of the rows */
+  total: number
+  rows: MssgAnalyticsItem[]
+}
+
+/** the detail rows grouped by action: the five known ones in a fixed order, then unknown ones; empty groups omitted */
+export function mssgAnalyticsGroups(data: MssgAnalyticsData): MssgAnalyticsGroup[] {
+  const actions: string[] = [...MSSG_ANALYTICS_ACTIONS]
+  for (const i of data.current.items) if (!actions.includes(i.action)) actions.push(i.action)
+  return actions.flatMap((action) => {
+    const rows = data.current.items.filter(i => i.action === action).sort((a, b) => b.value - a.value)
+    if (!rows.length) return []
+    const total = data.current.byAction.find(x => x.action === action)?.value ?? rows.reduce((n, r) => n + r.value, 0)
+    return [{ action, label: mssgAnalyticsGroupLabel(action), total, rows }]
+  })
 }
 
 /** the rows of "ปุ่มที่ถูกกด": click items, largest first */

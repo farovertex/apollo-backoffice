@@ -482,7 +482,8 @@ export interface MssgAnalyticsView {
   data: MssgAnalyticsData | null
 }
 
-/** `POST /mssg-sites/:id/analytics` body */
+/** `POST /mssg-sites/:id/analytics` body — one press reads every range; the BO sends `{}` (v1.7) */
 export interface MssgAnalyticsBody {
-  range: MssgAnalyticsRange
+  /** compatibility only: validated and ignored by the API */
+  range?: MssgAnalyticsRange
 }
