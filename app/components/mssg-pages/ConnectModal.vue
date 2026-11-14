@@ -461,7 +461,15 @@ const summary = computed(() => props.account)
             <div class="flex flex-col gap-1.5">
               <span class="flex justify-between gap-2 text-sm text-toned">
                 เว็บในบัญชีนี้
-                <span class="text-highlighted" data-testid="mp-modal-summary-quota">{{ mssgQuotaText(summary.quota) }} เว็บ</span>
+                <span class="text-highlighted" data-testid="mp-modal-summary-quota">
+                  <span
+                    v-if="summary.quota && mssgQuotaUnknown(summary.quota)"
+                    class="text-muted"
+                    :title="MSSG_QUOTA_UNKNOWN_TIP"
+                    data-testid="mp-modal-summary-quota-unknown"
+                  >{{ summary.quota.used }} เว็บ · {{ MSSG_QUOTA_UNKNOWN }}</span>
+                  <template v-else>{{ mssgQuotaText(summary.quota) }} เว็บ</template>
+                </span>
               </span>
               <UProgress
                 v-if="summary.quota && summary.quota.limit"

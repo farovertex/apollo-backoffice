@@ -96,6 +96,88 @@ export const MSSG_GLYPH_ICON_UI: Record<string, string> = {
   messenger: 'i-simple-icons-messenger'
 }
 
+/** D20 i: readable label `<ไทย> · <English>` of every icon name (tooltip, `aria-label`, search); the value sent stays the raw name */
+export const MSSG_GLYPH_LABELS: Record<string, string> = {
+  call: 'โทรศัพท์ · Phone',
+  star: 'ดาว · Star',
+  bookmark: 'บุ๊กมาร์ก · Bookmark',
+  gift: 'ของขวัญ · Gift',
+  dollar: 'เงินดอลลาร์ · Dollar',
+  download: 'ดาวน์โหลด · Download',
+  arrow_right: 'ลูกศรขวา · Arrow right',
+  arrow_up: 'ลูกศรขึ้น · Arrow up',
+  checkmark: 'เครื่องหมายถูก · Checkmark',
+  shopping_cart: 'ตะกร้าสินค้า · Shopping cart',
+  help: 'ช่วยเหลือ · Help',
+  globe: 'เว็บไซต์ · Globe',
+  fivehundredpix: '500px',
+  bandsintown: 'Bandsintown',
+  behance: 'Behance',
+  codepen: 'CodePen',
+  dribbble: 'Dribbble',
+  dropbox: 'Dropbox',
+  email: 'อีเมล · Email',
+  facebook: 'เฟซบุ๊ก · Facebook',
+  flickr: 'Flickr',
+  foursquare: 'Foursquare',
+  github: 'GitHub',
+  google_play: 'กูเกิลเพลย์ · Google Play',
+  drive: 'กูเกิลไดรฟ์ · Google Drive',
+  google: 'กูเกิล · Google',
+  instagram: 'อินสตาแกรม · Instagram',
+  itunes: 'ไอทูนส์ · iTunes',
+  linkedin: 'ลิงก์อิน · LinkedIn',
+  mailto: 'ส่งอีเมล · Mailto',
+  medium: 'Medium',
+  meetup: 'Meetup',
+  pinterest: 'พินเทอเรสต์ · Pinterest',
+  reddit: 'เรดดิต · Reddit',
+  rss: 'ฟีด RSS · RSS',
+  sharethis: 'แชร์ · ShareThis',
+  smugmug: 'SmugMug',
+  snapchat: 'สแนปแชต · Snapchat',
+  soundcloud: 'ซาวด์คลาวด์ · SoundCloud',
+  deezer: 'Deezer',
+  spotify: 'สปอทิฟาย · Spotify',
+  squarespace: 'Squarespace',
+  tumblr: 'ทัมเบลอร์ · Tumblr',
+  twitch: 'ทวิตช์ · Twitch',
+  x: 'เอกซ์ (ทวิตเตอร์) · X',
+  vimeo: 'วิเมโอ · Vimeo',
+  vsco: 'VSCO',
+  wechat: 'วีแชต · WeChat',
+  whatsapp: 'วอตส์แอป · WhatsApp',
+  discord: 'ดิสคอร์ด · Discord',
+  slack: 'สแล็ก · Slack',
+  line: 'ไลน์ · LINE',
+  yelp: 'Yelp',
+  youtube: 'ยูทูบ · YouTube',
+  telegram: 'เทเลแกรม · Telegram',
+  tiktok: 'ติ๊กต็อก · TikTok',
+  apps: 'แอป · Apps',
+  untappd: 'Untappd',
+  threads: 'เธรดส์ · Threads',
+  tripadvisor: 'ทริปแอดไวเซอร์ · Tripadvisor',
+  apple: 'แอปเปิล · Apple',
+  podcasts: 'พอดแคสต์ · Podcasts',
+  imdb: 'IMDb',
+  bsky: 'บลูสกาย · Bluesky',
+  viber: 'ไวเบอร์ · Viber',
+  messenger: 'เมสเซนเจอร์ · Messenger'
+}
+
+/** the label of an icon name (falls back to the raw name) */
+export function mssgGlyphLabel(name: string): string {
+  return MSSG_GLYPH_LABELS[name] ?? name
+}
+
+/** search: case-insensitive substring over the Thai/English label and the raw name; empty query matches everything */
+export function mssgGlyphMatches(name: string, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  return name.toLowerCase().includes(q) || mssgGlyphLabel(name).toLowerCase().includes(q)
+}
+
 export const MSSG_GLYPH_TEXT = {
   label: 'ไอคอน (Icon)',
   general: 'ไอคอนทั่วไป',
@@ -105,6 +187,9 @@ export const MSSG_GLYPH_TEXT = {
   emojiApply: 'ใช้อีโมจินี้',
   image: 'รูปไอคอนเอง (Custom image)',
   none: 'ไม่มีไอคอน',
+  search: 'ค้นหาไอคอน',
+  searchPlaceholder: 'ค้นหาไอคอน เช่น โทร, phone',
+  searchEmpty: 'ไม่พบไอคอนที่ค้นหา',
   unknown: 'ไอคอนที่ไม่รู้จัก',
   unknownNote: 'ตั้งไว้บน mssg · Apollo ส่งกลับตามเดิม (เลือกอันอื่นเพื่อเปลี่ยน)',
   change: 'เปลี่ยน'

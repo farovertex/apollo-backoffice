@@ -232,7 +232,16 @@ function isNew(site: MssgSite): boolean {
         :data-used="a.quota?.used ?? ''"
         :data-limit="a.quota ? (a.quota.limit ?? 'null') : ''"
       >
-        <span class="text-xs text-toned">เว็บ {{ mssgQuotaText(a.quota) }}</span>
+        <span class="text-xs text-toned">
+          เว็บ
+          <span
+            v-if="mssgQuotaUnknown(a.quota)"
+            class="text-muted"
+            :title="MSSG_QUOTA_UNKNOWN_TIP"
+            data-testid="mp-quota-unknown"
+          >{{ mssgQuotaText(a.quota) }}</span>
+          <template v-else>{{ mssgQuotaText(a.quota) }}</template>
+        </span>
         <UProgress
           v-if="a.quota && a.quota.limit"
           :model-value="mssgQuotaPct(a.quota)"
