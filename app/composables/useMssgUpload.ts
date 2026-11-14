@@ -3,7 +3,8 @@
  * field (blocks in M2, favicon / OG / page background in M3, product photos in M4).
  *
  * `upload(file)`: client checks first (mime list, ≤ `MSSG_UPLOAD_MAX_BYTES` = 3 MB decoded) → **no request** when a
- * check fails; then `POST /mssg-sites/:id/uploads { filename, mime, data: <base64> }` through `useApi()` → 201
+ * check fails; a JPEG / PNG / WebP above the limit is shrunk in the browser first (D19, `utils/mssg-image-shrink*.ts`,
+ * `shrinking` is true meanwhile, the result carries `shrunk`); a file ≤ the limit is sent byte for byte; then `POST /mssg-sites/:id/uploads { filename, mime, data: <base64> }` through `useApi()` → 201
  * `{ ref: "upload:<id>", previewUrl, … }`. 400 (mime / magic bytes) and 413 (too big, incl. the 4 MiB body limit) →
  * Thai messages. The caller puts `ref` into the draft field.
  *
@@ -12,6 +13,14 @@
  * ref for the page's lifetime; an http(s) URL is used as is; anything else → `null`.
  */
 import type { MssgUploadBody, MssgUploadView } from '#shared/types/mssg-sites'
+import {
+  MSSG_SHRINK_TEXT,
+  mssgShrinkDecision,
+  mssgShrinkFilename,
+  mssgShrinkKind,
+  type MssgShrunk
+} from '~/utils/mssg-image-shrink'
+import { shrinkImageInBrowser } from '~/utils/mssg-image-shrink-browser'
 
 /** contract §3.1 */
 export const MSSG_UPLOAD_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/x-icon', 'image/vnd.microsoft.icon']
@@ -21,7 +30,14 @@ export const MSSG_UPLOAD_ACCEPT = '.png,.jpg,.jpeg,.webp,.gif,.ico,image/png,ima
 
 export const MSSG_UPLOAD_TEXT = {
   type: 'ไฟล์นี้ไม่ใช่รูปที่รองรับ · ใช้ได้เฉพาะ PNG, JPG, WebP, GIF หรือ ICO',
+  /** the server's 413 */
   size: 'ไฟล์ใหญ่เกิน 3 MB · ย่อรูปก่อนแล้วลองใหม่',
+  sizeNoShrink: MSSG_SHRINK_TEXT.sizeNoShrink,
+  tooBig: MSSG_SHRINK_TEXT.tooBig,
+  decodeFailed: MSSG_SHRINK_TEXT.decodeFailed,
+  shrinkFailed: MSSG_SHRINK_TEXT.shrinkFailed,
+  hint: MSSG_SHRINK_TEXT.hint,
+  shrinking: MSSG_SHRINK_TEXT.shrinking,
   badFile: 'ไฟล์นี้ไม่ใช่รูปที่รองรับ หรือไฟล์เสีย (ชนิดไฟล์ไม่ตรงกับเนื้อไฟล์)',
   failed: 'อัปโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง',
   notFound: 'ไม่พบเว็บนี้ อาจถูกลบไปแล้ว',
@@ -44,15 +60,21 @@ export function mssgUploadMime(file: Pick<File, 'type' | 'name'>): string {
   return EXT_MIME[ext] ?? ''
 }
 
-/** client check: `null` when the file may be sent, else the Thai reason (nothing is sent then) */
+/**
+ * client check: `null` when the file may be sent (as is, or after the shrink of D19), else the Thai reason (nothing is
+ * sent then)
+ */
 export function mssgUploadCheck(file: Pick<File, 'type' | 'name' | 'size'>): string | null {
-  if (!MSSG_UPLOAD_MIMES.includes(mssgUploadMime(file))) return MSSG_UPLOAD_TEXT.type
-  if (file.size > MSSG_UPLOAD_MAX_BYTES) return MSSG_UPLOAD_TEXT.size
+  const mime = mssgUploadMime(file)
+  if (!MSSG_UPLOAD_MIMES.includes(mime)) return MSSG_UPLOAD_TEXT.type
   if (file.size === 0) return MSSG_UPLOAD_TEXT.badFile
+  const d = mssgShrinkDecision(mime, file.size)
+  if (d === 'tooBig') return MSSG_UPLOAD_TEXT.tooBig
+  if (d === 'sizeNoShrink') return MSSG_UPLOAD_TEXT.sizeNoShrink
   return null
 }
 
-function toBase64(file: File): Promise<string> {
+function toBase64(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
@@ -64,7 +86,7 @@ function toBase64(file: File): Promise<string> {
   })
 }
 
-export type MssgUploadResult = { ok: true, upload: MssgUploadView } | { ok: false, message: string }
+export type MssgUploadResult = { ok: true, upload: MssgUploadView, shrunk?: MssgShrunk } | { ok: false, message: string }
 
 // ── preview cache (module level: one blob per ref per page lifetime) ───────────────────────────────────────────────
 const srcCache = new Map<string, string>()
@@ -74,24 +96,53 @@ const previewUrls = new Map<string, string>()
 
 export function useMssgUpload(siteId: MaybeRefOrGetter<string>) {
   const api = useApi()
+  /** true while a too-large image is being shrunk (the field shows `กำลังย่อรูป…`) */
+  const shrinking = ref(false)
 
   async function upload(file: File): Promise<MssgUploadResult> {
     const reason = mssgUploadCheck(file)
     if (reason) return { ok: false, message: reason }
     const id = toValue(siteId)
+    // what is really sent: the file itself (≤ the limit) or the shrunk blob
+    let sent: Blob = file
+    let filename = file.name.slice(0, 200)
+    let mime = mssgUploadMime(file)
+    let shrunk: MssgShrunk | undefined
+    const kind = mssgShrinkKind(mime)
+    if (kind && mssgShrinkDecision(mime, file.size) === 'shrink') {
+      shrinking.value = true
+      try {
+        const r = await shrinkImageInBrowser(file, kind)
+        if (!r.ok) return { ok: false, message: MSSG_UPLOAD_TEXT[r.reason] }
+        sent = r.blob
+        mime = r.blob.type
+        filename = mssgShrinkFilename(file.name, mime)
+        shrunk = {
+          fromBytes: file.size,
+          toBytes: r.blob.size,
+          fromWidth: r.fromWidth,
+          fromHeight: r.fromHeight,
+          toWidth: r.toWidth,
+          toHeight: r.toHeight,
+          mime
+        }
+      } finally {
+        shrinking.value = false
+      }
+    }
     let data: string
     try {
-      data = await toBase64(file)
+      data = await toBase64(sent)
     } catch {
       return { ok: false, message: MSSG_UPLOAD_TEXT.badFile }
     }
-    const body: MssgUploadBody = { filename: file.name.slice(0, 200), mime: mssgUploadMime(file), data }
+    const body: MssgUploadBody = { filename, mime, data }
     try {
       const view = await api<MssgUploadView>(`/mssg-sites/${encodeURIComponent(id)}/uploads`, { method: 'POST', body, retry: 0 })
       previewUrls.set(view.ref, view.previewUrl)
       // the bytes are in hand already: show them without a round trip
-      srcCache.set(view.ref, URL.createObjectURL(file))
-      return { ok: true, upload: view }
+      srcCache.set(view.ref, URL.createObjectURL(sent))
+      return shrunk ? { ok: true, upload: view, shrunk } : { ok: true, upload: view }
     } catch (e) {
       const f = mssgFailure(e, MSSG_UPLOAD_TEXT.failed)
       if (f.status === 413) return { ok: false, message: MSSG_UPLOAD_TEXT.size }
@@ -101,7 +152,7 @@ export function useMssgUpload(siteId: MaybeRefOrGetter<string>) {
     }
   }
 
-  return { upload }
+  return { upload, shrinking }
 }
 
 /** an `upload:<id>` ref → its preview path on the API */
