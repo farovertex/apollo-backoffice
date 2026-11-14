@@ -26,7 +26,10 @@ const glyph = defineModel<unknown>()
 const open = ref(false)
 const info = computed(() => mssgGlyphInfo(glyph.value))
 const emoji = ref('')
+const search = ref('')
+const imageBox = ref<HTMLElement | null>(null)
 watch(open, (o) => {
+  if (o) search.value = ''
   if (o) emoji.value = info.value.type === 'emoticon' ? info.value.value : ''
 })
 
@@ -42,7 +45,12 @@ function onEmoji(v: string) {
 const imageUrl = computed<string | null>({
   get: () => (info.value.type === 'image' ? info.value.value : null),
   set: (v) => {
-    if (v) pick({ type: 'image', url: v })
+    // BUG-096: stay open so the shrink note of UploadField stays visible
+    if (v) {
+      pick({ type: 'image', url: v }, false)
+      // the image field is at the bottom of the scroll area: bring it (and its note) into view
+      void nextTick(() => setTimeout(() => imageBox.value?.scrollIntoView({ block: 'nearest' }), 50))
+    }
   }
 })
 
@@ -55,10 +63,13 @@ const triggerLabel = computed(() => {
     default: return ''
   }
 })
-const groups = [
+const allGroups = [
   { id: 'general', label: MSSG_GLYPH_TEXT.general, icons: MSSG_GLYPH_ICONS_GENERAL as readonly string[] },
   { id: 'social', label: MSSG_GLYPH_TEXT.social, icons: MSSG_GLYPH_ICONS_SOCIAL as readonly string[] }
 ]
+const groups = computed(() => allGroups
+  .map(g => ({ ...g, icons: g.icons.filter(n => mssgGlyphMatches(n, search.value)) }))
+  .filter(g => g.icons.length))
 </script>
 
 <template>
@@ -99,88 +110,110 @@ const groups = [
 
     <template #content>
       <div
-        class="flex max-h-[min(30rem,70vh)] flex-col gap-3 overflow-y-auto p-3"
+        class="flex max-h-[min(30rem,70vh,var(--reka-popper-available-height,70vh))] flex-col"
         role="dialog"
         :aria-label="MSSG_GLYPH_TEXT.label"
         data-testid="me-glyph-picker"
       >
-        <p v-if="info.type === 'unknown'" class="text-xs break-words text-muted">
-          {{ MSSG_GLYPH_TEXT.unknown }} ({{ info.value }}) · {{ MSSG_GLYPH_TEXT.unknownNote }}
-        </p>
-
-        <div class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-toned">{{ MSSG_GLYPH_TEXT.emoji }}</span>
-          <div class="flex min-w-0 gap-2">
-            <UInput
-              :model-value="emoji"
-              :maxlength="MSSG_GLYPH_EMOJI_MAX"
-              :placeholder="MSSG_GLYPH_TEXT.emojiPlaceholder"
-              class="min-w-0 flex-1"
-              data-testid="me-glyph-emoji"
-              @update:model-value="onEmoji(String($event))"
-              @keydown.enter.prevent="open = false"
-            />
-            <UButton
-              :label="MSSG_GLYPH_TEXT.emojiApply"
-              size="sm"
-              color="primary"
-              variant="soft"
-              :disabled="!emoji.trim()"
-              data-testid="me-glyph-emoji-apply"
-              @click="open = false"
-            />
-          </div>
-        </div>
-
-        <div
-          v-for="g in groups"
-          :key="g.id"
-          class="flex flex-col gap-1.5"
-          role="group"
-          :aria-label="g.label"
-          :data-testid="`me-glyph-group-${g.id}`"
-        >
-          <span class="text-xs font-medium text-toned">{{ g.label }}</span>
-          <div class="flex flex-wrap gap-1">
-            <UButton
-              v-for="name in g.icons"
-              :key="name"
-              :icon="MSSG_GLYPH_ICON_UI[name]"
-              size="sm"
-              square
-              :color="info.type === 'icon' && info.value === name ? 'primary' : 'neutral'"
-              :variant="info.type === 'icon' && info.value === name ? 'soft' : 'ghost'"
-              :title="name"
-              :aria-label="name"
-              :aria-pressed="info.type === 'icon' && info.value === name"
-              :data-testid="`me-glyph-icon-${name}`"
-              @click="pick({ type: 'icon', icon: name })"
-            />
-          </div>
-        </div>
-
-        <div v-if="rules.allowImage" class="flex flex-col gap-1.5" data-testid="me-glyph-image">
-          <span class="text-xs font-medium text-toned">{{ MSSG_GLYPH_TEXT.image }}</span>
-          <MssgEditorUploadField
-            v-model="imageUrl"
-            :site-id="siteId"
-            :field="`glyph.${scope}`"
-            required
-            :disabled="readOnly"
+        <div class="flex flex-col gap-2 border-b border-default p-3">
+          <UInput
+            v-model="search"
+            icon="i-lucide-search"
+            size="sm"
+            :placeholder="MSSG_GLYPH_TEXT.searchPlaceholder"
+            :aria-label="MSSG_GLYPH_TEXT.search"
+            class="min-w-0"
+            data-testid="me-glyph-search"
+          />
+          <UButton
+            v-if="rules.allowNone"
+            :label="MSSG_GLYPH_TEXT.none"
+            icon="i-lucide-circle-slash"
+            size="sm"
+            :color="info.type === 'none' ? 'primary' : 'neutral'"
+            :variant="info.type === 'none' ? 'soft' : 'outline'"
+            class="self-start"
+            data-testid="me-glyph-none"
+            @click="pick(null)"
           />
         </div>
+        <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+          <p v-if="info.type === 'unknown'" class="text-xs break-words text-muted">
+            {{ MSSG_GLYPH_TEXT.unknown }} ({{ info.value }}) · {{ MSSG_GLYPH_TEXT.unknownNote }}
+          </p>
 
-        <UButton
-          v-if="rules.allowNone"
-          :label="MSSG_GLYPH_TEXT.none"
-          icon="i-lucide-circle-slash"
-          size="sm"
-          :color="info.type === 'none' ? 'primary' : 'neutral'"
-          :variant="info.type === 'none' ? 'soft' : 'outline'"
-          class="self-start"
-          data-testid="me-glyph-none"
-          @click="pick(null)"
-        />
+          <div class="flex flex-col gap-1.5">
+            <span class="text-xs font-medium text-toned">{{ MSSG_GLYPH_TEXT.emoji }}</span>
+            <div class="flex min-w-0 gap-2">
+              <UInput
+                :model-value="emoji"
+                :maxlength="MSSG_GLYPH_EMOJI_MAX"
+                :placeholder="MSSG_GLYPH_TEXT.emojiPlaceholder"
+                class="min-w-0 flex-1"
+                data-testid="me-glyph-emoji"
+                @update:model-value="onEmoji(String($event))"
+                @keydown.enter.prevent="open = false"
+              />
+              <UButton
+                :label="MSSG_GLYPH_TEXT.emojiApply"
+                size="sm"
+                color="primary"
+                variant="soft"
+                :disabled="!emoji.trim()"
+                data-testid="me-glyph-emoji-apply"
+                @click="open = false"
+              />
+            </div>
+          </div>
+
+          <p v-if="!groups.length" class="text-sm text-muted" data-testid="me-glyph-search-empty">
+            {{ MSSG_GLYPH_TEXT.searchEmpty }}
+          </p>
+
+          <div
+            v-for="g in groups"
+            :key="g.id"
+            class="flex flex-col gap-1.5"
+            role="group"
+            :aria-label="g.label"
+            :data-testid="`me-glyph-group-${g.id}`"
+          >
+            <span class="text-xs font-medium text-toned">{{ g.label }}</span>
+            <div class="flex flex-wrap gap-1">
+              <UButton
+                v-for="name in g.icons"
+                :key="name"
+                :icon="MSSG_GLYPH_ICON_UI[name]"
+                size="sm"
+                square
+                :color="info.type === 'icon' && info.value === name ? 'primary' : 'neutral'"
+                :variant="info.type === 'icon' && info.value === name ? 'soft' : 'ghost'"
+                :title="mssgGlyphLabel(name)"
+                :aria-label="mssgGlyphLabel(name)"
+                :data-label="mssgGlyphLabel(name)"
+                :aria-pressed="info.type === 'icon' && info.value === name"
+                :data-testid="`me-glyph-icon-${name}`"
+                @click="pick({ type: 'icon', icon: name })"
+              />
+            </div>
+          </div>
+
+          <div
+            v-if="rules.allowImage"
+            ref="imageBox"
+            class="flex flex-col gap-1.5"
+            data-testid="me-glyph-image"
+          >
+            <span class="text-xs font-medium text-toned">{{ MSSG_GLYPH_TEXT.image }}</span>
+            <MssgEditorUploadField
+              v-model="imageUrl"
+              :site-id="siteId"
+              :field="`glyph.${scope}`"
+              required
+              :disabled="readOnly"
+            />
+          </div>
+        </div>
       </div>
     </template>
   </UPopover>

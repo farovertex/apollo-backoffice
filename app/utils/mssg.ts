@@ -164,10 +164,20 @@ export function mssgJobProgressText(job: (Omit<MssgJobView, 'type'> & { type: st
   return job.step || 'กำลังทำงาน'
 }
 
-/** "เว็บ 2/3" — `∞` when mssg shows no limit, `—` when the quota was never read */
+/** D20 h: `limit: null` = the limit is unknown (never "unlimited") */
+export const MSSG_QUOTA_UNKNOWN = 'ไม่ทราบเพดาน'
+export const MSSG_QUOTA_UNKNOWN_TIP = 'อ่านเพดานเว็บของแพ็กเกจนี้ไม่ได้ · mssg จะตรวจเองตอนสร้างเว็บ'
+
+/** the limit of a read quota is unknown (`limit: null`) */
+export function mssgQuotaUnknown(quota: MssgAccountView['quota']): boolean {
+  return !!quota && quota.limit === null
+}
+
+/** "2/3" · "1 · ไม่ทราบเพดาน" (limit unknown, no `∞`) · `—` when the quota was never read */
 export function mssgQuotaText(quota: MssgAccountView['quota']): string {
   if (!quota) return '—'
-  return `${quota.used}/${quota.limit ?? '∞'}`
+  if (quota.limit === null) return `${quota.used} · ${MSSG_QUOTA_UNKNOWN}`
+  return `${quota.used}/${quota.limit}`
 }
 
 /** 0..100 for the quota bar; 0 when there is no limit */
