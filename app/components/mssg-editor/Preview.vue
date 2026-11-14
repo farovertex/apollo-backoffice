@@ -14,7 +14,7 @@
  * style override (colours, radius, border, width, mode — approximate) with `data-style-mode` / `data-styled` on
  * `me-preview-block`; the menu bar `me-preview-menu` (shown items, when the menu is on); the page font
  * (`data-font`, applied when the browser has it — nothing is loaded) and the preset swatch as background only when the
- * page has no own background colour (`data-color-id`; K16: mssg's real colours may differ).
+ * page has no own background colour (`data-color-id`; v1.11: the preview theme carries the preset's real `#rrggbbaa` colours, used as the page background).
  */
 import type { MssgBlockProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
@@ -31,9 +31,9 @@ const page = computed(() => (props.pageId && props.site?.pages.find(p => p.id ==
 const blocks = computed(() => (page.value?.blocks ?? []).filter(b => b.enabled))
 const ownBg = computed(() => {
   const c = page.value?.theme?.page?.backgroundColor
-  return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : null
+  return typeof c === 'string' && /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(c) ? c : null
 })
-/** v1.6: the preset's display swatch (Apollo's colours) when the page has no background colour of its own */
+/** v1.6: the preset's display swatch (fallback, Apollo's colours) when the page has no background colour of its own */
 const swatch = computed(() => mssgThemeSwatch(page.value?.theme))
 const bg = computed(() => ownBg.value ?? swatch.value?.bg ?? '#FFFFFF')
 const colorId = computed(() => (typeof page.value?.theme?.colorId === 'string' ? page.value.theme.colorId : ''))

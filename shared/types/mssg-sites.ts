@@ -39,9 +39,9 @@ export interface MssgPageFont {
 
 export interface MssgPageTheme {
   styleId?: string | null
-  /** v1.6 — one of the 18 presets of contract §3.4 (Apollo never expands the colours, K16) */
+  /** v1.6 — one of the 18 presets of contract §3.4 (the API writes the expanded colours, v1.11) */
   colorId?: string | null
-  /** v1.6 — `autoTheme` only: the presets of the light / dark mode (⚠K16) */
+  /** v1.6 — `autoTheme` only: the presets of the light / dark mode (K35) */
   light?: string | null
   dark?: string | null
   page?: {

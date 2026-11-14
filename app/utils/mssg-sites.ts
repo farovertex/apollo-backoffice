@@ -94,6 +94,18 @@ export const MSSG_SEO_DESC_MAX = 200
 export const MSSG_TRACKING_MAX = 100
 export const MSSG_EMBED_MAX = 30_000
 export const MSSG_HEX_RE = /^#[0-9A-Fa-f]{6}$/
+/** v1.11: the preview carries a preset's colours as `#rrggbbaa` too — the field shows / accepts both */
+export const MSSG_HEX_DISPLAY_RE = /^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/
+
+/**
+ * The value the API accepts (`^#[0-9A-Fa-f]{6}$`, contract §3.3) for a hex shown in the field: a 6-digit colour as is,
+ * an opaque 8-digit one (`…FF`) without its alpha, anything else (translucent, invalid) `null` = not sent.
+ */
+export function mssgSendableColor(v: string): string | null {
+  if (MSSG_HEX_RE.test(v)) return v.toUpperCase()
+  if (/^#[0-9A-Fa-f]{6}[Ff]{2}$/.test(v)) return v.slice(0, 7).toUpperCase()
+  return null
+}
 
 /** "" is allowed (cleared); otherwise `min`–`max` characters, as mssg */
 function optionalText(label: string, min: number, max: number) {
@@ -117,8 +129,8 @@ export const mssgSeoStepSchema = z.object({
 })
 export type MssgSeoStepForm = z.output<typeof mssgSeoStepSchema>
 
-/** step-3 hex field: a `#RRGGBB` colour, or empty = "ใช้ตามธีม" (null) */
-export const mssgBgColorSchema = z.string().refine(v => v === '' || MSSG_HEX_RE.test(v), 'ใส่สีเป็นรหัส hex เช่น #1A2B3C (6 หลัก)')
+/** step-3 hex field: a `#RRGGBB` (or the preview's `#RRGGBBAA`) colour, or empty = "ใช้ตามธีม" (null) */
+export const mssgBgColorSchema = z.string().refine(v => v === '' || MSSG_HEX_DISPLAY_RE.test(v), 'ใส่สีเป็นรหัส hex เช่น #1A2B3C (6 หลัก)')
 
 export const MSSG_STEP3_TEXT = {
   themes: 'ธีม (Theme presets)',
@@ -126,8 +138,8 @@ export const MSSG_STEP3_TEXT = {
   useTheme: 'ใช้ตามธีม',
   applyAll: 'ใช้กับทุกหน้า',
   applyAllDone: (n: number) => `ใช้หน้าตานี้กับ ${n} หน้าแล้ว`,
-  applyAllHint: 'ใช้ธีม ฟอนต์ สีและรูปพื้นหลังของหน้านี้กับทุกหน้าของเว็บ (ร่างเปลี่ยนทีละหน้า)',
-  presetHint: 'ตัวอย่างสีเป็นค่าประมาณ — สีจริงตาม mssg'
+  themeRule: 'เลือกธีมแล้ว สีของหน้า (พื้นหลัง ปุ่ม ตัวอักษร) จะเปลี่ยนเป็นสีของธีม · สีหรือรูปพื้นหลังที่ตั้งเองในร่างนี้ยังใช้ต่อ',
+  applyAllHint: 'ใช้ธีม ฟอนต์ สีและรูปพื้นหลังของหน้านี้กับทุกหน้าของเว็บ (ร่างเปลี่ยนทีละหน้า)'
 } as const
 
 /** `https://<subdomain>.<apex>/`, or the connected own domain (AC-10) */
