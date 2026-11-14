@@ -3,8 +3,8 @@
  * Pure helpers (explicit imports) for `tests/unit/mssg-reopen.test.ts`.
  *
  * - A preset is sent as `page.update { theme: { colorId } }` only; `autoTheme` also carries `light` / `dark` (two of the
- *   other 17). Apollo never expands preset colours: the swatches below are **Apollo's own display colours** (K16 — the
- *   real look is mssg's).
+ *   other 17). Apollo does not expand preset colours on the client: the API writes them (v1.11, D21) and the preview
+ *   theme carries them; the swatches below are only **display colours** of the tiles.
  * - A font is `{ family, provider }` from the 38 of the contract, or `null` (= mssg default, key removed on apply).
  */
 import type { MssgPageFont, MssgPageTheme } from '../../shared/types/mssg-sites'

@@ -4,8 +4,10 @@
  *
  * - The editable keys of a kind = the keys of the page's `theme.blocks.<kind in lower camel case>` defaults **as read in
  *   `live`** (a page created in the draft: the live home page's), minus `units`. No defaults → nothing to adjust.
- * - Control per key: name `color` or ending in `Color` → colour (`#RRGGBB` / `#RRGGBBAA`); `linkMode` / `messengersMode` →
- *   select; a number default → number 0–1000; other strings → text ≤ 100; booleans → switch.
+ * - Control per key (rule order): `linkMode` / `messengersMode` → select; name `color` or ending in `Color` **and** a
+ *   string / null / undefined default → colour (`#RRGGBB` / `#RRGGBBAA`); a colour-named key whose default is not a string
+ *   (e.g. Link's boolean `contrastedColor`) → **not listed** (BUG-100; a stored value is never touched, the patch only
+ *   carries touched keys); a number default → number 0–1000; booleans → switch (`themeColors`); other strings → text ≤ 100.
  * - The block's override lives in `fields.theme.blocks.<kind>`; a key set to `null` = "ใช้ค่าตามหน้า" (removed by the API).
  *   The form sends only the keys the user touched (`mssgStylePatch`); the draft folds them key by key.
  */
@@ -78,15 +80,19 @@ export function mssgIsColorKey(key: string): boolean {
 /** the controls of the "รูปแบบ" section, in the defaults' key order */
 export function mssgStyleKeys(defaults: Record<string, unknown> | null): MssgStyleKeyDef[] {
   if (!defaults) return []
-  return Object.entries(defaults).map(([key, def]): MssgStyleKeyDef => {
+  const out: MssgStyleKeyDef[] = []
+  for (const [key, def] of Object.entries(defaults)) {
     const label = STYLE_LABEL[key] ?? key
-    if (key === 'linkMode') return { key, control: 'mode', default: def, label, options: MSSG_LINK_MODES }
-    if (key === 'messengersMode') return { key, control: 'mode', default: def, label, options: MSSG_MESSENGERS_MODES }
-    if (mssgIsColorKey(key)) return { key, control: 'color', default: def, label }
-    if (typeof def === 'number') return { key, control: 'number', default: def, label }
-    if (typeof def === 'boolean') return { key, control: 'boolean', default: def, label }
-    return { key, control: 'text', default: def, label }
-  })
+    if (key === 'linkMode') out.push({ key, control: 'mode', default: def, label, options: MSSG_LINK_MODES })
+    else if (key === 'messengersMode') out.push({ key, control: 'mode', default: def, label, options: MSSG_MESSENGERS_MODES })
+    else if (mssgIsColorKey(key)) {
+      // a colour-named key with a non-string default (boolean `contrastedColor`) is not a colour: hidden
+      if (typeof def === 'string' || def === null || def === undefined) out.push({ key, control: 'color', default: def, label })
+    } else if (typeof def === 'number') out.push({ key, control: 'number', default: def, label })
+    else if (typeof def === 'boolean') out.push({ key, control: 'boolean', default: def, label })
+    else out.push({ key, control: 'text', default: def, label })
+  }
+  return out
 }
 
 /** contract §3.4 value rules; `null` = "ใช้ค่าตามหน้า" is always valid. Returns the Thai message or `null`. */

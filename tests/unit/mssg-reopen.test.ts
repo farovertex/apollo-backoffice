@@ -192,6 +192,13 @@ describe('block style (§3.4)', () => {
     expect(mssgStyleValueIssue(by('linkMode'), 'beefy')).not.toBeNull()
     expect(mssgStyleValueIssue(by('linkMode'), null)).toBeNull()
   })
+  it('colour-named keys need a string/null default; booleans stay switches (BUG-100)', () => {
+    const keys = mssgStyleKeys({ backgroundColor: '#FFFFFF', contrastedColor: false, themeColors: true, accentColor: null, linkMode: 'classic' })
+    expect(keys.map(k => `${k.key}:${k.control}`)).toEqual(['backgroundColor:color', 'themeColors:boolean', 'accentColor:color', 'linkMode:mode'])
+    expect(mssgStyleKeys({ contrastedColor: false })).toEqual([])
+    // a stored contrastedColor is not a preview colour
+    expect(mssgPreviewStyle({ theme: { blocks: { link: { contrastedColor: true } } } }, 'Link')).toEqual({ style: {}, mode: null })
+  })
   it('override, patch (create drops null) and key-by-key folding', () => {
     expect(mssgStyleOverride(site().pages[0]!.blocks[0]!.fields, 'Link')).toEqual({ color: '#FF0000' })
     expect(mssgStylePatch('Link', { color: null, width: 50 })).toEqual({ blocks: { link: { color: null, width: 50 } } })

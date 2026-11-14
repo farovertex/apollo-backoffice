@@ -5,8 +5,10 @@
  * (the B2 upload control; "ลบรูป" = `null`), each emitted as `page.update { theme: { page: { … } } }` (folded by the
  * draft). An invalid hex stays in the field with its Thai message and is never sent.
  * v1.6 (B3r, contract §3.4, AC-43, AC-44):
- * - preset tiles = the 18 `colorId` values with Apollo's own display swatches (K16 hint once under the tiles); choosing
- *   one sends `page.update { theme: { colorId } }`, `autoTheme` also `light` / `dark` (two selects of the other 17,
+ * v1.11 (BUG-099): the API writes a preset expanded (colours replace the page's), so the preview theme carries `#rrggbbaa`
+ *   colours; the hex field shows them, the apply-all/edit send only API-valid 6 digits.
+ * - preset tiles = the 18 `colorId` values with Apollo's own display swatches (one rule line under the tiles, v1.11 D21 h); choosing
+ *   one still sends `page.update { theme: { colorId } }` (no `backgroundColor`), `autoTheme` also `light` / `dark` (two selects of the other 17,
  *   defaults `lightTheme` / `darkTheme`);
  * - font select: "ค่าเริ่มต้น" (`null`) + the 38 families grouped google / websafe → `theme.page.font { family, provider }`;
  * - "ใช้กับทุกหน้า" = one `page.update` per page with this page's background colour + image, preset (+ pair) and font.
@@ -16,7 +18,7 @@
  * `me-look-use-theme`, `me-look-bg-label`, `me-upload-Page.backgroundImage(-input|-pick|-remove|-error)`,
  * `me-look-apply-all`, `me-look-apply-all-done`, `me-look-themes` (`data-selected` = colorId), `me-look-theme-<colorId>`
  * (`data-selected`, `data-color-id`), `me-look-auto` / `me-look-auto-light` / `me-look-auto-dark` (native selects),
- * `me-look-preset-hint`, `me-look-theme-error`, `me-look-fonts`, `me-look-font` (native select, value = family or ""),
+ * `me-look-theme-rule`, `me-look-theme-error`, `me-look-fonts`, `me-look-font` (native select, value = family or ""),
  * `me-look-font-default` (button), `me-look-font-error`, `me-look-style` (read-only styleId).
  */
 import type { MssgFieldError } from '~/utils/mssg-sites'
@@ -62,7 +64,7 @@ function fromPage() {
 watch([() => page.value?.id, () => props.resetToken], fromPage, { immediate: true })
 // an upstream change of the colour (apply to all, discard…) that the field does not already show
 watch(bgColor, (c) => {
-  if ((c ?? '') !== hex.value && (hex.value === '' || MSSG_HEX_RE.test(hex.value))) hex.value = c ?? ''
+  if ((c ?? '') !== hex.value && (hex.value === '' || MSSG_HEX_DISPLAY_RE.test(hex.value))) hex.value = c ?? ''
 })
 
 const hexInvalid = computed(() => mssgBgColorSchema.safeParse(hex.value).error?.issues[0]?.message ?? null)
@@ -81,7 +83,7 @@ function themeServerError(...keys: string[]): string | null {
 const themeError = computed(() => themeServerError('theme.colorId', 'theme.light', 'theme.dark'))
 const fontError = computed(() => themeServerError('theme.page.font', 'theme.page.font.family', 'theme.page.font.provider'))
 
-const pickerValue = computed(() => (MSSG_HEX_RE.test(hex.value) ? hex.value : '#FFFFFF'))
+const pickerValue = computed(() => (MSSG_HEX_DISPLAY_RE.test(hex.value) ? hex.value.slice(0, 7) : '#FFFFFF'))
 
 function setColor(value: string | null) {
   const p = page.value
@@ -92,7 +94,7 @@ function onHex(v: string) {
   const t = v.trim()
   hex.value = t
   if (t === '') setColor(null)
-  else if (MSSG_HEX_RE.test(t)) setColor(t.toUpperCase())
+  else if (mssgSendableColor(t)) setColor(mssgSendableColor(t))
 }
 function onPicker(v: string) {
   hex.value = v.toUpperCase()
@@ -115,10 +117,14 @@ watch([() => page.value?.id, () => props.resetToken], () => {
 function applyAll() {
   const p = page.value
   if (!p || props.readOnly || hexInvalid.value) return
-  const color = MSSG_HEX_RE.test(hex.value) ? hex.value.toUpperCase() : null
+  // v1.11: the field may show the preset's 8-digit colour; a translucent one cannot be sent (API: 6 digits) and the
+  // copied preset gives every page that colour anyway, so the key is left out then (never `null`)
+  const color = mssgSendableColor(hex.value)
+  const keepColor = color !== null || hex.value === ''
   // v1.6: preset (+ autoTheme pair) and font travel with the background colour + image
   const theme = mssgApplyAllTheme(p.theme)
-  theme.page = { ...theme.page, backgroundColor: color, backgroundImage: bgImage.value }
+  theme.page = { ...theme.page, ...(keepColor ? { backgroundColor: color } : {}), backgroundImage: bgImage.value }
+  if (!keepColor) delete theme.page.backgroundColor
   for (const target of pages.value) {
     emit('pageUpdate', target.id, { theme: theme as PageFields['theme'] })
   }
@@ -249,8 +255,8 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
           </label>
         </div>
         <span v-if="themeError" class="text-xs text-error" data-testid="me-look-theme-error">{{ themeError }}</span>
-        <p class="text-xs text-muted" data-testid="me-look-preset-hint">
-          {{ MSSG_STEP3_TEXT.presetHint }}
+        <p class="text-xs text-muted" data-testid="me-look-theme-rule">
+          {{ MSSG_STEP3_TEXT.themeRule }}
         </p>
         <span v-if="styleId" class="text-xs break-all text-muted" data-testid="me-look-style">รูปแบบใน mssg: {{ styleId }}</span>
       </section>
@@ -275,7 +281,7 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
               <UInput
                 :model-value="hex"
                 placeholder="#RRGGBB"
-                maxlength="7"
+                maxlength="9"
                 autocomplete="off"
                 spellcheck="false"
                 :disabled="readOnly"
