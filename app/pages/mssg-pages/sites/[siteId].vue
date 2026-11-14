@@ -1028,6 +1028,7 @@ onBeforeRouteLeave(async () => {
                   :errors="step2Errors"
                   :reset-token="draft.resetToken.value"
                   :start-kind="startKind"
+                  :conflicts="view.conflict?.items ?? []"
                   @page-update="draft.updatePage"
                   @block-update="draft.updateBlock"
                   @ops="draft.editOps"

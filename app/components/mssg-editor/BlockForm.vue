@@ -12,15 +12,24 @@
  * Server messages (draft 400, apply `mssgValidation`) arrive in `errors` keyed by field path (`title`, `items.0.title`).
  * v1.6 (B2r): proven shapes (Hat `title/subtitle/logoUrl/bgUrl`, Features `content` + icon glyph, Messengers platform /
  * type pairs, gallery image actions), the actions of §3.4 (`ActionFields`), the "รูปแบบ" section (`BlockStyle`, its
- * touched keys go out as `fields.theme.blocks.<kind>`). Still disabled "เร็ว ๆ นี้" (shape unknown) and sending nothing:
- * Link icon / emoji / custom icon image; "+ เพิ่มลิงก์" adds another Link block (contract v1.4 #2).
+ * touched keys go out as `fields.theme.blocks.<kind>`).
+ * v1.9 (B9, §3.5, AC-59 / AC-60): a Link block edits its links (`fields.items`, 1–30): title, action (`ActionFields`,
+ * prefix `items.<j>.action`) and icon (`GlyphPicker`) per row; "+ เพิ่มลิงก์" adds a row **inside** the block; rows move
+ * up / down and are removed (never the last); each item keeps its `id`, new rows have none; the card `image` is shown
+ * read-only and never sent. Features items pick their icon with the same picker (emoji / icon, no image, required).
+ * Errors / conflicts of a link land on its row (`items.<j>.<leaf>`, `j` = index in the list sent) or on the list (`items`).
  *
  * Test ids: `me-block-form` (`data-kind`, `data-mode`), fields `me-block-field-<path>` + `me-block-field-error-<path>`,
  * uploads `me-upload-<Kind>.<path>`, list rows `me-block-item-<i>` (`data-readonly` for a Messengers platform Apollo cannot
  * edit), `me-block-item-add`, `me-block-item-remove-<i>`, `me-block-link-action`, `me-block-link-page`, `me-block-image-action`,
- * `me-block-field-images.<i>.action.type`, the action inputs of `ActionFields`, `me-block-icon-suggest-<i>-<name>`,
- * `me-block-link-icon-soon`, `me-block-link-add`, the style section of `BlockStyle`, `me-block-new-enabled`,
- * `me-block-new-ok`, `me-block-new-cancel`, `me-block-form-close`.
+ * `me-block-field-images.<i>.action.type`, the action inputs of `ActionFields`, the style section of `BlockStyle`,
+ * `me-block-new-enabled`, `me-block-new-ok`, `me-block-new-cancel`, `me-block-form-close`;
+ * Link (v1.9): `me-block-link-items` (`data-count`), rows `me-block-link-item-<j>` (`data-item-id`), `me-block-field-items.<j>.title`,
+ * `me-block-field-items.<j>.action.type` + the `ActionFields` ids under `items.<j>.action`, `me-glyph-items.<j>` (picker),
+ * `me-block-link-item-up-<j>` / `-down-<j>` / `-remove-<j>`, `me-block-link-item-image-<j>` (read-only card image),
+ * `me-block-link-add`, `me-block-link-limit`, errors `me-block-field-error-items`, `me-block-field-error-items.<j>[.<leaf>]`,
+ * conflicts `me-block-link-conflict` (list) / `me-block-link-item-conflict-<j>`; Features: `me-glyph-items.<i>`,
+ * `me-block-field-error-items.<i>.glyph`.
  */
 import type { MssgPageProjection } from '#shared/types/mssg-sites'
 
@@ -37,16 +46,15 @@ const props = withDefaults(defineProps<{
   errors?: Record<string, string>
   /** v1.6: the page's style defaults of this kind (`mssgStyleDefaults`), `null` = nothing to adjust */
   styleDefaults?: Record<string, unknown> | null
-  /** v1.6: icon names already used on the site's Features blocks (suggestions) */
-  icons?: string[]
-}>(), { readOnly: false, errors: () => ({}), styleDefaults: null, icons: () => [] })
+  /** v1.9: conflict items of this block by field path (`items`, `items.1.title` …) */
+  conflicts?: Record<string, { kind: 'changed' | 'gone' }>
+}>(), { readOnly: false, errors: () => ({}), styleDefaults: null, conflicts: () => ({}) })
 
 const emit = defineEmits<{
   change: [fields: Record<string, unknown>]
   submit: [payload: { fields: Record<string, unknown>, enabled: boolean }]
   cancel: []
   close: []
-  addLink: []
 }>()
 
 const def = computed(() => MSSG_BLOCK_KINDS.find(k => k.kind === props.kind))
@@ -54,10 +62,7 @@ const def = computed(() => MSSG_BLOCK_KINDS.find(k => k.kind === props.kind))
 const schema = computed(() => mssgBlockSchema(props.kind, { pages: props.pages }))
 
 function newDefaults(): Record<string, unknown> {
-  const d = mssgBlockDefaults(props.kind)
-  // Features: a new item starts with the first icon the site already uses (⚠K20: names are not otherwise known)
-  if (props.kind === 'Features' && props.icons[0]) d.items = [{ title: '', content: '', glyph: { type: 'icon', icon: props.icons[0] } }]
-  return d
+  return mssgBlockDefaults(props.kind)
 }
 const original = props.mode === 'new' ? newDefaults() : JSON.parse(JSON.stringify(props.fields ?? {})) as Record<string, unknown>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the state's shape depends on the kind (zod checks it)
@@ -128,6 +133,7 @@ function addRow() {
   if (!key) return
   const first = (newDefaults()[key] as unknown[] | undefined)?.[0] ?? {}
   const row = JSON.parse(JSON.stringify(first)) as Record<string, unknown>
+  row._key = mssgRowKey()
   if (props.kind === 'SubscriptionForm') Object.assign(row, { type: 'text', label: '', required: false })
   state[key] = [...rows.value, row]
 }
@@ -157,15 +163,50 @@ function setPlatform(row: any, platform: string) {
   row.type = mssgMessengerTypeFor(platform, row.type)
 }
 
-// ── Features icon (glyph `{ type: "icon", icon }`, ⚠K20) ────────────────────────────────────────────────────────────
+// ── Link items (v1.9 §3.5) ──────────────────────────────────────────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows keep the keys read from mssg
-function iconOf(row: any): string {
-  return row.glyph?.type === 'icon' && typeof row.glyph.icon === 'string' ? row.glyph.icon : ''
+const linkRows = computed<any[]>(() => (props.kind === 'Link' && Array.isArray(state.items) ? state.items : []))
+const linkFull = computed(() => !mssgLinkCanAdd(linkRows.value.length))
+function addLink() {
+  if (props.readOnly || linkFull.value) return
+  state.items = [...linkRows.value, { _key: mssgRowKey(), title: '', action: { type: 'url', url: '' }, glyph: null, _glyph0: null }]
 }
+function moveLink(j: number, dir: -1 | 1) {
+  if (!props.readOnly) state.items = mssgRowsMove(linkRows.value, j, dir)
+}
+function removeLink(j: number) {
+  if (!props.readOnly) state.items = mssgRowsRemove(linkRows.value, j)
+}
+/** the card picture of an item (`image.url`, read-only, ⚠K29) */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows keep the keys read from mssg
-function setIcon(row: any, icon: string) {
-  // an emoji / other glyph read from mssg becomes an icon glyph as soon as a name is typed
-  row.glyph = row.glyph?.type === 'icon' ? { ...row.glyph, icon: icon.trim() } : { type: 'icon', icon: icon.trim() }
+function cardImage(row: any): string | null {
+  const url = row?.image?.url
+  return typeof url === 'string' && url ? url : null
+}
+/** server messages of row `j` that have no input of their own (`items.<j>`, `items.<j>.id`, `items.<j>.image` …) */
+function rowOtherErrors(j: number): [string, string][] {
+  const p = `items.${j}`
+  return Object.entries(props.errors ?? {}).filter(([k]) => {
+    if (k !== p && !k.startsWith(`${p}.`)) return false
+    const rest = k.slice(p.length + 1)
+    return !(rest === 'title' || rest === 'glyph' || rest.startsWith('glyph.') || rest.startsWith('action.'))
+  })
+}
+/** server messages below a glyph (`items.<j>.glyph.type` …) — shown beside the picker with their own path */
+function glyphSubErrors(j: number): [string, string][] {
+  return Object.entries(props.errors ?? {}).filter(([k]) => k.startsWith(`items.${j}.glyph.`))
+}
+function conflictText(c: { kind: 'changed' | 'gone' } | undefined, list = false): string {
+  if (!c) return ''
+  if (c.kind === 'gone') return 'ลิงก์นี้ถูกลบบน mssg ระหว่างที่คุณแก้ร่าง · ดูกล่องค่าที่เปลี่ยนด้านบน'
+  return list
+    ? 'รายการลิงก์บน mssg เปลี่ยนระหว่างที่คุณแก้ร่าง · ดูกล่องค่าที่เปลี่ยนด้านบน'
+    : 'ลิงก์นี้ถูกแก้บน mssg ระหว่างที่คุณแก้ร่าง · ดูกล่องค่าที่เปลี่ยนด้านบน'
+}
+function rowConflict(j: number) {
+  const p = `items.${j}`
+  const hit = Object.entries(props.conflicts ?? {}).find(([k]) => k === p || k.startsWith(`${p}.`))
+  return hit?.[1]
 }
 
 // ── style (BlockStyle): server messages of `theme.blocks.<kind>.<key>` by key ──────────────────────────────────────
@@ -261,44 +302,148 @@ const T = 'me-block-field'
       />
     </template>
 
-    <!-- Link -->
+    <!-- Link (v1.9: the block's links) -->
     <template v-else-if="kind === 'Link'">
-      <MssgEditorFormText
-        v-model="state.title"
-        name="title"
-        label="ชื่อปุ่ม (Link title)"
-        placeholder="Enter title"
-        :testid="T"
-        :maxlength="250"
-        required
-        :error="err('title')"
-      />
-      <div class="flex min-w-0 flex-col gap-1.5" data-testid="me-block-link-icon-soon" data-soon="true">
-        <span class="text-sm font-medium text-default">ไอคอน (Icon)</span>
-        <div role="group" aria-label="ประเภทไอคอน" class="flex flex-wrap gap-1.5">
-          <UButton
-            v-for="t in ['ไม่มี', 'Icons', 'Emoji', 'Custom image']"
-            :key="t"
-            :label="t"
-            color="neutral"
-            variant="outline"
-            size="xs"
-            disabled
-            :title="MSSG_SOON"
+      <div class="flex min-w-0 flex-col gap-2" data-testid="me-block-link-items" :data-count="linkRows.length">
+        <UFormField name="items" :error="err('items') || undefined">
+          <template #error="{ error: e }">
+            <span v-if="e" data-testid="me-block-field-error-items">{{ e }}</span>
+          </template>
+        </UFormField>
+        <p
+          v-if="conflicts.items"
+          class="rounded-md bg-warning/10 px-2 py-1 text-xs break-words text-warning"
+          data-testid="me-block-link-conflict"
+        >
+          {{ conflictText(conflicts.items, true) }}
+        </p>
+        <div
+          v-for="(row, j) in linkRows"
+          :key="row._key ?? j"
+          class="flex min-w-0 flex-col gap-2.5 rounded-md border bg-elevated/40 p-2.5"
+          :class="rowConflict(j) ? 'border-warning/60' : 'border-default'"
+          :data-testid="`me-block-link-item-${j}`"
+          :data-item-id="row.id ?? ''"
+        >
+          <div class="flex min-w-0 items-center justify-between gap-2">
+            <span class="text-xs font-medium text-muted">ลิงก์ที่ {{ j + 1 }}</span>
+            <div class="flex shrink-0 items-center gap-0.5">
+              <UButton
+                icon="i-lucide-arrow-up"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="เลื่อนลิงก์ขึ้น"
+                :disabled="readOnly || j === 0"
+                :data-testid="`me-block-link-item-up-${j}`"
+                @click="moveLink(j, -1)"
+              />
+              <UButton
+                icon="i-lucide-arrow-down"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="เลื่อนลิงก์ลง"
+                :disabled="readOnly || j === linkRows.length - 1"
+                :data-testid="`me-block-link-item-down-${j}`"
+                @click="moveLink(j, 1)"
+              />
+              <UButton
+                icon="i-lucide-trash-2"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="ลบลิงก์"
+                :disabled="readOnly || linkRows.length <= 1"
+                :title="linkRows.length <= 1 ? 'block ลิงก์ต้องมีอย่างน้อย 1 ลิงก์' : undefined"
+                :data-testid="`me-block-link-item-remove-${j}`"
+                @click="removeLink(j)"
+              />
+            </div>
+          </div>
+          <p
+            v-if="rowConflict(j)"
+            class="rounded-md bg-warning/10 px-2 py-1 text-xs break-words text-warning"
+            :data-testid="`me-block-link-item-conflict-${j}`"
+          >
+            {{ conflictText(rowConflict(j)) }}
+          </p>
+          <span
+            v-for="[k, m] in rowOtherErrors(j)"
+            :key="k"
+            class="text-xs break-words text-error"
+            :data-testid="`me-block-field-error-${k}`"
+          >{{ m }}</span>
+          <div class="flex min-w-0 flex-col gap-1.5">
+            <span class="text-sm font-medium text-default">{{ MSSG_GLYPH_TEXT.label }}</span>
+            <UFormField :name="`items.${j}.glyph`" :error="err(`items.${j}.glyph`) || undefined">
+              <MssgEditorGlyphPicker
+                v-model="row.glyph"
+                :scope="`items.${j}`"
+                :site-id="siteId"
+                :rules="MSSG_GLYPH_LINK"
+                :read-only="readOnly"
+              />
+              <template #error="{ error: e }">
+                <span v-if="e" :data-testid="`me-block-field-error-items.${j}.glyph`">{{ e }}</span>
+              </template>
+            </UFormField>
+            <span
+              v-for="[k, m] in glyphSubErrors(j)"
+              :key="k"
+              class="text-xs break-words text-error"
+              :data-testid="`me-block-field-error-${k}`"
+            >{{ m }}</span>
+          </div>
+          <MssgEditorFormText
+            v-model="row.title"
+            :name="`items.${j}.title`"
+            label="ชื่อลิงก์ (Link title)"
+            placeholder="Enter title"
+            :testid="T"
+            :maxlength="250"
+            required
+            :error="err(`items.${j}.title`)"
           />
+          <MssgEditorActionFields
+            v-model="row.action"
+            :prefix="`items.${j}.action`"
+            :type-testid="`me-block-field-items.${j}.action.type`"
+            :pages="pages"
+            :read-only="readOnly"
+            :errors="actionErrors(`items.${j}.action`)"
+          />
+          <span v-if="err(`items.${j}.action`)" class="text-xs text-error" :data-testid="`me-block-field-error-items.${j}.action`">{{ err(`items.${j}.action`) }}</span>
+          <div
+            v-if="cardImage(row)"
+            class="flex min-w-0 items-center gap-2 text-xs text-muted"
+            :data-testid="`me-block-link-item-image-${j}`"
+          >
+            <MssgEditorImage
+              :site-id="siteId"
+              :value="cardImage(row)"
+              alt="รูปการ์ด"
+              class="size-10 shrink-0 rounded border border-default"
+            />
+            <span class="min-w-0 break-words">รูปการ์ดจาก mssg · แก้ที่ mssg</span>
+          </div>
         </div>
-        <span class="text-xs text-muted">เลือกไอคอน emoji หรือรูปไอคอนเอง · {{ MSSG_SOON }}</span>
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <UButton
+            label="+ เพิ่มลิงก์ (Add one more link)"
+            color="primary"
+            variant="soft"
+            size="sm"
+            :disabled="readOnly || linkFull"
+            :title="linkFull ? `ลิงก์ใน block เดียวได้ไม่เกิน ${MSSG_LINK_ITEMS_MAX} ลิงก์` : undefined"
+            data-testid="me-block-link-add"
+            @click="addLink"
+          />
+          <span v-if="linkFull" class="text-xs text-muted" data-testid="me-block-link-limit">
+            ครบ {{ MSSG_LINK_ITEMS_MAX }} ลิงก์แล้ว · เพิ่ม block ลิงก์ใหม่ถ้าต้องการมากกว่านี้
+          </span>
+        </div>
       </div>
-      <MssgEditorActionFields
-        v-model="state.action"
-        prefix="action"
-        type-testid="me-block-link-action"
-        page-testid="me-block-link-page"
-        :pages="pages"
-        :read-only="readOnly"
-        :errors="actionErrors('action')"
-      />
-      <span v-if="err('action')" class="text-xs text-error" data-testid="me-block-field-error-action">{{ err('action') }}</span>
     </template>
 
     <!-- TextRich -->
@@ -432,7 +577,7 @@ const T = 'me-block-field'
       </UFormField>
       <div
         v-for="(row, i) in rows"
-        :key="i"
+        :key="row._key ?? i"
         class="flex min-w-0 flex-col gap-2 rounded-md border border-default bg-elevated/40 p-2.5"
         :data-testid="`me-block-item-${i}`"
       >
@@ -507,40 +652,25 @@ const T = 'me-block-field'
         </template>
         <template v-else-if="kind === 'Features'">
           <div class="flex min-w-0 flex-col gap-1.5">
-            <MssgEditorFormText
-              :model-value="iconOf(row)"
-              :name="`items.${i}.glyph.icon`"
-              label="ไอคอน (Icon)"
-              placeholder="ชื่อไอคอน เช่น star"
-              description="ชื่อไอคอนของ mssg (a-z ตัวเล็ก ตัวเลข _ -) · ไม่รองรับ emoji"
-              :testid="T"
-              :maxlength="64"
-              required
-              :error="err(`items.${i}.glyph.icon`) || err(`items.${i}.glyph`)"
-              @update:model-value="setIcon(row, $event)"
-            />
-            <span v-if="row.glyph && row.glyph.type !== 'icon'" class="text-xs break-words text-muted" :data-testid="`me-block-glyph-kept-${i}`">
-              ตอนนี้เป็น {{ row.glyph.type }} {{ row.glyph.value ?? '' }} จาก mssg · ใส่ชื่อไอคอนเพื่อเปลี่ยน (ไม่ใส่ = คงค่าเดิม)
-            </span>
-            <div
-              v-if="icons.length"
-              class="flex flex-wrap items-center gap-1"
-              role="group"
-              aria-label="ไอคอนที่ใช้ในเว็บนี้"
-            >
-              <span class="text-[11px] text-dimmed">ที่ใช้ในเว็บนี้:</span>
-              <UButton
-                v-for="ic in icons.slice(0, 12)"
-                :key="ic"
-                :label="ic"
-                size="xs"
-                :color="iconOf(row) === ic ? 'primary' : 'neutral'"
-                :variant="iconOf(row) === ic ? 'subtle' : 'outline'"
-                :disabled="readOnly"
-                :data-testid="`me-block-icon-suggest-${i}-${ic}`"
-                @click="setIcon(row, ic)"
+            <span class="text-sm font-medium text-default">{{ MSSG_GLYPH_TEXT.label }} <span class="text-error">*</span></span>
+            <UFormField :name="`items.${i}.glyph`" :error="err(`items.${i}.glyph`) || undefined">
+              <MssgEditorGlyphPicker
+                v-model="row.glyph"
+                :scope="`items.${i}`"
+                :site-id="siteId"
+                :rules="MSSG_GLYPH_FEATURES"
+                :read-only="readOnly"
               />
-            </div>
+              <template #error="{ error: e }">
+                <span v-if="e" :data-testid="`me-block-field-error-items.${i}.glyph`">{{ e }}</span>
+              </template>
+            </UFormField>
+            <span
+              v-for="[k, m] in glyphSubErrors(i)"
+              :key="k"
+              class="text-xs break-words text-error"
+              :data-testid="`me-block-field-error-${k}`"
+            >{{ m }}</span>
           </div>
           <MssgEditorFormText
             v-model="row.title"
@@ -688,19 +818,6 @@ const T = 'me-block-field'
         />
       </template>
     </div>
-
-    <UButton
-      v-if="kind === 'Link' && mode === 'edit'"
-      label="+ เพิ่มลิงก์ (Add one more link)"
-      color="primary"
-      variant="outline"
-      size="sm"
-      class="self-start"
-      :disabled="readOnly"
-      title="เพิ่ม block ลิงก์ใหม่ต่อจาก block นี้"
-      data-testid="me-block-link-add"
-      @click="emit('addLink')"
-    />
 
     <!-- v1.6 per-block style override -->
     <MssgEditorBlockStyle

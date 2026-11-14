@@ -12,10 +12,8 @@ import {
   mssgActionOut,
   mssgAnchorBlocks,
   mssgDefaultAction,
-  mssgGlyphIssue,
   mssgMessengerIssue,
-  mssgMessengerTypeFor,
-  mssgSiteIcons
+  mssgMessengerTypeFor
 } from '../../app/utils/mssg-actions'
 import {
   mssgApplyOps,
@@ -116,10 +114,10 @@ describe('actions (§3.4)', () => {
   })
   it('block schemas use the actions with the draft context', () => {
     const link = mssgBlockSchema('Link', ctx())!
-    expect(link.safeParse({ title: 'Go', action: { type: 'anchor', anchor: { page: 'p1', block: 'b1' } } }).success).toBe(true)
-    const bad = link.safeParse({ title: 'Go', action: { type: 'anchor', anchor: { page: 'p2', block: 'b1' } } })
+    expect(link.safeParse({ items: [{ title: 'Go', action: { type: 'anchor', anchor: { page: 'p1', block: 'b1' } }, glyph: null }] }).success).toBe(true)
+    const bad = link.safeParse({ items: [{ title: 'Go', action: { type: 'anchor', anchor: { page: 'p2', block: 'b1' } }, glyph: null }] })
     expect(bad.success).toBe(false)
-    expect(bad.error!.issues[0]!.path).toEqual(['action', 'anchor', 'block'])
+    expect(bad.error!.issues[0]!.path).toEqual(['items', 0, 'action', 'anchor', 'block'])
     const gal = mssgBlockSchema('ImageGallery', ctx())!.safeParse({ images: [{ url: 'upload:0123456789abcdef01234567', action: { type: 'sms', url: 'x' } }], autoplay: 0 })
     expect(gal.error!.issues[0]!.path).toEqual(['images', 0, 'action', 'url'])
   })
@@ -136,15 +134,22 @@ describe('proven shapes (§3.3 v1.6)', () => {
     expect(mssgCreateFields('Hat', fields)).toEqual({ title: 'Shop', subtitle: '', logoUrl: 'upload:0123456789abcdef01234567' })
     expect(mssgBlockSchema('Hat')!.safeParse({ ...form, bgUrl: 'nope' }).success).toBe(false)
   })
-  it('Features: content + icon glyph (no emoji); an emoji read from mssg is kept', () => {
+  it('Features (v1.9): emoji or one of the 67 icons, required; an unknown glyph read from mssg is kept', () => {
     const s = mssgBlockSchema('Features')!
     expect(s.safeParse({ items: [{ title: 'A', content: 'x', glyph: { type: 'icon', icon: 'star' } }] }).success).toBe(true)
-    const bad = s.safeParse({ items: [{ title: 'A', content: 'x', glyph: { type: 'icon', icon: '⭐' } }] })
-    expect(bad.error!.issues[0]!.path).toEqual(['items', 0, 'glyph', 'icon'])
-    expect(s.safeParse({ items: [{ title: 'A', content: '', glyph: { type: 'emoji', value: '⭐' } }] }).success).toBe(true)
-    expect(mssgGlyphIssue({ type: 'icon', icon: '' })).not.toBeNull()
-    expect(mssgBlockDefaults('Features')).toEqual({ items: [{ title: '', content: '', glyph: { type: 'icon', icon: '' } }] })
-    expect(mssgSiteIcons([site()])).toEqual(['heart', 'star'])
+    expect(s.safeParse({ items: [{ title: 'A', content: 'x', glyph: { type: 'emoticon', text: '⭐' } }] }).success).toBe(true)
+    const bad = s.safeParse({ items: [{ title: 'A', content: 'x', glyph: { type: 'icon', icon: 'heart' } }] })
+    expect(bad.error!.issues[0]!.path).toEqual(['items', 0, 'glyph'])
+    expect(s.safeParse({ items: [{ title: 'A', content: 'x', glyph: null }] }).success).toBe(false)
+    expect(s.safeParse({ items: [{ title: 'A', content: 'x', glyph: { type: 'image', url: 'https://x.y/a.png' } }] }).success).toBe(false)
+    // read from mssg (form rows carry the glyph read as `_glyph0`): unknown type / name round-trip
+    const form = mssgBlockToForm('Features', { items: [{ title: 'B', content: '', glyph: { type: 'emoji', value: '⭐' } }, { title: 'C', content: '', glyph: { type: 'icon', icon: 'heart' } }] })
+    expect(s.safeParse(form).success).toBe(true)
+    expect(mssgFormToBlock('Features', form, {}).items).toEqual([
+      { title: 'B', content: '', glyph: { type: 'emoji', value: '⭐' } },
+      { title: 'C', content: '', glyph: { type: 'icon', icon: 'heart' } }
+    ])
+    expect(mssgBlockDefaults('Features')).toEqual({ items: [{ title: '', content: '', glyph: { type: 'emoticon', text: '⭐' } }] })
   })
   it('Messengers: platform → type pairs; unknown platforms read-only; redirectUrl never on create', () => {
     expect(mssgMessengerIssue({ platform: 'telegram', type: 'secret' })).toBeNull()

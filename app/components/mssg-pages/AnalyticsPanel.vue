@@ -4,9 +4,9 @@
  * row of the account card.
  *
  * Opening it and switching the range only READ the stored answer (`GET /mssg-sites/:id/analytics?range=`); a read of
- * mssg happens only when the user presses "ดึงสถิติล่าสุด" (`POST …/analytics { range }` → 202 site view, job
- * `mssgAnalytics`). The job is followed with `GET /mssg-sites/:id` every 2 s (`useMssgPoll`); on `done` the stored answer
- * of the range is read again. A failed read keeps the numbers on screen and shows the Thai text of the job's error code.
+ * mssg happens only when the user presses "ดึงสถิติล่าสุด" (`POST …/analytics {}` = every range (v1.7, AC-51) → 202 site view, job
+ * `mssgAnalytics`). The job is followed with `GET /mssg-sites/:id` every 2 s (`useMssgPoll`); on `done` the stored answers
+ * of all three ranges are read again. A failed read keeps the numbers on screen and shows the Thai text of the job's error code.
  * Every request uses `useApi()` with `retry: 0` (a retry would queue a second job). `data: null` → the empty text.
  */
 import type { MssgAnalyticsBody, MssgAnalyticsRange, MssgAnalyticsView, MssgSiteView } from '#shared/types/mssg-sites'
@@ -31,35 +31,43 @@ const loadError = ref('')
 const requestError = ref('')
 const requesting = ref(false)
 const showDetail = ref(false)
-/** range whose job is open (the button is disabled meanwhile) */
-const runningRange = ref<MssgAnalyticsRange | null>(null)
+/** a read job of this site is open (one press reads every range; the button is disabled meanwhile) */
+const running = ref(false)
 const runningJob = ref<MssgSiteView['job']>(null)
 
 const data = computed(() => views.value[range.value]?.data ?? null)
-const rangeInfo = computed(() => mssgAnalyticsRange(range.value))
-const running = computed(() => runningRange.value !== null)
+/** AC-62: "now" at render time (re-evaluated every minute), so a unit that ends while the panel is open turns "ended" */
+const now = useNow({ interval: 60_000 })
+const unitRunning = computed(() => data.value ? mssgAnalyticsRunning(data.value, now.value) : false)
+const prevLabel = computed(() => data.value ? mssgAnalyticsPreviousLabel(range.value, data.value, now.value) : '')
+const dates = computed(() => data.value ? mssgAnalyticsDatesText(range.value, data.value) : null)
+const periodName = computed(() => mssgAnalyticsRange(range.value).period)
+const readTime = computed(() => data.value ? (formatDateTime(data.value.readAt).split(' ')[1] ?? '') : '')
+const unitNote = computed(() => unitRunning.value
+  ? `${periodName.value}ยังไม่จบ · นับถึงเวลาที่ดึง ${readTime.value}`
+  : `ช่วงนี้จบแล้ว · ตัวเลขตามที่ดึงเมื่อ ${data.value ? formatDateTime(data.value.readAt) : ''}`)
 
 const visitsDelta = computed(() => data.value
-  ? mssgDelta(data.value.current.visits, data.value.previous.visits, rangeInfo.value.previous, 'ครั้ง', { withPct: true })
+  ? mssgDelta(data.value.current.visits, data.value.previous.visits, prevLabel.value, 'ครั้ง', { withPct: true })
   : null)
 const clicksDelta = computed(() => data.value
-  ? mssgDelta(data.value.current.clicks, data.value.previous.clicks, rangeInfo.value.previous, 'ครั้ง', { withPct: true })
+  ? mssgDelta(data.value.current.clicks, data.value.previous.clicks, prevLabel.value, 'ครั้ง', { withPct: true })
   : null)
 const rateDelta = computed(() => data.value
-  ? mssgDelta(mssgPercent(data.value.current.clickRate), mssgPercent(data.value.previous.clickRate), rangeInfo.value.previous, 'จุด', { digits: 1 })
+  ? mssgDelta(mssgPercent(data.value.current.clickRate), mssgPercent(data.value.previous.clickRate), prevLabel.value, 'จุด', { digits: 1 })
   : null)
 const buttons = computed(() => data.value ? mssgAnalyticsButtons(data.value) : [])
 const maxButton = computed(() => Math.max(1, ...buttons.value.map(b => b.value)))
-const detailRows = computed(() => data.value ? [...data.value.current.items].sort((a, b) => b.value - a.value) : [])
+const groups = computed(() => data.value ? mssgAnalyticsGroups(data.value) : [])
 
-async function load(r: MssgAnalyticsRange, opts: { quiet?: boolean } = {}) {
+async function load(r: MssgAnalyticsRange, opts: { quiet?: boolean, silent?: boolean } = {}) {
   if (!opts.quiet) loading.value = true
-  loadError.value = ''
+  if (!opts.silent) loadError.value = ''
   try {
     const v = await api<MssgAnalyticsView>(`/mssg-sites/${encodeURIComponent(props.siteId)}/analytics`, { query: { range: r }, retry: 0 })
     views.value = { ...views.value, [r]: v }
   } catch {
-    if (!views.value[r]) loadError.value = MSSG_ANALYTICS_TEXT.loadFailed
+    if (!views.value[r] && !opts.silent && r === range.value) loadError.value = MSSG_ANALYTICS_TEXT.loadFailed
   } finally {
     loading.value = false
   }
@@ -78,24 +86,28 @@ const poll = useMssgPoll<MssgSiteView>({
   },
   needsPoll: v => mssgJobIsOpen(v.job),
   onEnd: (v) => {
-    const r = runningRange.value
-    runningRange.value = null
+    const was = running.value
+    running.value = false
     runningJob.value = null
     if (v.job?.type === 'mssgAnalytics' && v.job.status === 'failed') {
+      // every range keeps the numbers it had
       requestError.value = mssgErrorText(v.lastError?.code)
-    } else if (r) {
+    } else if (was) {
       requestError.value = ''
+      // one job stored all three ranges: read them again, the shown one first
+      const others = MSSG_ANALYTICS_RANGES.map(x => x.value).filter(x => x !== range.value)
+      void load(range.value, { quiet: true })
+      for (const o of others) void load(o, { quiet: true, silent: true })
     }
-    if (r) void load(r, { quiet: true })
     emit('changed')
   },
   onGone: () => {
-    runningRange.value = null
+    running.value = false
     runningJob.value = null
     requestError.value = 'ไม่พบเว็บนี้แล้ว'
   },
   onTimeout: () => {
-    runningRange.value = null
+    running.value = false
     runningJob.value = null
     requestError.value = MSSG_POLL_TIMEOUT_TEXT
   }
@@ -105,14 +117,13 @@ async function refresh() {
   if (requesting.value || running.value) return
   requesting.value = true
   requestError.value = ''
-  const r = range.value
   try {
     const v = await api<MssgSiteView>(`/mssg-sites/${encodeURIComponent(props.siteId)}/analytics`, {
       method: 'POST',
-      body: { range: r } satisfies MssgAnalyticsBody,
+      body: {} satisfies MssgAnalyticsBody,
       retry: 0
     })
-    runningRange.value = r
+    running.value = true
     runningJob.value = v.job
     poll.follow(props.siteId)
     emit('changed')
@@ -179,13 +190,10 @@ onMounted(() => load(range.value))
 
     <template v-if="data">
       <p class="text-sm break-words text-toned" data-testid="an-summary">
-        {{ mssgAnalyticsSummary(range, data) }}
+        {{ mssgAnalyticsSummary(range, data, now) }}
       </p>
       <p class="text-xs text-muted" data-testid="an-dates">
-        {{ mssgAnalyticsDate(data.from) }}<template v-if="data.from !== data.to">
-          – {{ mssgAnalyticsDate(data.to) }}
-        </template>
-        <span class="text-dimmed"> · เทียบกับ{{ rangeInfo.previous }}</span>
+        {{ dates!.current }}<span class="text-dimmed"> · {{ dates!.previous }}</span>
       </p>
 
       <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -220,6 +228,13 @@ onMounted(() => load(range.value))
           >{{ rateDelta!.text }}</span>
         </div>
       </div>
+
+      <p
+        class="text-xs text-muted"
+        :data-testid="unitRunning ? 'an-running' : 'an-ended'"
+      >
+        {{ unitNote }}
+      </p>
 
       <div class="flex flex-col gap-1.5" data-testid="an-buttons">
         <h5 class="text-xs font-semibold text-highlighted">
@@ -259,23 +274,37 @@ onMounted(() => load(range.value))
           data-testid="an-detail-toggle"
           @click="showDetail = !showDetail"
         />
-        <ul v-if="showDetail" class="flex flex-col divide-y divide-default rounded-md border border-default" data-testid="an-detail">
-          <li v-if="!detailRows.length" class="px-2.5 py-2 text-xs text-muted">
+        <div v-if="showDetail" class="flex flex-col gap-2" data-testid="an-detail">
+          <p v-if="!groups.length" class="rounded-md border border-default px-2.5 py-2 text-xs text-muted">
             ไม่มีรายการ
-          </li>
-          <li
-            v-for="row in detailRows"
-            :key="`${row.action}-${row.key}`"
-            class="flex items-baseline justify-between gap-3 px-2.5 py-1.5 text-xs"
-            data-testid="an-detail-row"
-            :data-action="row.action"
+          </p>
+          <section
+            v-for="g in groups"
+            :key="g.action"
+            class="rounded-md border border-default"
+            data-testid="an-detail-group"
+            :data-action="g.action"
           >
-            <span class="min-w-0 break-words text-toned">
-              {{ mssgAnalyticsActionLabel(row) }}<template v-if="row.action !== 'page.view' && row.label"> · {{ row.label }}</template>
-            </span>
-            <span class="shrink-0 text-highlighted tabular-nums">{{ row.value.toLocaleString('th-TH') }}</span>
-          </li>
-        </ul>
+            <h6 class="flex items-baseline justify-between gap-3 border-b border-default bg-elevated/50 px-2.5 py-1.5 text-xs font-semibold text-highlighted">
+              <span class="min-w-0 break-words" data-testid="an-detail-group-label">{{ g.label }}</span>
+              <span class="shrink-0 tabular-nums" data-testid="an-detail-group-total">{{ g.total.toLocaleString('th-TH') }}</span>
+            </h6>
+            <ul class="flex flex-col divide-y divide-default">
+              <li
+                v-for="row in g.rows"
+                :key="`${row.action}-${row.key}`"
+                class="flex items-baseline justify-between gap-3 px-2.5 py-1.5 text-xs"
+                data-testid="an-detail-row"
+                :data-action="row.action"
+              >
+                <span class="min-w-0 break-words text-toned">
+                  {{ mssgAnalyticsActionLabel(row) }}<template v-if="row.action !== 'page.view' && row.label"> · {{ row.label }}</template>
+                </span>
+                <span class="shrink-0 text-highlighted tabular-nums">{{ row.value.toLocaleString('th-TH') }}</span>
+              </li>
+            </ul>
+          </section>
+        </div>
       </div>
     </template>
     <p
@@ -304,7 +333,7 @@ onMounted(() => load(range.value))
         size="xs"
         :loading="requesting"
         :disabled="running || requesting"
-        :title="running ? mssgJobProgressText(runningJob) : `ดึงสถิติของช่วง ${rangeInfo.label} จาก mssg`"
+        :title="running ? mssgJobProgressText(runningJob) : 'ดึงสถิติทุกช่วงเวลาจาก mssg'"
         data-testid="an-refresh"
         @click="refresh"
       />

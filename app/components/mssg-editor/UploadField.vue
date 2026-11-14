@@ -1,12 +1,16 @@
 <script setup lang="ts">
 /**
- * FEAT-101 (D7, AC-25) — one 🖼 field: thumbnail of the current value, "อัปโหลด (Upload)" (hidden file input),
+ * FEAT-101 (D7, D19, AC-25, AC-63..69) — one 🖼 field: thumbnail of the current value, "อัปโหลด (Upload)" (hidden file input),
  * "ลบรูป" when the field is optional. A picked file is checked in the browser (type, ≤ 3 MB) — a rejected file sends
  * nothing — then `POST /mssg-sites/:id/uploads`; the returned `upload:<id>` becomes the field value. Reusable for M3
  * (favicon, OG image, page background) and M4 (product photos).
  * Test ids: `me-upload-<field>` (wrapper, `data-value` = the current value kind: `upload` | `url` | `none`),
- * `me-upload-<field>-input`, `me-upload-<field>-pick`, `me-upload-<field>-remove`, `me-upload-<field>-error`.
+ * `me-upload-<field>-input`, `-pick`, `-remove`, `-error`, `-hint`, `-shrinking` (only while a too-large image is shrunk),
+ * `-shrunk` (the note after a shrunk upload; `data-from-bytes` / `data-to-bytes` / `data-from-size` / `data-to-size` / `data-mime`).
+ * A JPEG / PNG / WebP above 3 MB is shrunk in the browser (`useMssgUpload`).
  */
+import { mssgShrinkNote, type MssgShrunk } from '~/utils/mssg-image-shrink'
+
 const props = withDefaults(defineProps<{
   siteId: string
   /** test-id suffix, e.g. `Image.url`, `ImageGallery.images.0.url` */
@@ -20,7 +24,8 @@ const props = withDefaults(defineProps<{
 
 const model = defineModel<string | null>({ default: null })
 
-const { upload } = useMssgUpload(() => props.siteId)
+const { upload, shrinking } = useMssgUpload(() => props.siteId)
+const shrunk = ref<MssgShrunk | null>(null)
 const input = useTemplateRef<HTMLInputElement>('input')
 const busy = ref(false)
 const uploadError = ref<string | null>(null)
@@ -38,11 +43,14 @@ async function onFile(e: Event) {
   el.value = ''
   if (!file) return
   uploadError.value = null
+  shrunk.value = null
   busy.value = true
   try {
     const res = await upload(file)
-    if (res.ok) model.value = res.upload.ref
-    else uploadError.value = res.message
+    if (res.ok) {
+      model.value = res.upload.ref
+      shrunk.value = res.shrunk ?? null
+    } else uploadError.value = res.message
   } finally {
     busy.value = false
   }
@@ -50,6 +58,7 @@ async function onFile(e: Event) {
 
 function remove() {
   uploadError.value = null
+  shrunk.value = null
   model.value = null
 }
 
@@ -100,7 +109,23 @@ const message = computed(() => uploadError.value ?? props.error ?? null)
         @change="onFile"
       >
     </div>
-    <span class="text-xs text-muted">PNG, JPG, WebP, GIF หรือ ICO · ไม่เกิน 3 MB</span>
+    <span class="text-xs break-words text-muted" :data-testid="`me-upload-${field}-hint`">{{ MSSG_UPLOAD_TEXT.hint }}</span>
+    <span
+      v-if="shrinking"
+      class="text-xs break-words text-muted"
+      role="status"
+      :data-testid="`me-upload-${field}-shrinking`"
+    >{{ MSSG_UPLOAD_TEXT.shrinking }}</span>
+    <span
+      v-if="shrunk && !message"
+      class="text-xs break-words text-muted"
+      :data-testid="`me-upload-${field}-shrunk`"
+      :data-from-bytes="shrunk.fromBytes"
+      :data-to-bytes="shrunk.toBytes"
+      :data-from-size="`${shrunk.fromWidth}x${shrunk.fromHeight}`"
+      :data-to-size="`${shrunk.toWidth}x${shrunk.toHeight}`"
+      :data-mime="shrunk.mime"
+    >{{ mssgShrinkNote(shrunk) }}</span>
     <span
       v-if="message"
       class="text-xs break-words text-error"
