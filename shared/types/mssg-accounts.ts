@@ -96,7 +96,7 @@ export interface MssgAccountView {
   nickname: string | null
   status: MssgAccountStatus
   browserProfile: MssgBrowserProfileRef | null
-  plan: { name: string } | null
+  plan: { name: string, role?: string | null } | null
   /** `limit: null` = unlimited or not shown by mssg */
   quota: { used: number, limit: number | null } | null
   sites: MssgSite[]

@@ -4,57 +4,45 @@
  *
  * - A preset is sent as `page.update { theme: { colorId } }` only; `autoTheme` also carries `light` / `dark` (two of the
  *   other 17). Apollo does not expand preset colours on the client: the API writes them (v1.11, D21) and the preview
- *   theme carries them; the swatches below are only **display colours** of the tiles.
+ *   theme carries them. Tile names / colours / plan flags come from the presets route (v1.13, D24 / D25).
  * - A font is `{ family, provider }` from the 38 of the contract, or `null` (= mssg default, key removed on apply).
  */
-import type { MssgPageFont, MssgPageTheme } from '../../shared/types/mssg-sites'
+import type { MssgPageFont, MssgPageTheme, MssgPresetItem, MssgPresetsView } from '../../shared/types/mssg-sites'
 
 export const MSSG_AUTO_THEME = 'autoTheme'
 
-export interface MssgPresetDef {
-  id: string
-  /** Thai / English display name (Apollo's) */
-  th: string
-  en: string
-  /** display-only swatch: background, text, accent */
-  bg: string
-  fg: string
-  accent: string
-}
-
-/** contract §3.4 — the 18 `colorId` values, in the contract's order */
-export const MSSG_PRESETS: MssgPresetDef[] = [
-  { id: 'newDarkTheme', th: 'มืดใหม่', en: 'New dark', bg: '#16181D', fg: '#F4F4F5', accent: '#7C8BFF' },
-  { id: 'newBlueTheme', th: 'ฟ้าใหม่', en: 'New blue', bg: '#E8F0FF', fg: '#13213F', accent: '#2F6BFF' },
-  { id: 'newYellowTheme', th: 'เหลืองใหม่', en: 'New yellow', bg: '#FFF6D6', fg: '#3A2E05', accent: '#F2B705' },
-  { id: 'newCoralTheme', th: 'ปะการัง', en: 'New coral', bg: '#FFE9E3', fg: '#3D1A12', accent: '#FF6F4F' },
-  { id: 'newPurpleTheme', th: 'ม่วงใหม่', en: 'New purple', bg: '#F1EAFF', fg: '#2A1748', accent: '#8B5CF6' },
-  { id: 'fireTheme', th: 'ไฟ', en: 'Fire', bg: '#2B0F0A', fg: '#FFE7DC', accent: '#FF5A1F' },
-  { id: 'lemonTheme', th: 'มะนาว', en: 'Lemon', bg: '#F7FBD9', fg: '#2F3A06', accent: '#C3D82B' },
-  { id: 'skyTheme', th: 'ท้องฟ้า', en: 'Sky', bg: '#E3F4FD', fg: '#0B2E44', accent: '#38A9E0' },
-  { id: 'lavenderTheme', th: 'ลาเวนเดอร์', en: 'Lavender', bg: '#F3EEFB', fg: '#33264A', accent: '#A98BD9' },
-  { id: 'bubbleGumTheme', th: 'หมากฝรั่ง', en: 'Bubble gum', bg: '#FFE6F2', fg: '#4A1530', accent: '#FF71B5' },
-  { id: 'bwTheme', th: 'ขาวดำ', en: 'Black & white', bg: '#FFFFFF', fg: '#111111', accent: '#111111' },
-  { id: 'wbTheme', th: 'ดำขาว', en: 'White & black', bg: '#111111', fg: '#FFFFFF', accent: '#FFFFFF' },
-  { id: 'lightTheme', th: 'สว่าง', en: 'Light', bg: '#F7F7F8', fg: '#1F2024', accent: '#5B5F6B' },
-  { id: 'darkTheme', th: 'มืด', en: 'Dark', bg: '#1F2024', fg: '#EDEDEF', accent: '#9AA0AE' },
-  { id: 'strongTheme', th: 'เข้ม', en: 'Strong', bg: '#0E2A47', fg: '#FFFFFF', accent: '#FFC400' },
-  { id: 'taxiTheme', th: 'แท็กซี่', en: 'Taxi', bg: '#FFD60A', fg: '#111111', accent: '#111111' },
-  { id: 'pinkTheme', th: 'ชมพู', en: 'Pink', bg: '#FFD1E3', fg: '#3F0D23', accent: '#E0457B' },
-  { id: MSSG_AUTO_THEME, th: 'อัตโนมัติ สว่าง/มืด', en: 'Auto light / dark', bg: '#F7F7F8', fg: '#1F2024', accent: '#1F2024' }
+/**
+ * contract §3.4 — the 18 `colorId` values, in the contract's order. Ids only: names and colours come from
+ * `GET /mssg-sites/:id/presets` (v1.13, D24), the BO holds no colour table.
+ */
+const MSSG_PRESET_IDS = [
+  'newDarkTheme',
+  'newBlueTheme',
+  'newYellowTheme',
+  'newCoralTheme',
+  'newPurpleTheme',
+  'fireTheme',
+  'lemonTheme',
+  'skyTheme',
+  'lavenderTheme',
+  'bubbleGumTheme',
+  'bwTheme',
+  'wbTheme',
+  'lightTheme',
+  'darkTheme',
+  'strongTheme',
+  'taxiTheme',
+  'pinkTheme',
+  MSSG_AUTO_THEME
 ]
 
-export const MSSG_COLOR_IDS = MSSG_PRESETS.map(p => p.id)
+export const MSSG_COLOR_IDS: string[] = MSSG_PRESET_IDS
 /** the 17 ids `autoTheme` may pair with */
 export const MSSG_AUTO_PAIR_IDS = MSSG_COLOR_IDS.filter(id => id !== MSSG_AUTO_THEME)
 export const MSSG_AUTO_DEFAULT = { light: 'lightTheme', dark: 'darkTheme' } as const
 
 export function mssgIsColorId(v: unknown): boolean {
   return typeof v === 'string' && MSSG_COLOR_IDS.includes(v)
-}
-
-export function mssgPreset(id: unknown): MssgPresetDef | null {
-  return MSSG_PRESETS.find(p => p.id === id) ?? null
 }
 
 /** contract §3.4: an id of the list; `autoTheme` needs `light` + `dark` of the other 17; `light` / `dark` only with it */
@@ -73,13 +61,6 @@ export function mssgThemeIssue(t: { colorId?: unknown, light?: unknown, dark?: u
 export function mssgPresetPatch(colorId: string, pair: { light?: string, dark?: string } = {}): MssgPageTheme {
   if (colorId !== MSSG_AUTO_THEME) return { colorId }
   return { colorId, light: pair.light ?? MSSG_AUTO_DEFAULT.light, dark: pair.dark ?? MSSG_AUTO_DEFAULT.dark }
-}
-
-/** the swatch the preview / tiles show for a page theme (`autoTheme` → its light preset), `null` without a preset */
-export function mssgThemeSwatch(theme: MssgPageTheme | null | undefined): MssgPresetDef | null {
-  const id = theme?.colorId
-  if (id === MSSG_AUTO_THEME) return mssgPreset(theme?.light) ?? mssgPreset(MSSG_AUTO_DEFAULT.light)
-  return mssgPreset(id)
 }
 
 // ── fonts ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -117,6 +98,74 @@ export function mssgFontCss(font: unknown): string | null {
 }
 
 /**
+ * Tiles of step 3 from the presets route answer (D24 / D25). `null` (loading / error): the 18 ids, name = id, no colours,
+ * all selectable (no invented colour, never blocks on a guess). `autoTheme` (no swatch) is drawn split from the light /
+ * dark tiles' swatches.
+ */
+export interface MssgPresetTile {
+  id: string
+  name: string
+  allowed: boolean
+  /** page background of the tile: the gradient when non-empty, else the plain colour (`null` without data) */
+  bg: string | null
+  gradient: string
+  background: string
+  text: string | null
+  button: string | null
+  buttonText: string | null
+  /** `autoTheme`: the two halves (light / dark tile backgrounds) */
+  split: { light: string | null, dark: string | null } | null
+}
+
+export function mssgTileBackground(sw: { background?: string, backgroundGradient?: string } | null | undefined): string | null {
+  if (!sw) return null
+  return sw.backgroundGradient ? sw.backgroundGradient : (sw.background || null)
+}
+
+export function mssgPresetTiles(view: MssgPresetsView | null | undefined, pair: { light?: string, dark?: string } = {}): MssgPresetTile[] {
+  const byId = new Map<string, MssgPresetItem>((view?.items ?? []).map(i => [i.id, i]))
+  const order = view?.items?.length ? view.items.map(i => i.id) : MSSG_COLOR_IDS
+  return order.map((id) => {
+    const it = byId.get(id)
+    const sw = it?.swatch ?? null
+    const tile: MssgPresetTile = {
+      id,
+      name: it?.name || id,
+      allowed: it ? it.allowed !== false : true,
+      bg: mssgTileBackground(sw),
+      gradient: sw?.backgroundGradient ?? '',
+      background: sw?.background ?? '',
+      text: sw?.text ?? null,
+      button: sw?.buttonBackground ?? null,
+      buttonText: sw?.buttonTextColor ?? null,
+      split: null
+    }
+    if (id === MSSG_AUTO_THEME) {
+      tile.split = {
+        light: mssgTileBackground(byId.get(pair.light ?? MSSG_AUTO_DEFAULT.light)?.swatch),
+        dark: mssgTileBackground(byId.get(pair.dark ?? MSSG_AUTO_DEFAULT.dark)?.swatch)
+      }
+      const lightSw = byId.get(pair.light ?? MSSG_AUTO_DEFAULT.light)?.swatch
+      tile.text = lightSw?.text ?? null
+      tile.button = lightSw?.buttonBackground ?? null
+      tile.buttonText = lightSw?.buttonTextColor ?? null
+    }
+    return tile
+  })
+}
+
+/** ids the plan grants; `null` = no data / unknown role → nothing is restricted */
+export function mssgAllowedIds(view: MssgPresetsView | null | undefined): Set<string> | null {
+  if (!view?.items?.length || !view.known) return null
+  return new Set(view.items.filter(i => i.allowed).map(i => i.id))
+}
+
+/** D25 d: a tile can be chosen when the plan grants it (the page's current preset stays shown as selected, but picking it is a no-op anyway) */
+export function mssgPresetChoosable(tile: Pick<MssgPresetTile, 'allowed'>): boolean {
+  return tile.allowed
+}
+
+/**
  * "ใช้กับทุกหน้า" — the `theme` patch copied to every page: background colour + image (B3) and, since v1.6, the preset
  * (`colorId` + `light` / `dark` for `autoTheme`) and the font (`null` = default). A page without a preset copies none.
  */
@@ -131,4 +180,30 @@ export function mssgApplyAllTheme(theme: MssgPageTheme | null | undefined): Mssg
   }
   if (mssgIsColorId(theme?.colorId)) Object.assign(out, mssgPresetPatch(theme!.colorId as string, { light: theme?.light as string | undefined, dark: theme?.dark as string | undefined }))
   return out
+}
+
+/**
+ * D25 d: the apply-all patch for one target page. A preset (or pair member) the plan does not grant is sent only to a page
+ * that already has it (read back from mssg); otherwise its keys are left out (`skipped` = true) and the other look keys
+ * are still copied. `allowed` = `null`: no restriction.
+ */
+export function mssgApplyAllThemeFor(
+  patch: MssgPageTheme,
+  target: MssgPageTheme | null | undefined,
+  allowed: Set<string> | null
+): { theme: MssgPageTheme, skipped: boolean } {
+  const id = patch.colorId
+  if (!allowed || typeof id !== 'string' || !id) return { theme: patch, skipped: false }
+  const ok = (v: unknown, cur: unknown) => typeof v === 'string' && (allowed.has(v) || cur === v)
+  let fine = ok(id, target?.colorId)
+  if (fine && id === MSSG_AUTO_THEME) {
+    const same = target?.colorId === MSSG_AUTO_THEME
+    fine = ok(patch.light, same ? target?.light : undefined) && ok(patch.dark, same ? target?.dark : undefined)
+  }
+  if (fine) return { theme: patch, skipped: false }
+  const theme: MssgPageTheme = { ...patch }
+  delete theme.colorId
+  delete theme.light
+  delete theme.dark
+  return { theme, skipped: true }
 }

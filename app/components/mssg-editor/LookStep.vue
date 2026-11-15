@@ -7,33 +7,42 @@
  * v1.6 (B3r, contract §3.4, AC-43, AC-44):
  * v1.11 (BUG-099): the API writes a preset expanded (colours replace the page's), so the preview theme carries `#rrggbbaa`
  *   colours; the hex field shows them, the apply-all/edit send only API-valid 6 digits.
- * - preset tiles = the 18 `colorId` values with Apollo's own display swatches (one rule line under the tiles, v1.11 D21 h); choosing
- *   one still sends `page.update { theme: { colorId } }` (no `backgroundColor`), `autoTheme` also `light` / `dark` (two selects of the other 17,
- *   defaults `lightTheme` / `darkTheme`);
+ * - preset tiles = the 18 `colorId` values with mssg's names and colours from `GET /mssg-sites/:id/presets` (v1.13, D24; on an
+ *   error: the ids, still selectable); choosing one sends `page.update { theme: { colorId } }` and, last action wins (D23 g), drops the
+ *   page's own `backgroundColor` from the pending draft (`mssgFoldPageUpdate`); the colour field then shows the preview theme's colour.
+ *   `autoTheme` also `light` / `dark` (two selects of the other 17, defaults `lightTheme` / `darkTheme`). Plan (D25 d): a tile
+ *   with `allowed: false` has a "Pro" badge, `aria-disabled`, and does nothing; `known: false` → all selectable + a warning line;
  * - font select: "ค่าเริ่มต้น" (`null`) + the 38 families grouped google / websafe → `theme.page.font { family, provider }`;
  * - "ใช้กับทุกหน้า" = one `page.update` per page with this page's background colour + image, preset (+ pair) and font.
  * Server messages (draft 400 / apply `mssgValidation`, `pages.<id>.theme.<key>`) arrive as `errors` with a target.
  *
  * Test ids: `me-sheet-3`, `me-look-page` (page select), `me-look-color` (picker), `me-look-hex` (+ `me-look-hex-error`),
  * `me-look-use-theme`, `me-look-bg-label`, `me-upload-Page.backgroundImage(-input|-pick|-remove|-error)`,
- * `me-look-apply-all`, `me-look-apply-all-done`, `me-look-themes` (`data-selected` = colorId), `me-look-theme-<colorId>`
- * (`data-selected`, `data-color-id`), `me-look-auto` / `me-look-auto-light` / `me-look-auto-dark` (native selects),
+ * `me-look-apply-all`, `me-look-apply-all-done`, `me-look-apply-all-skipped`, `me-look-themes` (`data-selected` = colorId),
+ * `me-look-theme-<colorId>` (button: `data-selected`, `data-color-id`, `data-allowed`, `aria-disabled`), `me-look-preset-<colorId>`
+ * (the tile's swatch: `data-bg`, `data-gradient`, `data-text`, `data-button`, `data-button-text`, `data-allowed`),
+ * `me-look-preset-pro-<colorId>` (Pro badge), `me-look-plan-pro` (helper), `me-look-plan-unknown`, `me-look-presets-loading`,
+ * `me-look-presets-error`, `me-look-auto` / `me-look-auto-light` / `me-look-auto-dark` (native selects),
  * `me-look-theme-rule`, `me-look-theme-error`, `me-look-fonts`, `me-look-font` (native select, value = family or ""),
  * `me-look-font-default` (button), `me-look-font-error`, `me-look-style` (read-only styleId).
  */
 import type { MssgFieldError } from '~/utils/mssg-sites'
-import type { MssgOp, MssgPageFont, MssgPageProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
+import type { MssgOp, MssgOpPageUpdate, MssgPageFont, MssgPageProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
 type PageFields = Extract<MssgOp, { op: 'page.update' }>['fields']
 
 const props = defineProps<{
   siteId: string
   site: MssgSiteProjection | null
+  /** the draft's op list (to tell an own background colour of this draft from the preset's) */
+  ops?: MssgOp[]
   readOnly: boolean
   /** step-3 field errors (target page + `theme.page.<key>`) */
   errors: MssgFieldError[]
   resetToken: number
 }>()
+
+const presets = useMssgPresets(() => props.siteId)
 
 const emit = defineEmits<{ pageUpdate: [pageId: string, fields: PageFields] }>()
 const selectedId = defineModel<string>('page', { default: '' })
@@ -65,6 +74,17 @@ watch([() => page.value?.id, () => props.resetToken], fromPage, { immediate: tru
 // an upstream change of the colour (apply to all, discard…) that the field does not already show
 watch(bgColor, (c) => {
   if ((c ?? '') !== hex.value && (hex.value === '' || MSSG_HEX_DISPLAY_RE.test(hex.value))) hex.value = c ?? ''
+})
+
+/** D23 g: a background colour of the pending draft for this page (own), not the preset's one the field shows */
+const ownBgDraft = computed<string | null>(() => {
+  const id = page.value?.id
+  for (const o of props.ops ?? []) {
+    if (o.op !== 'page.update' || (o as MssgOpPageUpdate).pageId !== id) continue
+    const c = (o as MssgOpPageUpdate).fields.theme?.page?.backgroundColor
+    if (typeof c === 'string') return c
+  }
+  return null
 })
 
 const hexInvalid = computed(() => mssgBgColorSchema.safeParse(hex.value).error?.issues[0]?.message ?? null)
@@ -111,24 +131,31 @@ function onImage(v: string | null) {
 }
 
 const applied = ref<number | null>(null)
+const appliedSkipped = ref(0)
 watch([() => page.value?.id, () => props.resetToken], () => {
   applied.value = null
+  appliedSkipped.value = 0
 })
 function applyAll() {
   const p = page.value
   if (!p || props.readOnly || hexInvalid.value) return
-  // v1.11: the field may show the preset's 8-digit colour; a translucent one cannot be sent (API: 6 digits) and the
-  // copied preset gives every page that colour anyway, so the key is left out then (never `null`)
-  const color = mssgSendableColor(hex.value)
-  const keepColor = color !== null || hex.value === ''
-  // v1.6: preset (+ autoTheme pair) and font travel with the background colour + image
+  // preset (+ autoTheme pair), font and background image travel with the page; the background colour only when it is this
+  // page's own (a colour of this draft, or the page has no preset) — the preset gives every page its own background (D23 g).
+  // A translucent preset colour cannot be sent anyway (API: 6 digits).
   const theme = mssgApplyAllTheme(p.theme)
-  theme.page = { ...theme.page, ...(keepColor ? { backgroundColor: color } : {}), backgroundImage: bgImage.value }
-  if (!keepColor) delete theme.page.backgroundColor
+  const color = mssgSendableColor(hex.value)
+  theme.page = { ...theme.page, backgroundImage: bgImage.value }
+  if ((ownBgDraft.value !== null || colorId.value === '') && (color !== null || hex.value === '')) theme.page.backgroundColor = color
+  else delete theme.page.backgroundColor
+  let skipped = 0
   for (const target of pages.value) {
-    emit('pageUpdate', target.id, { theme: theme as PageFields['theme'] })
+    // D25 d: a preset the plan does not grant goes only to a page that already has it
+    const r = mssgApplyAllThemeFor(theme, target.theme, allowedIds.value)
+    if (r.skipped) skipped++
+    emit('pageUpdate', target.id, { theme: r.theme as PageFields['theme'] })
   }
   applied.value = pages.value.length
+  appliedSkipped.value = skipped
 }
 
 // ── v1.6 presets ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -136,21 +163,35 @@ const colorId = computed(() => (typeof page.value?.theme?.colorId === 'string' ?
 const isAuto = computed(() => colorId.value === MSSG_AUTO_THEME)
 const autoLight = computed(() => (typeof page.value?.theme?.light === 'string' && MSSG_AUTO_PAIR_IDS.includes(page.value.theme.light) ? page.value.theme.light : MSSG_AUTO_DEFAULT.light))
 const autoDark = computed(() => (typeof page.value?.theme?.dark === 'string' && MSSG_AUTO_PAIR_IDS.includes(page.value.theme.dark) ? page.value.theme.dark : MSSG_AUTO_DEFAULT.dark))
+const tiles = computed(() => mssgPresetTiles(presets.data.value, { light: autoLight.value, dark: autoDark.value }))
+const allowedIds = computed(() => mssgAllowedIds(presets.data.value))
+const planUnknown = computed(() => presets.state.value === 'ready' && presets.data.value !== null && !presets.data.value.known)
+const anyPro = computed(() => tiles.value.some(t => !t.allowed))
+function tileById(id: string) {
+  return tiles.value.find(t => t.id === id) ?? null
+}
+function presetName(id: string): string {
+  return tileById(id)?.name ?? id
+}
+/** pair options the plan does not grant stay selectable only while they are the page's current value */
+function pairDisabled(id: string, current: string): boolean {
+  return id !== current && tileById(id)?.allowed === false
+}
 function choosePreset(id: string) {
   const p = page.value
   if (!p || props.readOnly) return
-  if (id === colorId.value && id !== MSSG_AUTO_THEME) return
+  const t = tileById(id)
+  if (t && !mssgPresetChoosable(t)) return
+  // the selected tile again is a no-op, unless an own colour of this draft must give way to the preset's (D23 g)
+  if (id === colorId.value && id !== MSSG_AUTO_THEME && ownBgDraft.value === null) return
   emit('pageUpdate', p.id, { theme: mssgPresetPatch(id, { light: autoLight.value, dark: autoDark.value }) as PageFields['theme'] })
 }
 function setPair(which: 'light' | 'dark', id: string) {
   const p = page.value
   if (!p || props.readOnly || !MSSG_AUTO_PAIR_IDS.includes(id)) return
+  if (pairDisabled(id, which === 'light' ? autoLight.value : autoDark.value)) return
   const pair = { light: autoLight.value, dark: autoDark.value, [which]: id }
   emit('pageUpdate', p.id, { theme: mssgPresetPatch(MSSG_AUTO_THEME, pair) as PageFields['theme'] })
-}
-function presetName(id: string): string {
-  const d = mssgPreset(id)
-  return d ? `${d.th} (${d.en})` : id
 }
 
 // ── v1.6 fonts ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -199,33 +240,65 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
           <span class="text-sm text-default">{{ MSSG_STEP3_TEXT.themes }}</span>
           <span class="text-[11px] text-dimmed">{{ colorId ? `ใช้อยู่: ${presetName(colorId)}` : 'ยังไม่ได้เลือกธีม' }}</span>
         </div>
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2" role="radiogroup" aria-label="ธีม">
+        <p v-if="presets.state.value === 'loading'" class="text-xs text-muted" data-testid="me-look-presets-loading">
+          กำลังโหลดรายชื่อธีม…
+        </p>
+        <div
+          v-else
+          class="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2"
+          role="radiogroup"
+          aria-label="ธีม"
+        >
           <button
-            v-for="t in MSSG_PRESETS"
+            v-for="t in tiles"
             :key="t.id"
             type="button"
             role="radio"
             :aria-checked="colorId === t.id"
+            :aria-disabled="t.allowed ? undefined : 'true'"
             :disabled="readOnly"
-            :title="`${t.en} · ${t.id}`"
-            class="flex min-w-0 flex-col gap-1.5 rounded-lg border p-1.5 pb-2 text-center hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-60"
-            :class="colorId === t.id ? 'border-primary ring-2 ring-primary/30' : 'border-default bg-elevated/40'"
+            :title="t.allowed ? `${t.name} · ${t.id}` : `${t.name} · ${MSSG_STEP3_TEXT.proNeeded}`"
+            class="relative flex min-w-0 flex-col gap-1.5 rounded-lg border p-1.5 pb-2 text-center disabled:cursor-not-allowed disabled:opacity-60"
+            :class="[
+              colorId === t.id ? 'border-primary ring-2 ring-primary/30' : 'border-default bg-elevated/40',
+              t.allowed ? 'hover:border-primary/60' : 'cursor-not-allowed',
+              !t.allowed && colorId !== t.id ? 'opacity-60' : ''
+            ]"
             :data-testid="`me-look-theme-${t.id}`"
             :data-color-id="t.id"
+            :data-allowed="t.allowed ? 'true' : 'false'"
             :data-selected="colorId === t.id ? 'true' : 'false'"
             @click="choosePreset(t.id)"
           >
             <span
+              class="relative flex h-14 items-start justify-center overflow-hidden rounded-md border border-black/5 bg-elevated pt-1 text-sm font-semibold"
+              :style="{ ...(t.split ? {} : t.bg ? { background: t.bg } : {}), ...(t.text ? { color: t.text } : {}) }"
+              :data-testid="`me-look-preset-${t.id}`"
+              :data-allowed="t.allowed ? 'true' : 'false'"
+              :data-bg="t.background"
+              :data-gradient="t.gradient"
+              :data-text="t.text ?? ''"
+              :data-button="t.button ?? ''"
+              :data-button-text="t.buttonText ?? ''"
               aria-hidden="true"
-              class="relative flex h-12 items-center justify-center overflow-hidden rounded-md border border-black/5 text-sm font-semibold"
-              :style="t.id === MSSG_AUTO_THEME
-                ? { background: `linear-gradient(135deg, ${mssgPreset(autoLight)?.bg} 50%, ${mssgPreset(autoDark)?.bg} 50%)`, color: mssgPreset(autoLight)?.fg }
-                : { background: t.bg, color: t.fg }"
             >
-              Aa
-              <span class="absolute inset-x-2 bottom-1.5 h-1 rounded-full" :style="{ background: t.accent }" />
+              <template v-if="t.split">
+                <span class="absolute inset-y-0 left-0 w-1/2" :style="t.split.light ? { background: t.split.light } : undefined" />
+                <span class="absolute inset-y-0 right-0 w-1/2" :style="t.split.dark ? { background: t.split.dark } : undefined" />
+              </template>
+              <span class="relative">Aa</span>
+              <span
+                v-if="t.button"
+                class="absolute inset-x-2 bottom-1.5 flex h-3.5 items-center justify-center rounded-full text-[8px] leading-none font-medium"
+                :style="{ background: t.button, color: t.buttonText ?? undefined }"
+              >Button</span>
             </span>
-            <span class="truncate text-xs text-default">{{ t.th }}</span>
+            <span class="truncate text-xs text-default">{{ t.name }}</span>
+            <span
+              v-if="!t.allowed"
+              class="absolute top-2.5 right-2.5 rounded bg-warning px-1 text-[10px] leading-4 font-semibold text-inverted"
+              :data-testid="`me-look-preset-pro-${t.id}`"
+            >Pro</span>
           </button>
         </div>
         <div v-if="isAuto" class="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="me-look-auto">
@@ -238,7 +311,12 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
               data-testid="me-look-auto-light"
               @change="setPair('light', ($event.target as HTMLSelectElement).value)"
             >
-              <option v-for="id in MSSG_AUTO_PAIR_IDS" :key="id" :value="id">{{ presetName(id) }}</option>
+              <option
+                v-for="id in MSSG_AUTO_PAIR_IDS"
+                :key="id"
+                :value="id"
+                :disabled="pairDisabled(id, autoLight)"
+              >{{ presetName(id) }}</option>
             </select>
           </label>
           <label class="flex min-w-0 flex-col gap-1 text-sm text-default">
@@ -250,11 +328,25 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
               data-testid="me-look-auto-dark"
               @change="setPair('dark', ($event.target as HTMLSelectElement).value)"
             >
-              <option v-for="id in MSSG_AUTO_PAIR_IDS" :key="id" :value="id">{{ presetName(id) }}</option>
+              <option
+                v-for="id in MSSG_AUTO_PAIR_IDS"
+                :key="id"
+                :value="id"
+                :disabled="pairDisabled(id, autoDark)"
+              >{{ presetName(id) }}</option>
             </select>
           </label>
         </div>
         <span v-if="themeError" class="text-xs text-error" data-testid="me-look-theme-error">{{ themeError }}</span>
+        <p v-if="presets.state.value === 'error'" class="text-xs text-warning" data-testid="me-look-presets-error">
+          {{ MSSG_STEP3_TEXT.presetsError }}
+        </p>
+        <p v-if="planUnknown" class="text-xs text-warning" data-testid="me-look-plan-unknown">
+          {{ MSSG_STEP3_TEXT.planUnknown }}
+        </p>
+        <p v-if="anyPro" class="text-xs text-muted" data-testid="me-look-plan-pro">
+          Pro = {{ MSSG_STEP3_TEXT.proNeeded }}
+        </p>
         <p class="text-xs text-muted" data-testid="me-look-theme-rule">
           {{ MSSG_STEP3_TEXT.themeRule }}
         </p>
@@ -384,6 +476,12 @@ const styleId = computed(() => (typeof page.value?.theme?.styleId === 'string' ?
           role="status"
           data-testid="me-look-apply-all-done"
         >{{ MSSG_STEP3_TEXT.applyAllDone(applied) }}</span>
+        <span
+          v-if="applied !== null && appliedSkipped > 0"
+          class="text-xs text-warning"
+          role="status"
+          data-testid="me-look-apply-all-skipped"
+        >{{ MSSG_STEP3_TEXT.applyAllSkipped }}</span>
       </div>
     </template>
   </div>

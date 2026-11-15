@@ -13,8 +13,9 @@
  * v1.6 (B2r / B3r): Hat `title / subtitle / logoUrl / bgUrl`, Features icon names, every action type of §3.4; a block's
  * style override (colours, radius, border, width, mode — approximate) with `data-style-mode` / `data-styled` on
  * `me-preview-block`; the menu bar `me-preview-menu` (shown items, when the menu is on); the page font
- * (`data-font`, applied when the browser has it — nothing is loaded) and the preset swatch as background only when the
- * page has no own background colour (`data-color-id`; v1.11: the preview theme carries the preset's real `#rrggbbaa` colours, used as the page background).
+ * (`data-font`, applied when the browser has it — nothing is loaded). Background (v1.11 / v1.13 D24): the preview theme's
+ * `page.backgroundColor` (the preset's real `#rrggbbaa` or the user's own) and, when non-empty, its `backgroundGradient`
+ * (`data-bg-gradient`, drawn over the colour); `data-color-id` = the preset. No colour table in the BO.
  */
 import type { MssgBlockProjection, MssgSiteProjection } from '#shared/types/mssg-sites'
 
@@ -33,9 +34,12 @@ const ownBg = computed(() => {
   const c = page.value?.theme?.page?.backgroundColor
   return typeof c === 'string' && /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(c) ? c : null
 })
-/** v1.6: the preset's display swatch (fallback, Apollo's colours) when the page has no background colour of its own */
-const swatch = computed(() => mssgThemeSwatch(page.value?.theme))
-const bg = computed(() => ownBg.value ?? swatch.value?.bg ?? '#FFFFFF')
+/** v1.13 (D24): the preview theme carries the preset's real colours (the API writes the expanded preset); no BO colour table */
+const gradient = computed(() => {
+  const g = page.value?.theme?.page?.backgroundGradient
+  return typeof g === 'string' && g.trim() ? g : null
+})
+const bg = computed(() => ownBg.value ?? '#FFFFFF')
 const colorId = computed(() => (typeof page.value?.theme?.colorId === 'string' ? page.value.theme.colorId : ''))
 const font = computed(() => page.value?.theme?.page?.font ?? null)
 const fontCss = computed(() => mssgFontCss(font.value))
@@ -54,7 +58,13 @@ const bgStyle = computed(() => ({
   'background-color': bg.value,
   'color': fg.value,
   ...(fontCss.value ? { 'font-family': fontCss.value } : {}),
-  ...(bgImageSrc.value ? { 'background-image': `url(${JSON.stringify(bgImageSrc.value)})`, 'background-size': 'cover', 'background-position': 'center' } : {})
+  ...(bgImageSrc.value || gradient.value
+    ? {
+        'background-image': [bgImageSrc.value ? `url(${JSON.stringify(bgImageSrc.value)})` : '', gradient.value ?? ''].filter(Boolean).join(', '),
+        'background-size': 'cover',
+        'background-position': 'center'
+      }
+    : {})
 }))
 /** dark text on a light background and vice versa */
 const fg = computed(() => {
@@ -126,6 +136,7 @@ function countdown(b: MssgBlockProjection): string {
       :style="bgStyle"
       data-testid="me-preview-screen"
       :data-bg="bg"
+      :data-bg-gradient="gradient ?? ''"
       :data-bg-image="bgImageValue ? 'true' : 'false'"
       :data-color-id="colorId"
       :data-font="font?.family ?? ''"
