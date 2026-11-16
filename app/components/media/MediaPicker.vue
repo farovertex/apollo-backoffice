@@ -12,8 +12,9 @@
  *
  * The list is read when the modal opens (one request), and again per debounced search or after an upload batch.
  * Choosing an image — by clicking its card or by finishing an upload inside the picker — emits `select` with
- * `{ id, name, url, width, height }` and closes the modal; the parent decides what to do with it. There is no
- * pagination here: the search is the way to reach an older image (the grid shows the newest 24).
+ * `{ id, name, url, width, height }` and closes the modal; the parent decides what to do with it. The grid shows
+ * 24 images per page with the same `UPagination` as `/media-library` (`mp-pagination`, hidden while everything
+ * fits on one page); every open starts again at page 1.
  */
 import type { ModalProps } from '@nuxt/ui'
 import type { MediaAssetType, MediaAssetView, MediaPickerSelection } from '#shared/types/media'
@@ -67,7 +68,8 @@ const uploadHint = computed(() => {
 watch(open, (isOpen) => {
   if (!isOpen) return
   upload.clear()
-  void list.load()
+  // every open starts at page 1 — one request either way (the page watcher or a direct load)
+  list.reload(1)
   void upload.loadOptions()
 })
 
@@ -191,7 +193,18 @@ const showLoading = computed(() => list.pending.value && list.items.value.length
     </template>
 
     <template #footer>
-      <div class="flex w-full justify-end gap-2">
+      <div class="flex w-full flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-3 text-sm text-muted">
+          <span v-if="list.loaded.value && !list.error.value" data-testid="mp-count">{{ list.total.value }} รูป</span>
+          <UPagination
+            v-if="list.total.value > list.limit"
+            :page="list.page.value"
+            :items-per-page="list.limit"
+            :total="list.total.value"
+            data-testid="mp-pagination"
+            @update:page="(p: number) => list.page.value = p"
+          />
+        </div>
         <UButton
           label="ยกเลิก"
           color="neutral"
