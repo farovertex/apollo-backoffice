@@ -5,7 +5,20 @@
  * does for the status keys (`app/utils/reports.ts`). Auto-imported by Nuxt, so components use the functions
  * without an import.
  */
-import type { AppealableReason, AppealState, MonitorReviewSummary, MonitorStatusTikTok } from '#shared/types/ads-monitor'
+import type { AppealableReason, AppealState, MonitorReviewSummary, MonitorStatus, MonitorStatusTikTok } from '#shared/types/ads-monitor'
+
+/** keys where the API's `partial` flag does not apply (the row speaks for its own key) */
+const PARTIAL_IGNORED_KEYS: ReadonlySet<string> = new Set(['deleted', 'banned', 'missing'])
+
+/**
+ * The ad has a review problem to act on: `rejected`, or **partially approved** (`status.partial`, Ads Manager:
+ * "เผยแพร่บางส่วน · ปัญหาในการตรวจสอบ" with an appeal option). One predicate for the review button, the
+ * "no review yet" tooltip and the auto-appeal selection.
+ */
+export function hasReviewIssue(status: Pick<MonitorStatus, 'key' | 'partial'>): boolean {
+  if (status.key === 'rejected') return true
+  return status.partial === true && !PARTIAL_IGNORED_KEYS.has(status.key)
+}
 
 /**
  * The badge state of a row / drawer. It is the API's `AppealState` plus the two states the *job* adds:
@@ -64,14 +77,15 @@ export function appealBadgeState(
 
 /**
  * Contract §6 — the status label of an ad row becomes a button (`am-review-open`) only when a review exists
- * **and** the row is either rejected or already in an appeal flow. The BO never widens this rule.
+ * **and** the row has a review issue (`rejected`, or `status.partial` since contract v1.6 §8.6) or is already in an
+ * appeal flow. The BO never widens this rule beyond the contract.
  */
 export function isReviewOpenable(
-  statusKey: string,
+  status: Pick<MonitorStatus, 'key' | 'partial'>,
   review: Pick<MonitorReviewSummary, 'appeal'> | null | undefined
 ): boolean {
   if (!review) return false
-  return statusKey === 'rejected' || review.appeal !== 'none'
+  return hasReviewIssue(status) || review.appeal !== 'none'
 }
 
 /** Contract §2 — Thai tooltip of a disabled "อุทธรณ์" button, one sentence per `appealable.reason`. */

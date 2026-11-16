@@ -88,6 +88,12 @@ export interface MonitorStatus {
    * renders no second line (`AdsMonitorStatusCell`), exactly like before v1.4.
    */
   tiktok?: MonitorStatusTikTok
+  /**
+   * Ad tab only — TikTok approved the ad **partially** (`creative_review_partially_approved`). Ads Manager says
+   * "เผยแพร่บางส่วน · ปัญหาในการตรวจสอบ" and lets you appeal, while `key` stays the row's real key (usually
+   * `delivering`). Absent on older APIs = `false`.
+   */
+  partial?: boolean
 }
 
 /** View of `ads.optPending` (contract §3.1 — `target` exposed as `on`/`off`). */

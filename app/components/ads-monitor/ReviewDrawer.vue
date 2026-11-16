@@ -447,7 +447,7 @@ const frameModalContent = { 'data-testid': 'am-review-frame-modal' } as ModalPro
         <div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-default p-3">
           <div class="flex min-w-0 flex-col gap-1">
             <span class="flex items-center gap-1.5 font-medium" data-testid="am-review-status">
-              <UIcon v-if="status?.key === 'rejected'" name="i-lucide-triangle-alert" class="size-4 text-error" />
+              <UIcon v-if="status && hasReviewIssue(status)" name="i-lucide-triangle-alert" class="size-4 text-error" />
               <span v-else class="size-2 shrink-0 rounded-full" :class="statusDot" />
               <span :class="statusText">{{ statusLabel }}</span>
             </span>

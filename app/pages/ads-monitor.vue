@@ -531,7 +531,7 @@ function clearSelection() {
 const selectedRows = computed(() => rows.value.filter(row => selected.value.has(rowKey(row))))
 const selectionCount = computed(() => selectedRows.value.length)
 
-/** the auto-appeal button: ad tab, a campaign filter set, and every ticked ad is `rejected` (`monitorRowAutoAppealEligible`) */
+/** the auto-appeal button: ad tab, a campaign filter set, and every ticked ad has a review issue — rejected or partially approved (`monitorRowAutoAppealEligible`) */
 const canAutoAppeal = computed(() =>
   tab.value === 'ad'
   && !!campaignId.value

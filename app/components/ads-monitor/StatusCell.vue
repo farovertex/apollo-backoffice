@@ -20,9 +20,9 @@
  * dimming either: dimming stays tied to `deletedAt` only.
  *
  * FEAT-082 (api-contract.md §6, spec "UI behaviour (BO)") — on the **ad tab only** the row can open the review
- * drawer (`am-review-open`) when it has a `review` and is either rejected or already in an appeal flow
- * (`isReviewOpenable()`, the contract's rule, never re-derived here). A **rejected** ad row **without** a review
- * explains itself through `am-review-missing` ("รอรอบ kpi ถัดไป").
+ * drawer (`am-review-open`) when it has a `review` and either has a review issue (rejected, or partially approved —
+ * contract v1.6 §8.6, `hasReviewIssue()`) or is already in an appeal flow (`isReviewOpenable()`, the contract's rule,
+ * never re-derived here). Such an ad row **without** a review explains itself through `am-review-missing` ("รอรอบ kpi ถัดไป").
  *
  * FEAT-082 v1.4 §8.1/§8.3 (TASK-am-tiktok-wording) — the cell now reads like TikTok's own status column:
  *   line 1 `am-status-primary` = `status.tiktok.primary` (dot/badge colour still from `key`, so every existing
@@ -87,9 +87,9 @@ const reasons = computed(() => {
 
 const review = computed(() => props.review ?? null)
 /** contract §6 — the button exists only under this exact condition (unchanged by v1.4) */
-const openable = computed(() => props.reviewable === true && isReviewOpenable(props.status.key, review.value))
-/** a rejected ad row the kpi round has not captured yet: static text + the "why" tooltip */
-const missingReview = computed(() => props.reviewable === true && review.value === null && props.status.key === 'rejected')
+const openable = computed(() => props.reviewable === true && isReviewOpenable(props.status, review.value))
+/** a rejected / partially approved ad row the kpi round has not captured yet: static text + the "why" tooltip */
+const missingReview = computed(() => props.reviewable === true && review.value === null && hasReviewIssue(props.status))
 /** since v1.4 that explanation belongs to the second line (which says "ปัญหาในการตรวจสอบ"); without one it stays on line 1 */
 const missingOnSecondary = computed(() => missingReview.value && secondary.value !== null)
 const missingOnPrimary = computed(() => missingReview.value && secondary.value === null)

@@ -9,6 +9,7 @@
  * "สกุลเงินของบัญชี".
  */
 import type { MonitorRow, MonitorStatusKey } from '#shared/types/ads-monitor'
+import { hasReviewIssue } from './appeal'
 import type { AdState, AdvertiserReportState, KpiMetrics, ReportError } from '#shared/types/reports'
 
 export const REPORT_DASH = '—'
@@ -206,13 +207,15 @@ export function monitorRowSelectable(
 }
 
 /**
- * Auto-appeal button — an ad the API classifies as `rejected` (the same key that draws "ปัญหาในการตรวจสอบ" and that
+ * Auto-appeal button — an ad with a review issue: `rejected`, or partially approved (`status.partial`, contract
+ * v1.6 §8.6 — "เผยแพร่บางส่วน · ปัญหาในการตรวจสอบ", appealable on TikTok too). For `rejected` (the same key that draws "ปัญหาในการตรวจสอบ" and that
  * the single-ad appeal uses). Real data 2026-11-11: rejected ads come both as primary `not_delivery` and, when the
  * campaign switch is off, as primary `disable` (detail `campaign_disable`, ad_audit_status 41) — the raw primary
  * alone would hide the button for the second kind.
  */
 export function monitorRowAutoAppealEligible(row: Pick<MonitorRow, 'status'>): boolean {
-  return row.status.key === 'rejected'
+  // + partially approved ads (2026-11-16: Ads Manager offers an appeal for "เผยแพร่บางส่วน" too)
+  return hasReviewIssue(row.status)
 }
 
 /** Freshness of a row's last fetch: `ok` · `late` (older than 2 intervals) · `error` (the advertiser has one). */
