@@ -1040,6 +1040,7 @@ onBeforeRouteLeave(async () => {
                   v-model:page="selectedPageId"
                   :site-id="view.id"
                   :site="draft.localSite.value"
+                  :ops="draft.ops.value"
                   :read-only="draft.readOnly.value"
                   :errors="step3Errors"
                   :reset-token="draft.resetToken.value"

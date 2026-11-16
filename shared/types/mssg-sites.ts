@@ -58,6 +58,28 @@ export interface MssgPageTheme {
   [key: string]: unknown
 }
 
+/** v1.13 §3.1 `GET /mssg-sites/:id/presets` — one tile (values verbatim from the API's preset table; 8-digit hex is valid CSS) */
+export interface MssgPresetSwatch {
+  background: string
+  backgroundGradient: string
+  text: string
+  panel: string
+  buttonBackground: string
+  buttonTextColor: string
+}
+export interface MssgPresetItem {
+  id: string
+  name: string
+  allowed: boolean
+  /** `null` for `autoTheme` */
+  swatch: MssgPresetSwatch | null
+}
+export interface MssgPresetsView {
+  role: string | null
+  known: boolean
+  items: MssgPresetItem[]
+}
+
 export interface MssgBlockProjection {
   id: string
   /** one of the 19 kinds of contract §3.3, or an unknown kind read from mssg (shown read-only) */
@@ -292,7 +314,8 @@ export interface MssgSiteView {
     email: string
     nickname: string | null
     status: MssgAccountStatus
-    plan: { name: string } | null
+    /** v1.13 (D25 a): `role` = the plan-role table key of the API, `null` when unknown */
+    plan: { name: string, role?: string | null } | null
     /** v1.1 — as the account view */
     quota?: MssgAccountView['quota']
     /**

@@ -257,6 +257,8 @@ function applyOne(site: MssgSiteProjection, op: MssgOp): void {
             delete theme.dark
           }
         }
+        // v1.13 D23 c: an own background colour clears the gradient (the API writes `""`), so the preview never covers it
+        if (typeof f.theme.page?.backgroundColor === 'string' && theme.page) theme.page.backgroundGradient = ''
         // `font: null` = mssg's default font: the key is removed
         if (f.theme.page && 'font' in f.theme.page && f.theme.page.font === null && theme.page) delete theme.page.font
         page.theme = theme
@@ -408,11 +410,24 @@ export function mssgFoldPageUpdate(ops: MssgOp[], pageId: string, fields: MssgOp
   const ui = lastIndex(next, o => o.op === 'page.update' && o.pageId === pageId)
   if (ui >= 0) {
     const prev = next[ui] as MssgOpPageUpdate
-    next[ui] = { ...prev, fields: fixPresetPair(deepMerge(prev.fields as Record<string, unknown>, rest as Record<string, unknown>) as MssgOpPageUpdate['fields']) }
+    // v1.13 (D23 g): last action wins — a preset pick drops the page's own colour set earlier in the draft; one in the
+    // same incoming fields stays (the API lays an own colour after the preset within one op)
+    const base = rest.theme?.colorId !== undefined ? withoutOwnBackground(prev.fields) : prev.fields
+    next[ui] = { ...prev, fields: fixPresetPair(deepMerge(base as Record<string, unknown>, rest as Record<string, unknown>) as MssgOpPageUpdate['fields']) }
   } else {
     next.push({ op: 'page.update', pageId, fields: fixPresetPair(clone(rest)) })
   }
   return next
+}
+
+/** `fields` without `theme.page.backgroundColor` (a colour or `null`); an emptied `theme.page` is removed too */
+function withoutOwnBackground(fields: MssgOpPageUpdate['fields']): MssgOpPageUpdate['fields'] {
+  const page = fields.theme?.page
+  if (!page || !('backgroundColor' in page)) return fields
+  const out = clone(fields)
+  delete out.theme!.page!.backgroundColor
+  if (!Object.keys(out.theme!.page!).length) delete out.theme!.page
+  return out
 }
 
 /** v1.6 §3.4: `light` / `dark` only go with `colorId: "autoTheme"` (a folded switch to another preset drops them) */
