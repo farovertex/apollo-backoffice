@@ -195,6 +195,15 @@ const links = computed(() => [[{
         open.value = false
       }
     }, {
+      // FEAT-102 — Pixel (BC pixel + click event + link + activation), directly after mssg Pages; same GOD/Admin
+      // gate (Payment: no item, the page reuses `mssg-pages-access`, the API answers 403)
+      label: 'Pixel',
+      icon: 'i-lucide-target',
+      to: '/bc-pixels',
+      onSelect: () => {
+        open.value = false
+      }
+    }, {
       // FEAT-094 — admin challenge page, directly after Posts; same role gate (spec "UI behaviour")
       label: 'Challenge',
       icon: 'i-lucide-trophy',
