@@ -5,11 +5,17 @@
  * translated through `monitorReasonTexts`, raw string on hover), ads by state, pending/failed switches and
  * deletes, banned advertisers; then the rejected-ads list (`rd-rejected`) and the not-delivering list
  * (`rd-not-delivering`), each absent when empty.
+ *
+ * FEAT-103 — each of the launching / ads / banned cards also carries "ในช่วง" items (`rd-range-*`) from the
+ * `inRange` block of `GET /reports/dashboard`; they follow the range picker. `inRange` is optional here: when
+ * the ranged request has no answer (loading / failed / older API) the items are not rendered at all, never
+ * a stale or zero figure. `rd-pending`, `rd-rejected` and `rd-not-delivering` have no range variant.
  */
-import type { DashboardNowResponse } from '#shared/types/report-dashboard'
+import type { DashboardInRange, DashboardNowResponse } from '#shared/types/report-dashboard'
 
 const props = defineProps<{
   now: DashboardNowResponse
+  inRange?: DashboardInRange | null
 }>()
 
 const ADS_STATES = [
@@ -33,7 +39,7 @@ const ndCount = computed(() => props.now.launching.notDelivering)
         <span>การส่งโฆษณาตอนนี้</span>
         <ReportsInfoHint id="rd-delivery" :text="REPORT_HELP['rd-delivery']!" />
       </h2>
-      <span class="text-xs text-muted">สถานะล่าสุด ไม่เปลี่ยนตามช่วงวัน · ข้อมูลรอบ kpi {{ formatClock(now.refreshedAt) }}</span>
+      <span class="text-xs text-muted">ตัวเลขใหญ่ = สถานะล่าสุด · "ในช่วง" เปลี่ยนตามช่วงวัน · ข้อมูลรอบ kpi {{ formatClock(now.refreshedAt) }}</span>
     </div>
 
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -85,6 +91,56 @@ const ndCount = computed(() => props.now.launching.notDelivering)
             <span class="tabular-nums">{{ formatInt(r.count) }}</span>
           </li>
         </ul>
+
+        <div
+          v-if="inRange"
+          class="mt-1 flex min-w-0 flex-col gap-1 border-t border-default pt-1 text-xs"
+        >
+          <span
+            class="flex flex-wrap items-center gap-x-1 text-muted"
+            data-testid="rd-range-launching"
+            :data-value="inRange.launching"
+          >
+            <span>ในช่วง {{ formatInt(inRange.launching) }} advertiser</span>
+            <ReportsInfoHint id="rd-range-launching" :text="REPORT_HELP['rd-range-launching']!" />
+          </span>
+          <span class="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            <span
+              class="flex items-center gap-0.5"
+              :class="inRange.delivery.stopped > 0 ? 'text-warning' : 'text-muted'"
+              data-testid="rd-range-stopped"
+              :data-value="inRange.delivery.stopped"
+            >
+              <span>หยุดส่ง {{ formatInt(inRange.delivery.stopped) }}</span>
+              <ReportsInfoHint id="rd-range-stopped" :text="REPORT_HELP['rd-range-stopped']!" />
+            </span>
+            <span
+              class="flex items-center gap-0.5 text-success"
+              data-testid="rd-range-resumed"
+              :data-value="inRange.delivery.resumed"
+            >
+              <span>กลับมาส่ง {{ formatInt(inRange.delivery.resumed) }}</span>
+              <ReportsInfoHint id="rd-range-resumed" :text="REPORT_HELP['rd-range-resumed']!" />
+            </span>
+          </span>
+          <div v-if="inRange.delivery.reasons.length > 0" class="flex items-center gap-1 text-muted">
+            <span>เหตุผลที่หยุดส่งในช่วง</span>
+            <ReportsInfoHint id="rd-range-reasons" :text="REPORT_HELP['rd-range-reasons']!" />
+          </div>
+          <ul v-if="inRange.delivery.reasons.length > 0" class="flex flex-col gap-0.5" data-testid="rd-range-reasons">
+            <li
+              v-for="r in inRange.delivery.reasons"
+              :key="r.reason"
+              class="flex justify-between gap-2"
+              data-testid="rd-range-reason-row"
+              :data-reason="r.reason"
+              :title="r.reason"
+            >
+              <span class="truncate text-muted">{{ reasonText(r.reason) }}</span>
+              <span class="tabular-nums">{{ formatInt(r.count) }}</span>
+            </li>
+          </ul>
+        </div>
       </NuxtLink>
 
       <!-- ads by state -->
@@ -109,6 +165,34 @@ const ndCount = computed(() => props.now.launching.notDelivering)
             </dd>
           </div>
         </dl>
+
+        <div
+          v-if="inRange"
+          class="mt-1 flex min-w-0 flex-col gap-1 border-t border-default pt-1"
+          data-testid="rd-range-ads"
+          :data-value="inRange.ads.total"
+        >
+          <span class="flex flex-wrap items-center gap-x-1 text-xs text-muted">
+            <span>ในช่วง {{ formatInt(inRange.ads.total) }} ตัว</span>
+            <ReportsInfoHint id="rd-range-ads" :text="REPORT_HELP['rd-range-ads']!" />
+          </span>
+          <dl class="grid grid-cols-2 gap-x-3 gap-y-1">
+            <div
+              v-for="s in ADS_STATES"
+              :key="s.key"
+              class="flex min-w-0 flex-col"
+              :data-testid="`rd-range-ads-${s.key}`"
+              :data-value="inRange.ads[s.key]"
+            >
+              <dt class="text-xs text-muted">
+                {{ s.label }}
+              </dt>
+              <dd class="text-base font-semibold tabular-nums" :class="s.key === 'rejected' && inRange.ads.rejected > 0 ? 'text-error' : s.tone">
+                {{ formatInt(inRange.ads[s.key]) }}
+              </dd>
+            </div>
+          </dl>
+        </div>
       </div>
 
       <!-- pending switches / deletes -->
@@ -170,6 +254,16 @@ const ndCount = computed(() => props.now.launching.notDelivering)
           :data-value="now.banned.now"
         >{{ formatInt(now.banned.now) }} ตอนนี้</span>
         <span class="text-xs text-muted">ดูรายการ →</span>
+        <span
+          v-if="inRange"
+          class="mt-1 flex flex-wrap items-center gap-x-1 border-t border-default pt-1 text-xs text-muted"
+          data-testid="rd-range-banned"
+          :data-value="inRange.banned"
+          :data-lifted="inRange.lifted"
+        >
+          <span>ในช่วง ระงับ {{ formatInt(inRange.banned) }} · ปลด {{ formatInt(inRange.lifted) }}</span>
+          <ReportsInfoHint id="rd-range-banned" :text="REPORT_HELP['rd-range-banned']!" />
+        </span>
       </NuxtLink>
     </div>
 
