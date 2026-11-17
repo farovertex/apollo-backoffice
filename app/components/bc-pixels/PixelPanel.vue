@@ -8,9 +8,10 @@
  * Every step component POSTs on its own and hands the 202 view back (`updated`), which restarts the poll.
  * Emits `update` with every view it reads (the page patches its row) and `settled` once when the pixel goes from
  * polling to idle (the page re-reads the list once). A superseded pixel shows "pixel เก่า"; the steps disable their
- * actions themselves (only step 4's unlink stays enabled — B2).
+ * actions themselves (only step 4's unlink, and stopping an open run, stay enabled). Step 5 hands back a `RunView`
+ * (`run`): it is merged into the view at once and the pixel is re-read.
  */
-import type { PixelView, PixelViewResponse } from '#shared/types/bc-pixels'
+import type { PixelView, PixelViewResponse, RunSummary, RunView } from '#shared/types/bc-pixels'
 
 const props = defineProps<{
   pixelId: string | null
@@ -36,6 +37,8 @@ let seq = 0
 /** the `seq` whose request is in flight (never two requests for the same pixel at once) */
 let inFlight: number | null = null
 let timer: ReturnType<typeof setInterval> | null = null
+/** bumped by every POST answer: a GET that started before it is older than what is on screen and is dropped */
+let postGen = 0
 
 function stopPoll() {
   if (timer) clearInterval(timer)
@@ -62,11 +65,18 @@ async function read() {
   const id = props.pixelId
   if (!id || inFlight === seq) return
   const s = seq
+  const g = postGen
+  let again = false
   inFlight = s
   try {
     // retry: 0 — one request per tick
     const res = await api<PixelViewResponse>(`/bc-pixels/${encodeURIComponent(id)}`, { retry: 0 })
     if (s !== seq) return
+    if (g !== postGen) {
+      // a POST answered while this GET was out: its view is newer — read once more instead of going back
+      again = true
+      return
+    }
     apply(res.pixel)
   } catch (e) {
     if (s !== seq) return
@@ -81,7 +91,23 @@ async function read() {
   } finally {
     if (inFlight === s) inFlight = null
     if (s === seq) loading.value = false
+    if (again && s === seq) void read()
   }
+}
+
+/** the 202 / 200 view of a step's POST */
+function applyPosted(next: PixelView) {
+  postGen++
+  apply(next)
+}
+
+/** a run answer (start / stop / resume / retry): show it at once, then re-read the pixel for its steps and `busy` */
+function applyRun(run: RunView) {
+  const v = view.value
+  if (!v || run.pixelId !== v.id) return
+  const summary: RunSummary = { id: run.id, pixelId: run.pixelId, status: run.status, stopReason: run.stopReason, outcome: run.outcome, current: run.current, updatedAt: run.updatedAt }
+  applyPosted({ ...v, latestRun: run, run: run.status === 'completed' ? null : summary })
+  void read()
 }
 
 function reset() {
@@ -229,19 +255,19 @@ const steps = computed(() => view.value?.steps ?? null)
         </BcPixelsStepCard>
 
         <BcPixelsStepCard step-key="install" :index="2" :state="steps.install">
-          <BcPixelsInstallStep :pixel="view" @updated="apply" @reload="read" />
+          <BcPixelsInstallStep :pixel="view" @updated="applyPosted" @reload="read" />
         </BcPixelsStepCard>
 
         <BcPixelsStepCard step-key="event" :index="3" :state="steps.event">
-          <BcPixelsEventStep :pixel="view" @updated="apply" @reload="read" />
+          <BcPixelsEventStep :pixel="view" @updated="applyPosted" @reload="read" />
         </BcPixelsStepCard>
 
         <BcPixelsStepCard step-key="link" :index="4" :state="steps.link">
-          <BcPixelsLinkStep :pixel="view" />
+          <BcPixelsLinkStep :pixel="view" @updated="applyPosted" @reload="read" />
         </BcPixelsStepCard>
 
         <BcPixelsStepCard step-key="activate" :index="5" :state="steps.activate">
-          <BcPixelsActivateStep :pixel="view" />
+          <BcPixelsActivateStep :pixel="view" @run="applyRun" @reload="read" />
         </BcPixelsStepCard>
       </div>
     </template>

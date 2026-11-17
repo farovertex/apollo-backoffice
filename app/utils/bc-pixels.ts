@@ -18,6 +18,7 @@ import type {
   PixelView,
   RunOutcome,
   RunStatus,
+  RunStepStatus,
   RunStopReason,
   RunSummary,
   RunView
@@ -26,6 +27,9 @@ import type {
 export const BC_PIXEL_NAME_MAX = 40
 export const BC_PIXEL_LIST_LIMIT = 20
 export const BC_PIXEL_POLL_MS = 2000
+export const BC_PIXEL_ACCOUNTS_LIMIT = 50
+/** `advertiserIds` 1..200 per request (§3.10) */
+export const BC_PIXEL_LINK_MAX = 200
 
 // ── §6.1 409 texts ───────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -165,6 +169,52 @@ export function bcPixelRunColor(run: Pick<RunSummary, 'status' | 'outcome'>): 'p
   return 'warning'
 }
 
+/** the API's default `presses` (`BC_PIXEL_PRESSES`); the BO never sends `presses`, the note only quotes it */
+export const BC_PIXEL_PRESSES_DEFAULT = 3
+
+/** sub-step status of a run (`bpx-run-activate` / `bpx-run-verify-step`) */
+export const BC_PIXEL_RUN_STEP_TEXT: Record<RunStepStatus, string> = {
+  pending: 'รอ',
+  active: 'กำลังทำ',
+  waiting: 'รอตรวจรอบถัดไป',
+  done: 'เสร็จแล้ว',
+  failed: 'ไม่สำเร็จ',
+  skipped: 'ข้าม'
+}
+
+/** `lastStatusRaw` of Events Manager (EXP §3a): 1 = No recent activity, 2 = Active */
+export function bcPixelStatusRawText(raw: number | null | undefined): string {
+  if (raw === 2) return 'Active'
+  if (raw === 1) return 'No recent activity'
+  if (raw === null || raw === undefined) return 'ยังไม่พบ event'
+  return `สถานะ ${raw}`
+}
+
+/** the run can be stopped / resumed / retried (contract §5.1 state table) */
+export function bcPixelRunActions(run: Pick<RunView, 'status' | 'outcome'>): { stop: boolean, stopDisabled: boolean, resume: boolean, retry: boolean } {
+  return {
+    stop: run.status === 'running' || run.status === 'stopping',
+    stopDisabled: run.status === 'stopping',
+    resume: run.status === 'stopped',
+    retry: run.status === 'stopped' || (run.status === 'completed' && (run.outcome === 'notActive' || run.outcome === 'failed'))
+  }
+}
+
+/** toast of a run that just ended (§7.3 titles, level by outcome) */
+export function bcPixelRunEndToast(run: Pick<RunView, 'outcome' | 'activate' | 'verify'>): { title: string, color: 'success' | 'warning' | 'error', detail: string | null } {
+  if (run.outcome === 'active') return { title: BC_PIXEL_TOAST.runActive, color: 'success', detail: 'event Click button เป็น Active แล้ว' }
+  if (run.outcome === 'notActive') return { title: BC_PIXEL_TOAST.runNotActive, color: 'warning', detail: 'ครบเวลารอแล้ว TikTok ยังไม่ยืนยัน — ลองตรวจสถานะอีกครั้งภายหลัง' }
+  const code = run.activate.status === 'failed' ? run.activate.error : run.verify.error ?? run.activate.error
+  return { title: BC_PIXEL_TOAST.runFailed, color: 'error', detail: code ? bcPixelErrorText(code) : null }
+}
+
+/** "ข้าม 2 บัญชี (…3489, …3490)" — the `skipped` ids of a link / unlink 202 */
+export function bcPixelSkippedText(skipped: readonly string[]): string | null {
+  if (!skipped.length) return null
+  const tails = skipped.slice(0, 5).map(id => `…${bcPixelTail(id)}`).join(', ')
+  return `ข้าม ${skipped.length} บัญชีที่อยู่ในสถานะนั้นแล้ว (${tails}${skipped.length > 5 ? ', …' : ''})`
+}
+
 /** `bpx-run-note` */
 export function bcPixelRunNote(presses: number): string {
   return `ระบบจะกดปุ่มบนเว็บจริง ${presses} ครั้ง แล้วรอ TikTok ยืนยัน (ปกติ ~11 นาที สูงสุด 30 นาที)`
@@ -198,6 +248,9 @@ export const BC_PIXEL_TEXT = {
   duplicateText: 'ข้อความซ้ำ — TikTok นับรวมกัน',
   eventStale: 'ข้อความปุ่มบนเว็บเปลี่ยนแล้ว — event นี้จะไม่นับ',
   linkBusy: 'กำลังทำงานผูกบัญชีอยู่',
+  linkedBadge: 'ผูกแล้ว',
+  selectUnlinked: 'เลือกทั้งหมดที่ยังไม่ผูก',
+  unlink: 'เลิกผูก',
   runStart: 'เริ่มทำให้เขียว',
   runVerify: 'ตรวจสถานะอีกครั้ง',
   nameEmpty: 'ชื่อ pixel ว่างไม่ได้',
@@ -332,13 +385,13 @@ export function bcPixelTime(iso: string | null | undefined): string {
   return d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })
 }
 
-/** "m:ss" left until `iso` (0:00 once passed) — the verify countdown */
+/** "mm:ss" left until `iso` (00:00 once passed) — the verify countdown */
 export function bcPixelCountdown(iso: string | null | undefined, now: Date): string {
   if (!iso) return ''
   const t = new Date(iso).getTime()
   if (Number.isNaN(t)) return ''
   const secs = Math.max(0, Math.ceil((t - now.getTime()) / 1000))
-  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+  return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`
 }
 
 // ── request errors ───────────────────────────────────────────────────────────────────────────────────────────────────
