@@ -232,7 +232,7 @@ const today = bangkokToday()
               :single-day="singleDay"
             />
 
-            <ReportPerformanceNowBlock :now="report.now" />
+            <ReportPerformanceNowBlock :now="report.now" :in-range="report.inRange" />
 
             <section class="flex min-w-0 flex-col gap-2">
               <div

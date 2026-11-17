@@ -1,13 +1,16 @@
 <script setup lang="ts">
 /**
  * FEAT-069 — section 3 of `/reports/performance` (`rf-now`): range-independent state — accounts held,
- * advertisers banned, advertisers launching — and the "ต้องดู" box (`rf-watch`), rendered only when one of the
+ * advertisers banned, advertisers launching — FEAT-103: plus one "ในช่วง" line per card (`rf-range-*`, from the
+ * response's `inRange`, follows the range picker) — and the "ต้องดู" box (`rf-watch`), rendered only when one of the
  * four lists has a row. Each row (`rf-watch-row`, `data-kind`) links to the page that fixes it.
  */
-import type { PerfNow } from '#shared/types/report-performance'
+import type { PerfInRange, PerfNow } from '#shared/types/report-performance'
 
 const props = defineProps<{
   now: PerfNow
+  /** FEAT-103 — what happened in the selected range (api-contract v1 §1) */
+  inRange: PerfInRange
 }>()
 
 type WatchKind = 'banned' | 'needsHuman' | 'loggedOut' | 'notDelivering'
@@ -84,7 +87,7 @@ const rows = computed<WatchRow[]>(() => {
       <h2 class="text-sm font-semibold text-highlighted">
         ตอนนี้
       </h2>
-      <span class="text-xs text-muted">สถานะล่าสุด ไม่เปลี่ยนตามช่วงวัน</span>
+      <span class="text-xs text-muted">ตัวเลขใหญ่ = สถานะล่าสุด · "ในช่วง" เปลี่ยนตามช่วงวัน</span>
     </div>
 
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -100,6 +103,15 @@ const rows = computed<WatchRow[]>(() => {
         </span>
         <span class="text-xl font-semibold tabular-nums text-highlighted">{{ formatInt(now.accounts) }} บัญชี</span>
         <span class="text-xs text-muted">{{ formatInt(now.advertisers) }} advertiser</span>
+        <span
+          class="mt-1 flex flex-wrap items-center gap-x-1 border-t border-default pt-1 text-xs text-muted"
+          data-testid="rf-range-accounts"
+          :data-value="inRange.accounts"
+          :data-advertisers="inRange.advertisers"
+        >
+          <span>ในช่วง {{ formatInt(inRange.accounts) }} บัญชี · {{ formatInt(inRange.advertisers) }} advertiser</span>
+          <ReportsInfoHint id="rf-range-accounts" :text="REPORT_HELP['rf-range-accounts']!" />
+        </span>
       </NuxtLink>
       <NuxtLink
         to="/reports/banned"
@@ -116,6 +128,15 @@ const rows = computed<WatchRow[]>(() => {
           :class="now.banned.count > 0 ? 'text-error' : 'text-highlighted'"
         >{{ formatInt(now.banned.count) }}</span>
         <span class="text-xs text-muted">ดูรายการ →</span>
+        <span
+          class="mt-1 flex flex-wrap items-center gap-x-1 border-t border-default pt-1 text-xs text-muted"
+          data-testid="rf-range-banned"
+          :data-value="inRange.banned"
+          :data-lifted="inRange.lifted"
+        >
+          <span>ในช่วง ระงับ {{ formatInt(inRange.banned) }} · ปลด {{ formatInt(inRange.lifted) }}</span>
+          <ReportsInfoHint id="rf-range-banned" :text="REPORT_HELP['rf-range-banned']!" />
+        </span>
       </NuxtLink>
       <NuxtLink
         to="/ads-monitor"
@@ -134,6 +155,14 @@ const rows = computed<WatchRow[]>(() => {
           data-testid="rf-now-launching-nd"
         >ไม่ส่ง {{ formatInt(now.notDelivering.count) }}</span>
         <span v-else class="text-xs text-muted">build คิว {{ formatInt(now.builds.queued) }} · กำลังทำ {{ formatInt(now.builds.running) }}</span>
+        <span
+          class="mt-1 flex flex-wrap items-center gap-x-1 border-t border-default pt-1 text-xs text-muted"
+          data-testid="rf-range-launching"
+          :data-value="inRange.launching"
+        >
+          <span>ในช่วง {{ formatInt(inRange.launching) }} advertiser</span>
+          <ReportsInfoHint id="rf-range-launching" :text="REPORT_HELP['rf-range-launching']!" />
+        </span>
       </NuxtLink>
     </div>
 

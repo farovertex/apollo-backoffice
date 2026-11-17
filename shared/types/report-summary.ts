@@ -31,6 +31,9 @@ export interface GroupedReportResponse {
   range: ReportRangeInfo
   intervalMs: number
   refreshedAt: string | null
+  /** FEAT-103 §3 — ads of the filtered set regardless of the range (the old `adCount`) */
+  adTotal: number
+  /** ads of the set with a per-ad row in the range */
   adCount: number
   advertiserCount: number
   accountCount: number
