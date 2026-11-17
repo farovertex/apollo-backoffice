@@ -38,8 +38,13 @@ const countdown = computed(() =>
 )
 const deadline = computed(() => bcPixelTime(verify.value.deadlineAt))
 
-/** activate went back to `pending` after `ruleNotEffective` — the engine presses again later */
-const activateRetrying = computed(() => activate.value.status === 'pending' && activate.value.attempts > 0 && props.run.status === 'running')
+/** activate is `waiting` (v1.4) or went back to `pending` after `ruleNotEffective` — the engine presses again later */
+const activateRetrying = computed(() => (activate.value.status === 'waiting' || activate.value.status === 'pending') && activate.value.attempts > 0 && props.run.status === 'running')
+const activateStepText = computed(() =>
+  activate.value.status === 'waiting'
+    ? `รอลองกดปุ่มใหม่ (พยายามแล้ว ${activate.value.attempts} ครั้ง)`
+    : BC_PIXEL_RUN_STEP_TEXT[activate.value.status]
+)
 
 const STEP_ICON: Record<string, { name: string, class: string }> = {
   pending: { name: 'i-lucide-circle-dashed', class: 'text-dimmed' },
@@ -100,7 +105,7 @@ function icon(status: string): { name: string, class: string } {
       <div class="min-w-0 flex-1 space-y-0.5">
         <p class="flex flex-wrap items-center gap-x-2">
           <span class="font-medium text-highlighted">กดปุ่ม</span>
-          <span class="text-muted">{{ BC_PIXEL_RUN_STEP_TEXT[activate.status] }}</span>
+          <span class="text-muted" data-testid="bpx-run-activate-text">{{ activateStepText }}</span>
         </p>
         <p v-if="activate.status === 'skipped' && run.mode === 'verifyOnly'" class="text-muted">
           ไม่กดปุ่ม — อ่านสถานะ event อย่างเดียว
