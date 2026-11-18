@@ -86,7 +86,7 @@ const rows = computed<WatchRow[]>(() => {
   <section class="flex flex-col gap-2" data-testid="rf-now">
     <div class="flex flex-wrap items-baseline gap-2">
       <h2 class="text-sm font-semibold text-highlighted">
-        ตอนนี้
+        บัญชีและ advertiser
       </h2>
       <span class="text-xs text-muted">ตัวเลขใหญ่ = ในช่วงวันที่เลือก · "ตอนนี้" = สถานะล่าสุด ไม่ขึ้นกับช่วงวัน</span>
     </div>

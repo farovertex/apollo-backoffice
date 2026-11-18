@@ -37,7 +37,7 @@ const ndCount = computed(() => props.now.launching.notDelivering)
   <section class="flex min-w-0 flex-col gap-3" data-testid="rd-delivery">
     <div class="flex flex-wrap items-baseline gap-2">
       <h2 class="flex items-center gap-1 text-sm font-semibold text-highlighted">
-        <span>การส่งโฆษณาตอนนี้</span>
+        <span>การส่งโฆษณา</span>
         <ReportsInfoHint id="rd-delivery" :text="REPORT_HELP['rd-delivery']!" />
       </h2>
       <span class="text-xs text-muted">ตัวเลขใหญ่ = ในช่วงวันที่เลือก · "ตอนนี้" = สถานะล่าสุด ไม่ขึ้นกับช่วงวัน · ข้อมูลรอบ kpi {{ formatClock(now.refreshedAt) }}</span>
