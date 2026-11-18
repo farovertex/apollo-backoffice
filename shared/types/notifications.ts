@@ -3,7 +3,7 @@
  * Views come from the API's `toNotificationView()`: ids are strings, timestamps ISO, `null` where unknown.
  */
 
-/** the 9 event kinds (contract §1.1 / Definitions) */
+/** the event kinds (FEAT-095 contract §1.1 / Definitions; `pixelRunFinished` = FEAT-102 contract §5.3) */
 export type NotificationKind
   = 'login'
     | 'build'
@@ -14,6 +14,8 @@ export type NotificationKind
     | 'advBanned'
     | 'adApproved'
     | 'adRejected'
+    /** FEAT-102: an activation run of a BC pixel ended (active / notActive / failed); link `/bc-pixels?pixel=<id>` */
+    | 'pixelRunFinished'
 
 /** severity → colour + icon in the BO */
 export type NotificationLevel = 'success' | 'error' | 'warning' | 'info'
@@ -42,6 +44,9 @@ export interface NotificationRef {
   humanTaskId?: string
   /** up to 50 ad ids (adApproved / adRejected) */
   adIds?: string[]
+  /** FEAT-102 `pixelRunFinished` */
+  pixelId?: string
+  runId?: string
   /** only on failures */
   errorCode?: string
   trigger?: 'manual' | 'auto'
