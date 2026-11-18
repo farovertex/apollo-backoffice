@@ -251,13 +251,21 @@ function clearFilters() {
   })
 }
 
+// FEAT-103 — the counts follow the range: `adTotal` = ads of the filtered set regardless of the range (the old
+// `adCount`), `adCount` = those with data in the range. "No ads at all" / "no match" key off `adTotal`; a set that
+// is not empty but has nothing in the range gets its own state (`rs-empty-range`, no Launch button).
+const adTotal = computed(() => grouped.value?.adTotal ?? grouped.value?.adCount ?? 0)
+const adCount = computed(() => grouped.value?.adCount ?? 0)
 const isEmpty = computed(() =>
-  loaded.value && !error.value && !forbidden.value && (grouped.value?.adCount ?? 0) === 0 && !hasFilter.value
+  loaded.value && !error.value && !forbidden.value && adTotal.value === 0 && !hasFilter.value
 )
 const isNoMatch = computed(() =>
-  loaded.value && !error.value && !forbidden.value && (grouped.value?.adCount ?? 0) === 0 && hasFilter.value
+  loaded.value && !error.value && !forbidden.value && adTotal.value === 0 && hasFilter.value
 )
-const showTable = computed(() => !error.value && !forbidden.value && !isEmpty.value && !isNoMatch.value)
+const isEmptyRange = computed(() =>
+  loaded.value && !error.value && !forbidden.value && adCount.value === 0 && adTotal.value > 0
+)
+const showTable = computed(() => !error.value && !forbidden.value && !isEmpty.value && !isNoMatch.value && !isEmptyRange.value)
 const showSkeleton = computed(() => pending.value && !loaded.value && !error.value && !forbidden.value)
 
 // ── header ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -464,7 +472,17 @@ function setGroupSort(value: string) {
             </template>
           </UEmpty>
 
+          <UEmpty
+            v-else-if="isEmptyRange"
+            icon="i-lucide-calendar-x"
+            title="ไม่มีโฆษณาที่มีข้อมูลในช่วงที่เลือก"
+            data-testid="rs-empty-range"
+          />
+
           <template v-else-if="showTable && grouped">
+            <p class="text-xs text-muted" data-testid="rs-count-note">
+              นับเฉพาะโฆษณาที่มีข้อมูลในช่วงที่เลือก
+            </p>
             <ReportSummaryGroupTable
               :accounts="grouped.accounts"
               :totals="grouped.totals"
