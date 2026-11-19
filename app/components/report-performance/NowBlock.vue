@@ -1,13 +1,17 @@
 <script setup lang="ts">
 /**
- * FEAT-069 — section 3 of `/reports/performance` (`rf-now`): range-independent state — accounts held,
- * advertisers banned, advertisers launching — and the "ต้องดู" box (`rf-watch`), rendered only when one of the
+ * FEAT-069 — section 3 of `/reports/performance` (`rf-now`): accounts held, advertisers banned, advertisers
+ * launching. FEAT-103 v2: the BIG figure of each card is the in-range value (`rf-range-*`, from the response's
+ * `inRange`, follows the range picker); the range-independent "now" value (`rf-now-*` `data-value`) is the
+ * small `ตอนนี้` line. Then the "ต้องดู" box (always now, marked `ตอนนี้`) (`rf-watch`), rendered only when one of the
  * four lists has a row. Each row (`rf-watch-row`, `data-kind`) links to the page that fixes it.
  */
-import type { PerfNow } from '#shared/types/report-performance'
+import type { PerfInRange, PerfNow } from '#shared/types/report-performance'
 
 const props = defineProps<{
   now: PerfNow
+  /** FEAT-103 — what happened in the selected range (api-contract v1 §1) */
+  inRange: PerfInRange
 }>()
 
 type WatchKind = 'banned' | 'needsHuman' | 'loggedOut' | 'notDelivering'
@@ -82,9 +86,9 @@ const rows = computed<WatchRow[]>(() => {
   <section class="flex flex-col gap-2" data-testid="rf-now">
     <div class="flex flex-wrap items-baseline gap-2">
       <h2 class="text-sm font-semibold text-highlighted">
-        ตอนนี้
+        บัญชีและ advertiser
       </h2>
-      <span class="text-xs text-muted">สถานะล่าสุด ไม่เปลี่ยนตามช่วงวัน</span>
+      <span class="text-xs text-muted">ตัวเลขใหญ่ = ในช่วงวันที่เลือก · "ตอนนี้" = สถานะล่าสุด ไม่ขึ้นกับช่วงวัน</span>
     </div>
 
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -98,8 +102,19 @@ const rows = computed<WatchRow[]>(() => {
           <span>บัญชีที่ถืออยู่</span>
           <ReportsInfoHint id="rf-now-accounts" :text="REPORT_HELP['rf-now-accounts']!" />
         </span>
-        <span class="text-xl font-semibold tabular-nums text-highlighted">{{ formatInt(now.accounts) }} บัญชี</span>
-        <span class="text-xs text-muted">{{ formatInt(now.advertisers) }} advertiser</span>
+        <span
+          class="flex min-w-0 flex-col gap-0.5"
+          data-testid="rf-range-accounts"
+          :data-value="inRange.accounts"
+          :data-advertisers="inRange.advertisers"
+        >
+          <span class="flex flex-wrap items-center gap-x-1">
+            <span class="text-xl font-semibold tabular-nums text-highlighted">{{ formatInt(inRange.accounts) }} บัญชี</span>
+            <ReportsInfoHint id="rf-range-accounts" :text="REPORT_HELP['rf-range-accounts']!" />
+          </span>
+          <span class="text-xs text-muted">{{ formatInt(inRange.advertisers) }} advertiser</span>
+        </span>
+        <span class="mt-1 border-t border-default pt-1 text-xs text-muted">ตอนนี้ {{ formatInt(now.accounts) }} บัญชี · {{ formatInt(now.advertisers) }} advertiser</span>
       </NuxtLink>
       <NuxtLink
         to="/reports/banned"
@@ -112,10 +127,20 @@ const rows = computed<WatchRow[]>(() => {
           <ReportsInfoHint id="rf-now-banned" :text="REPORT_HELP['rf-now-banned']!" />
         </span>
         <span
-          class="text-xl font-semibold tabular-nums"
-          :class="now.banned.count > 0 ? 'text-error' : 'text-highlighted'"
-        >{{ formatInt(now.banned.count) }}</span>
-        <span class="text-xs text-muted">ดูรายการ →</span>
+          class="flex flex-wrap items-center gap-x-1"
+          data-testid="rf-range-banned"
+          :data-value="inRange.banned"
+          :data-lifted="inRange.lifted"
+        >
+          <span
+            class="text-xl font-semibold tabular-nums"
+            :class="inRange.banned > 0 ? 'text-error' : 'text-highlighted'"
+          >ระงับ {{ formatInt(inRange.banned) }} · ปลด {{ formatInt(inRange.lifted) }}</span>
+          <ReportsInfoHint id="rf-range-banned" :text="REPORT_HELP['rf-range-banned']!" />
+        </span>
+        <span class="mt-1 border-t border-default pt-1 text-xs text-muted">
+          ตอนนี้ถูกระงับอยู่ <span :class="now.banned.count > 0 ? 'font-semibold text-error' : ''">{{ formatInt(now.banned.count) }}</span> · ดูรายการ →
+        </span>
       </NuxtLink>
       <NuxtLink
         to="/ads-monitor"
@@ -127,13 +152,21 @@ const rows = computed<WatchRow[]>(() => {
           <span>Advertiser กำลังยิง</span>
           <ReportsInfoHint id="rf-now-launching" :text="REPORT_HELP['rf-now-launching']!" />
         </span>
-        <span class="text-xl font-semibold tabular-nums text-success">{{ formatInt(now.launching) }}</span>
+        <span
+          class="flex flex-wrap items-center gap-x-1"
+          data-testid="rf-range-launching"
+          :data-value="inRange.launching"
+        >
+          <span class="text-xl font-semibold tabular-nums text-success">{{ formatInt(inRange.launching) }}<span class="ml-1 text-xs font-normal text-muted">advertiser</span></span>
+          <ReportsInfoHint id="rf-range-launching" :text="REPORT_HELP['rf-range-launching']!" />
+        </span>
+        <span class="mt-1 border-t border-default pt-1 text-xs text-muted">ตอนนี้ {{ formatInt(now.launching) }} advertiser</span>
         <span
           v-if="now.notDelivering.count > 0"
           class="text-xs text-warning"
           data-testid="rf-now-launching-nd"
-        >ไม่ส่ง {{ formatInt(now.notDelivering.count) }}</span>
-        <span v-else class="text-xs text-muted">build คิว {{ formatInt(now.builds.queued) }} · กำลังทำ {{ formatInt(now.builds.running) }}</span>
+        >ตอนนี้ไม่ส่ง {{ formatInt(now.notDelivering.count) }}</span>
+        <span v-else class="text-xs text-muted">ตอนนี้ build คิว {{ formatInt(now.builds.queued) }} · กำลังทำ {{ formatInt(now.builds.running) }}</span>
       </NuxtLink>
     </div>
 
@@ -144,6 +177,7 @@ const rows = computed<WatchRow[]>(() => {
     >
       <h3 class="mb-2 flex items-center gap-1 text-xs font-semibold text-warning">
         <span>ต้องดู</span>
+        <span class="font-normal text-muted">ตอนนี้</span>
         <ReportsInfoHint id="rf-watch" :text="REPORT_HELP['rf-watch']!" />
       </h3>
       <ul class="flex flex-col divide-y divide-default">

@@ -73,6 +73,19 @@ export interface DashboardAccountRow extends SpendFxRow {
   state: PerfAccountState
 }
 
+/** FEAT-103 (api-contract v1 §2) — what happened inside the selected range; `GET /reports/dashboard/now` has none */
+export interface DashboardInRange {
+  banned: number
+  lifted: number
+  launching: number
+  delivery: {
+    stopped: number
+    resumed: number
+    reasons: { reason: string, count: number }[]
+  }
+  ads: { total: number, delivering: number, pending: number, rejected: number, ended: number, unknown: number }
+}
+
 export interface DashboardResponse {
   range: ReportRangeInfo
   previous: { from: string | null, to: string | null } | null
@@ -88,6 +101,8 @@ export interface DashboardResponse {
   byAccount: DashboardAccountRow[]
   /** FEAT-084 §2.1 — scope-wide balances (absent on an older API) */
   now?: { balance: DashboardBalance[], balanceThb: BalanceThb }
+  /** FEAT-103 §2 */
+  inRange: DashboardInRange
   fx?: FxReportBlock
 }
 

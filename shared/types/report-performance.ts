@@ -116,6 +116,18 @@ export interface PerfNow {
   notDelivering: PerfList<PerfNotDeliveringItem>
 }
 
+/**
+ * FEAT-103 (api-contract v1 §1) — `inRange`: what happened inside the selected range, next to the range-free
+ * `now`. `banned` / `lifted` / `launching` are distinct advertisers, not events.
+ */
+export interface PerfInRange {
+  accounts: number
+  advertisers: number
+  banned: number
+  lifted: number
+  launching: number
+}
+
 export interface PerfDayRow extends SpendFx {
   day: string
   spend: number
@@ -185,6 +197,8 @@ export interface PerformanceResponse {
   previousResults: Omit<PerfResults, 'spendByDay'> | null
   trend: PerfSpendDay[]
   now: PerfNow
+  /** FEAT-103 §1 */
+  inRange: PerfInRange
   byDay: PerfDayRow[]
   byWorkspace: PerfWorkspaceRow[]
   byUtm: PerfUtmRow[]

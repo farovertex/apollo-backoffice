@@ -229,7 +229,7 @@ const pageState = computed(() => {
               @chart="scope.setExtra"
             />
 
-            <ReportDashboardDeliveryBlock :now="nowState" />
+            <ReportDashboardDeliveryBlock :now="nowState" :in-range="report.inRange" />
 
             <section v-if="isGod" class="flex min-w-0 flex-col gap-2">
               <h2 class="text-sm font-semibold text-highlighted">
