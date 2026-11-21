@@ -83,6 +83,11 @@ export interface LaunchAdvertiser {
    * advertiser's currency. Optional for the reader (an older API reads as "no rule").
    */
   adGroupGuard?: AdGroupGuardEffective
+  /**
+   * FEAT-104 (api-contract v1 §3.2, 10th key) — pixels linked to this advertiser (default first). Optional for
+   * the reader: an older API reads as "unknown" (no label, no lead gate).
+   */
+  pixels?: LaunchPixel[]
 }
 
 /** One TikTok account of `GET /launch/targets` (available accounts first, then label/loginEmail). */
@@ -142,16 +147,54 @@ export type OrderStatus = 'queued' | 'running' | 'done' | 'partialFailed' | 'fai
 export type BuildStatus = 'queued' | 'running' | 'ready' | 'published' | 'failed' | 'cancelled'
 export type BuildStepStatus = 'running' | 'done' | 'failed'
 
-/** Fixed campaign preset of this round (no campaign templates yet, function 6.1). */
-export interface CampaignPreset {
-  objective: 'salesCashback'
-  destination: 'websiteConversions'
-}
+/**
+ * FEAT-104 (api-contract v1 §3.3) — the campaign preset computed from the ad group template at order time:
+ * Sales `{ salesCashback, websiteConversions }` or Lead generation `{ leadGeneration, websiteEngagements }`.
+ * Readers use `objective` (never the `adGroupConfig` snapshot, which may lack `campaign.objective`).
+ */
+export type CampaignPreset
+  = | { objective: 'salesCashback', destination: 'websiteConversions' }
+    | { objective: 'leadGeneration', destination: 'websiteEngagements' }
 
 /** One `targets[]` entry of the create body. */
 export interface CreateOrderTarget {
   tiktokAccountId: string
   advertiserId: string
+  /**
+   * FEAT-104 (api-contract v1 §3.3) — Lead generation orders only (a Sales order with it = 400): the pixel the
+   * admin picked for this target in Review. Omitted = the API's default rule (§3.1).
+   */
+  pixelId?: string
+}
+
+/** FEAT-104 (api-contract v1 §3.2) — the event of a launch pixel (`null` when the pixel has none) */
+export interface LaunchPixelEvent {
+  eventCode: string
+  status: string
+  activeAt: string | null
+}
+
+/**
+ * FEAT-104 (api-contract v1 §3.2) — one pixel linked to an advertiser, sorted by the default rule; exactly one
+ * `isDefault` when the list is not empty. Never the full pixel code.
+ */
+export interface LaunchPixel {
+  id: string
+  name: string
+  pixelCodeLast4: string
+  /** the pixel's site address — the ad's landing URL of a Lead generation build */
+  url: string | null
+  event: LaunchPixelEvent | null
+  isDefault: boolean
+}
+
+/** FEAT-104 (api-contract v1 §3.4) — `BuildView.pixel`: the snapshot taken at order time (lead builds only) */
+export interface BuildPixelView {
+  id: string
+  name: string
+  pixelCodeLast4: string
+  url: string | null
+  event: { eventCode: string, status: string } | null
 }
 
 /** `POST /campaign-orders` body (zod **strict** on the API side — no extra key). */
@@ -349,6 +392,11 @@ export interface BuildView {
    * created before the feature (and `undefined` from an older API — same meaning).
    */
   adGroupGuard?: BuildAdGroupGuard | null
+  /**
+   * FEAT-104 (api-contract v1 §3.4, 25th key) — the pixel snapshot of a Lead generation build; `null` for Sales
+   * builds and for builds created before the feature (`undefined` from an older API — same meaning).
+   */
+  pixel?: BuildPixelView | null
 }
 
 /** `POST /campaign-orders` 201 body. */

@@ -17,11 +17,15 @@
  * the same `GET /ad-templates/:id/cover` the detail page already uses); **กฎปิด ad group** is the
  * `orderGuardCell()` summary of every build's FEAT-086/087 guard snapshot (rule text + source badge of the
  * leading rule, "+N กฎ" for the rest, and the `adGroups[]` counts line).
+ *
+ * FEAT-104 (api-contract v1 §3.4 · spec AC-22) — the order's objective badge `ord-objective` under its name, from
+ * `campaignPreset.objective` (Sales / Lead generation; the full campaign line as its title). No new request.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
 import type { ApiErrorBody } from '#shared/types/auth'
 import type { CampaignOrdersResponse, OrderStatus, OrderView, PublishMode } from '#shared/types/campaign-orders'
+import { OBJECTIVE_BADGE, campaignLineOfPreset, objectiveBadgeColor, objectiveOfPreset } from '~/utils/objective'
 
 useSeoMeta({ title: 'Orders' })
 
@@ -413,6 +417,18 @@ function openOrder(order: OrderView) {
                       {{ order.name }}
                     </NuxtLink>
                     <span class="text-xs text-muted">{{ shortId(order.id) }}</span>
+                    <!-- FEAT-104 — from `campaignPreset.objective` (an order created before the feature reads as Sales) -->
+                    <UBadge
+                      :color="objectiveBadgeColor(objectiveOfPreset(order.campaignPreset))"
+                      variant="subtle"
+                      size="sm"
+                      class="mt-1 w-fit whitespace-nowrap"
+                      :title="campaignLineOfPreset(order.campaignPreset)"
+                      :data-objective="objectiveOfPreset(order.campaignPreset)"
+                      data-testid="ord-objective"
+                    >
+                      {{ OBJECTIVE_BADGE[objectiveOfPreset(order.campaignPreset)] }}
+                    </UBadge>
                   </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
