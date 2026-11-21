@@ -53,6 +53,17 @@ export type DaypartingSchedule = Record<DaypartingDay, DaypartingRange[]>
 export type BudgetStrategy = 'cbo' | 'adGroup'
 /** FEAT-061 — `config.campaign.bidStrategy`; `costCap` is the only one that uses `config.targetCpa` */
 export type BidStrategy = 'maxResults' | 'costCap'
+/**
+ * FEAT-104 (api-contract v1 §1.1) — `config.campaign.objective`. Absent on a stored Sales row (read as `sales`;
+ * the API's view fills `'sales'` at read time for Smart+ rows). `leadGeneration` = the Lead generation variant:
+ * no `placement`, `optimizationGoal` + `optimizationEvent` required, budget strategy / bid strategy locked.
+ */
+export type AdGroupObjective = 'sales' | 'leadGeneration'
+/** FEAT-104 — `config.optimizationGoal` (lead only): the one goal of this round */
+export type OptimizationGoal = 'websiteEngagements'
+/** FEAT-104 — `config.optimizationEvent` (lead only): the one event FEAT-102 creates */
+export type OptimizationEvent = 'clickButton'
+
 /** TASK-adgroup-targeting — `config.targetingMode`: which mode the worker puts TikTok's audience section in */
 export type TargetingMode = 'auto' | 'manual'
 /** TASK-adgroup-targeting — `config.spendingPower`: TikTok's "กำลังซื้อ" chip, **manual mode only** */
@@ -73,6 +84,11 @@ export interface TargetingModeHint {
  * `null` for `adGroup`; `name` is trimmed and `''` is sent as `null` (= let TikTok name the campaign).
  */
 export interface AdGroupCampaign {
+  /**
+   * FEAT-104 — `sales` | `leadGeneration`; optional (a stored Sales row has none, and a Sales body may omit it).
+   * Read it through `objectiveOf()` of `app/utils/objective.ts`, never directly.
+   */
+  objective?: AdGroupObjective
   /**
    * TASK-adgroup-targeting — **ignored by the worker**: the campaign always keeps TikTok's own default name, so
    * the BO has no input for it and always sends `null`. The key stays in the shape because stored templates
@@ -135,8 +151,15 @@ export interface AdGroupConfig {
    * `campaign.bidStrategy === 'costCap'` and must be `null` for `maxResults`. Replaces v2's `costCap`.
    */
   targetCpa: number | null
-  /** `instantPage` is the only placement the Smart+ worker supports (`website` → preflight refuses the build) */
-  placement: Placement
+  /**
+   * `instantPage` is the only placement the Smart+ worker supports (`website` → preflight refuses the build).
+   * FEAT-104: **Sales only** — a Lead generation config has no such key (sending it = 400), hence optional here.
+   */
+  placement?: Placement
+  /** FEAT-104 — Lead generation only (required there, forbidden with Sales) */
+  optimizationGoal?: OptimizationGoal
+  /** FEAT-104 — Lead generation only (required there, forbidden with Sales) */
+  optimizationEvent?: OptimizationEvent
   /** ISO-3166 alpha-2, at least one, no duplicates */
   locations: string[]
   /** empty array = unlimited (`options.ageGroupsUnlimitedLabel`) */
@@ -216,6 +239,11 @@ export interface AdGroupTemplate {
   canEdit: boolean
   createdAt: string
   updatedAt: string
+  /**
+   * FEAT-104 (api-contract v1 §1.5, key after `kind`) — `objectiveOf(stored config)`; manual rows `'sales'`.
+   * Optional so an older API still type-checks (then the BO derives it from `config.campaign.objective`).
+   */
+  objective?: AdGroupObjective
 }
 
 /** `GET /ad-group-templates` 200 body — paginated envelope. */
@@ -308,6 +336,23 @@ export interface AdGroupTemplateOptions {
   catalogVersion: string
   /** the limits the BO validates the tag inputs with */
   listLimits: AdGroupListLimits
+  /**
+   * FEAT-104 (api-contract v1 §1.6) — `sales` / `leadGeneration` labels. Optional: an API that predates the
+   * feature serves none, and then the form hides the objective selector and behaves as Sales only.
+   */
+  objective?: OptionItem[]
+  /** FEAT-104 — `websiteEngagements` label */
+  optimizationGoal?: OptionItem[]
+  /** FEAT-104 — `clickButton` label */
+  optimizationEvent?: OptionItem[]
+  /** FEAT-104 — the locked campaign values and the defaults of the Lead generation variant */
+  leadGeneration?: LeadGenerationOptions
+}
+
+/** FEAT-104 (api-contract v1 §1.6) — `options.leadGeneration` */
+export interface LeadGenerationOptions {
+  locked: { budgetStrategy: BudgetStrategy, bidStrategy: BidStrategy }
+  defaults: { optimizationGoal: OptimizationGoal, optimizationEvent: OptimizationEvent }
 }
 
 /** `POST /ad-group-templates` body — `config` is complete (all 17 keys of v3.1), never `catalogVersion`. */

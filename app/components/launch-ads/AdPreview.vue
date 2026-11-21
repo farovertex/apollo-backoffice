@@ -25,6 +25,8 @@ import type {
   AdTemplateOptions,
   OptionItem
 } from '#shared/types/ad-templates'
+import { instantPageOf } from '#shared/types/ad-templates'
+import { DESTINATION_URL, destinationOfTemplate } from '~/utils/objective'
 import { adAddOnSummaryText, readAdAddOn } from '~/utils/ad-add-on'
 import { ctaValuesFrom } from '~/utils/ad-cta'
 import { hasButtonImage } from '~/utils/ad-cta-image'
@@ -84,7 +86,18 @@ function ctaLabel(value: string): string {
 }
 
 // ── อินสแตนท์เพจ ─────────────────────────────────────────────────────────────────────────────────────────────
-const destinationPage = computed(() => props.template?.config?.destination?.page ?? null)
+const destinationPage = computed(() => instantPageOf(props.template?.config?.destination)?.page ?? null)
+/**
+ * FEAT-104 — a Website URL template has no instant page and no ad texts: the ad keeps the post's own text and
+ * links to the site of the pixel chosen per advertiser (decisions 14, 17).
+ */
+const isUrl = computed(() => destinationOfTemplate(props.template) === DESTINATION_URL)
+const productDetails = computed(() => props.template?.config?.productDetails ?? null)
+const URL_TEXT = {
+  texts: 'ใช้ข้อความของโพสต์ (ไม่มีข้อความโฆษณาใน template)',
+  site: 'ลิงก์ของ pixel ต่อบัญชี (ดู Targets)',
+  productDetails: (n: number, clear: boolean) => `${n} ข้อ${clear ? ' · ล้างข้อความที่ TikTok เติมให้' : ''}`
+} as const
 const buttonMode = computed<'text' | 'image' | 'library'>(() => {
   const page = destinationPage.value
   if (page?.selection !== 'create') return 'library'
@@ -208,7 +221,7 @@ const IMAGE_ERROR_TITLE = 'โหลดรูปไม่ได้'
       class="rounded-lg border border-dashed border-default px-3 py-4 text-xs text-muted"
       :data-testid="`${testid}-empty`"
     >
-      เลือก ad template แล้วจะเห็นโพสต์ อินสแตนท์เพจ และ add-on ที่จะถูกสร้าง
+      เลือก ad template แล้วจะเห็นโพสต์ ปลายทาง และ add-on ที่จะถูกสร้าง
     </p>
 
     <div v-else class="grid grid-cols-[7rem_1fr] items-start gap-3">
@@ -245,7 +258,8 @@ const IMAGE_ERROR_TITLE = 'โหลดรูปไม่ได้'
           ข้อความ
         </dt>
         <dd class="flex min-w-0 flex-col gap-0.5" :data-testid="`${testid}-texts`">
-          <template v-if="adTexts.length > 0">
+          <span v-if="isUrl" class="text-dimmed">{{ URL_TEXT.texts }}</span>
+          <template v-else-if="adTexts.length > 0">
             <span
               v-for="(text, i) in adTexts"
               :key="`${i}-${text}`"
@@ -276,10 +290,31 @@ const IMAGE_ERROR_TITLE = 'โหลดรูปไม่ได้'
           <span v-if="ctaValues.length === 0" class="text-dimmed">—</span>
         </dd>
 
-        <dt class="text-muted">
+        <!-- FEAT-104 — Website URL: the pixel's site link per account + the product-details count -->
+        <template v-if="isUrl">
+          <dt class="text-muted">
+            เว็บไซต์
+          </dt>
+          <dd class="min-w-0 break-words text-highlighted" :data-testid="`${testid}-site`">
+            {{ URL_TEXT.site }}
+          </dd>
+          <dt class="text-muted">
+            รายละเอียดสินค้า
+          </dt>
+          <dd class="min-w-0 break-words text-highlighted" :data-testid="`${testid}-product-details`">
+            {{ URL_TEXT.productDetails(productDetails?.items?.length ?? 0, productDetails?.clearSuggested === true) }}
+          </dd>
+        </template>
+
+        <dt v-if="!isUrl" class="text-muted">
           อินสแตนท์เพจ
         </dt>
-        <dd class="flex min-w-0 flex-col gap-0.5" :data-testid="`${testid}-page`" :data-button="buttonMode">
+        <dd
+          v-if="!isUrl"
+          class="flex min-w-0 flex-col gap-0.5"
+          :data-testid="`${testid}-page`"
+          :data-button="buttonMode"
+        >
           <span v-if="buttonMode === 'image'" class="flex items-center gap-1">
             <img
               v-if="buttonImageSrc"

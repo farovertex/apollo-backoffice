@@ -135,6 +135,22 @@
  * workspace → the non-blocking warning `la-ws-mixed`. A 400 `issues[].path === 'adTemplateId'` now lands under
  * the ad-template picker (`la-adt-error`, verbatim) instead of the shared `la-template-field-error`, which keeps
  * serving `adGroupTemplateId` (FEAT-061 AC-20).
+ *
+ * **FEAT-104** (api-contract v1 §3.2–§3.4 · spec AC-20, AC-21, decisions 16–18) — Lead generation:
+ * - step 1: every advertiser row of the expanded list carries its pixel label `la-adv-pixel` (none / the name /
+ *   "n pixels", from the advertiser's `pixels`; absent when an older API serves no list);
+ * - step 2: both card lists carry their kind badge (`la-agt-objective`, `la-adt-destination`). Once one side is
+ *   picked, the cards of the other kind on the other side are disabled with the reason in place of their summary
+ *   line (`la-agt-block-reason` / `la-adt-block-reason`, `data-blocked`); a lead ad group card is also disabled
+ *   while a selected advertiser has `pixels: []` (the names are listed). `la-agt-clear` / `la-adt-clear` drop a
+ *   pick so the other side can switch kind. A pick that becomes blocked (selection changed) is dropped.
+ *   The campaign line (Summary `la-campaign-objective` / `la-campaign-destination`, Review `la-review-campaign`)
+ *   reads the selected ad group template — Sales (as before) until one is picked;
+ * - step 3 (lead pair only): `la-review-pixel-event`, the decision-18 warning `la-review-lead-warning`, and per
+ *   target `la-review-pixel` (name + `…last4`) + `la-review-pixel-url`, or the select `la-review-pixel-select` when
+ *   the advertiser has more than one pixel (default = `isDefault`). The pick is kept per advertiser id and only
+ *   used while it is still one of that advertiser's pixels and the pair is lead; every lead target sends the
+ *   pixel shown as `targets[].pixelId`. A Sales pair renders none of it and never sends `pixelId`.
  */
 import { formatTimeAgo, useLocalStorage } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -147,8 +163,11 @@ import type {
   OptionItem
 } from '#shared/types/ad-group-templates'
 import type { AdTemplate, AdTemplateOptions, AdTemplatesResponse } from '#shared/types/ad-templates'
+import { instantPageOf } from '#shared/types/ad-templates'
 import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
 import type {
+  CreateOrderTarget,
+  LaunchPixel,
   CreateOrderBody,
   CreateOrderCurrencyUnknownBody,
   CreateOrderRejectedBody,
@@ -161,6 +180,25 @@ import type {
 } from '#shared/types/campaign-orders'
 import type { AdGroupGuardMode, AdGroupGuardRule, AdGroupGuardSource } from '#shared/types/ad-group-guard'
 import type { AdGroupGuardDraft } from '~/utils/ad-group-guard'
+import {
+  CAMPAIGN_LINE,
+  DESTINATION_BADGE,
+  DESTINATION_URL,
+  LEAD_BUILD_WARNING,
+  OBJECTIVE_BADGE,
+  OBJECTIVE_LEAD,
+  OBJECTIVE_SALES,
+  PAIRING_REASON,
+  URL_DESTINATION_TEXT,
+  defaultPixelOf,
+  destinationBadgeColor,
+  destinationFor,
+  destinationOfTemplate,
+  objectiveBadgeColor,
+  objectiveOfTemplate,
+  pixelCountLabel,
+  pixelLabel
+} from '~/utils/objective'
 
 useSeoMeta({ title: 'Launch ads' })
 
@@ -906,7 +944,8 @@ const agtUsable = computed(() => agtFiltered.value.filter(t => !isAgtManual(t)))
 const agtFolded = computed(() => agtFiltered.value.filter(isAgtManual))
 // the rows of the first group include the deleted ones (rendered disabled, FEAT-079) — the count tells how many can be picked
 const adtUsable = computed(() => adtFiltered.value.filter(t => !isAdtStale(t)))
-const adtPickableCount = computed(() => adtUsable.value.filter(t => !isAdtDeleted(t)).length)
+// FEAT-104 — a card blocked by the pairing rule is not counted as usable either
+const adtPickableCount = computed(() => adtUsable.value.filter(t => !isAdtDeleted(t) && !adtBlockReason(t)).length)
 const adtFolded = computed(() => adtFiltered.value.filter(isAdtStale))
 
 const agtFoldOpen = ref(false)
@@ -920,7 +959,9 @@ function countText(usable: number, folded: number, reason: string): string {
   return folded > 0 ? `${usable} ใช้ได้ · ${folded} ${reason}` : `${usable} ใช้ได้`
 }
 
-const agtCountText = computed(() => countText(agtUsable.value.length, agtFolded.value.length, AGT_FOLD_REASON))
+const agtCountText = computed(() =>
+  countText(agtUsable.value.filter(t => !agtBlockReason(t)).length, agtFolded.value.length, AGT_FOLD_REASON)
+)
 const adtCountText = computed(() => countText(adtPickableCount.value, adtFolded.value.length, ADT_FOLD_REASON))
 
 const agtMoreText = computed(() =>
@@ -934,14 +975,141 @@ const adtMoreText = computed(() =>
     : `แสดงอีก ${adtFolded.value.length} รายการที่เป็น older catalog`
 )
 
+// ── FEAT-104 · Sales / Lead generation pairing + pixels ─────────────────────────────────────────────────────────────
+/** the objective of the picked ad group template (`null` = nothing picked) */
+const selectedObjective = computed(() => (adGroupTemplate.value ? objectiveOfTemplate(adGroupTemplate.value) : null))
+const selectedDestination = computed(() => (adTemplate.value ? destinationOfTemplate(adTemplate.value) : null))
+/** the campaign line / badges: Sales (as before) until an ad group template is picked */
+const campaignObjective = computed(() => selectedObjective.value ?? OBJECTIVE_SALES)
+const isLeadPair = computed(() => selectedObjective.value === OBJECTIVE_LEAD)
+
+/** the advertiser name the API's own messages use (blank name → its TikTok id) */
+function advertiserDisplayName(advertiser: LaunchAdvertiser): string {
+  return advertiser.name?.trim() ? advertiser.name : advertiser.tiktokAdvertiserId
+}
+
+/** selected advertisers without any linked pixel (an older API without `pixels` never counts) */
+const advertisersWithoutPixel = computed(() =>
+  selectedAccounts.value
+    .map(account => advertiserOf(account))
+    .filter((advertiser): advertiser is LaunchAdvertiser => !!advertiser && Array.isArray(advertiser.pixels) && advertiser.pixels.length === 0)
+)
+
+/** why an ad group card cannot be picked right now (`null` = it can) */
+function agtBlockReason(template: AdGroupTemplate): string | null {
+  const objective = objectiveOfTemplate(template)
+  const dest = selectedDestination.value
+  if (dest !== null && destinationFor(objective) !== dest) {
+    return objective === OBJECTIVE_LEAD ? PAIRING_REASON.agtNeedsSales : PAIRING_REASON.agtNeedsLead
+  }
+  if (objective === OBJECTIVE_LEAD && advertisersWithoutPixel.value.length > 0) {
+    return PAIRING_REASON.noPixel(advertisersWithoutPixel.value.map(advertiserDisplayName))
+  }
+  return null
+}
+
+/** why an ad template card cannot be picked right now (`null` = it can) */
+function adtBlockReason(template: AdTemplate): string | null {
+  const objective = selectedObjective.value
+  if (objective === null) return null
+  if (destinationFor(objective) === destinationOfTemplate(template)) return null
+  return objective === OBJECTIVE_LEAD ? PAIRING_REASON.adtNeedsUrl : PAIRING_REASON.adtNeedsInstantPage
+}
+
+// a pick that became blocked (the selection or the other side changed) is dropped, like the currency rule above
+watch(() => (adGroupTemplate.value ? agtBlockReason(adGroupTemplate.value) : null), (reason) => {
+  if (reason) adGroupTemplateId.value = null
+})
+watch(() => (adTemplate.value ? adtBlockReason(adTemplate.value) : null), (reason) => {
+  if (reason) adTemplateId.value = null
+})
+
+function clearAdGroupTemplate() {
+  adGroupTemplateId.value = null
+  templateFieldError.value = null
+}
+
+function clearAdTemplate() {
+  adTemplateId.value = null
+  adTemplateError.value = null
+}
+
+/** step 2's second line of an ad template card: the instant page text, or the pixel-link text for `url` */
+function adtDestinationCell(template: AdTemplate): string {
+  return destinationOfTemplate(template) === DESTINATION_URL ? URL_DESTINATION_TEXT : pageCell(template)
+}
+
+/**
+ * The admin's pixel pick per **advertiser id** (Review). Only read through `pixelOf()`, which ignores a pick that
+ * is no longer one of that advertiser's pixels — so a changed advertiser / a refreshed list never leaves a stale
+ * choice behind. Cleared whenever the pair stops being lead.
+ */
+const pixelChoice = ref<Record<string, string>>({})
+watch(isLeadPair, (lead) => {
+  if (!lead) pixelChoice.value = {}
+})
+// an advertiser that left the selection takes its pick with it
+watch(() => selectedAccounts.value.map(account => selection.value[account.id]).join(','), () => {
+  const kept = new Set(selectedAccounts.value.map(account => selection.value[account.id]))
+  pixelChoice.value = Object.fromEntries(Object.entries(pixelChoice.value).filter(([id]) => kept.has(id)))
+})
+
+function pixelsOf(account: LaunchAccount): LaunchPixel[] {
+  return advertiserOf(account)?.pixels ?? []
+}
+
+/** the pixel a lead target will use: the admin's still-valid pick, else the advertiser's default */
+function pixelOf(account: LaunchAccount): LaunchPixel | null {
+  const pixels = pixelsOf(account)
+  const advertiserId = selection.value[account.id]
+  const picked = advertiserId ? pixelChoice.value[advertiserId] : undefined
+  return pixels.find(pixel => pixel.id === picked) ?? defaultPixelOf(pixels)
+}
+
+function pickPixel(account: LaunchAccount, pixelId: string) {
+  const advertiserId = selection.value[account.id]
+  if (!advertiserId) return
+  pixelChoice.value = { ...pixelChoice.value, [advertiserId]: pixelId }
+}
+
+/** the event line of a pixel option (`ClickButton · active`), `ยังไม่มี event` when it has none */
+function pixelEventText(pixel: LaunchPixel): string {
+  return pixel.event ? `${pixel.event.eventCode} · ${pixel.event.status}` : 'ยังไม่มี event'
+}
+
+function pixelItems(account: LaunchAccount): { label: string, value: string }[] {
+  return pixelsOf(account).map(pixel => ({
+    label: `${pixelLabel(pixel)} · ${pixelEventText(pixel)}${pixel.isDefault ? ' · ค่าเริ่มต้น' : ''}`,
+    value: pixel.id
+  }))
+}
+
+/** step 1's pixel label of an advertiser row (`null` = older API, nothing rendered) */
+function advertiserPixelLabel(advertiser: LaunchAdvertiser): string | null {
+  return pixelCountLabel(advertiser.pixels)
+}
+
+/** `Lead generation → Website engagements` / `Sales cashback → Website conversions` */
+const campaignLine = computed(() => CAMPAIGN_LINE[campaignObjective.value])
+const campaignParts = computed(() => {
+  const [objective, destination] = campaignLine.value.split(' → ')
+  return { objective: objective ?? '', destination: destination ?? '' }
+})
+/** the lead line under the campaign: pixel per advertiser · event · locked strategies */
+const leadEventLabel = computed(() =>
+  labelOf(agtOptions.value?.optimizationEvent, adGroupTemplate.value?.config?.optimizationEvent)
+)
+
 function selectAdGroupTemplate(template: AdGroupTemplate) {
   if (isAgtManual(template)) return
+  if (agtBlockReason(template)) return
   adGroupTemplateId.value = template.id
   templateFieldError.value = null
 }
 
 function selectAdTemplate(template: AdTemplate) {
   if (isAdtStale(template) || isAdtDeleted(template)) return
+  if (adtBlockReason(template)) return
   adTemplateId.value = template.id
   adtDeletedNotice.value = null
   templateFieldError.value = null
@@ -1015,7 +1183,7 @@ function postCell(template: AdTemplate): string {
 }
 
 function pageCell(template: AdTemplate): string {
-  const page = template.config?.destination?.page
+  const page = instantPageOf(template.config?.destination)?.page
   return page?.selection === 'named' ? page.name : 'First in library'
 }
 
@@ -1172,11 +1340,19 @@ function body(publishMode: PublishMode): CreateOrderBody {
           ? { mode: 'custom' as const, rule: laGuardRule.value }
           : { mode: 'off' as const } }
       : {}),
-    targets: selectedAccounts.value.map(account => ({
-      tiktokAccountId: account.id,
-      advertiserId: selection.value[account.id] as string
-    }))
+    targets: selectedAccounts.value.map(account => targetOf(account))
   }
+}
+
+/** FEAT-104 — a lead target carries the pixel Review shows; a Sales target never has `pixelId` */
+function targetOf(account: LaunchAccount): CreateOrderTarget {
+  const target: CreateOrderTarget = {
+    tiktokAccountId: account.id,
+    advertiserId: selection.value[account.id] as string
+  }
+  if (!isLeadPair.value) return target
+  const pixel = pixelOf(account)
+  return pixel ? { ...target, pixelId: pixel.id } : target
 }
 
 /** 409 — the readiness changed between `/launch/targets` and the POST (spec AC-16) */
@@ -1233,9 +1409,53 @@ function onValidationIssues(issues: NonNullable<ApiErrorBody['issues']>) {
     step.value = 2
     ensureTemplates()
   }
-  const rest = issues.filter(i => i !== nameIssue && i !== groupIssue && i !== adIssue)
-  if (rest.length > 0 || (!nameIssue && !groupIssue && !adIssue)) {
+  // FEAT-104 B3 — a pixel issue means our pixel data is stale: handled by `onPixelIssues()` (re-read, re-default)
+  const pixelIssues = issues.filter(i => PIXEL_ISSUE_PATH.test(i.path))
+  const rest = issues.filter(i => i !== nameIssue && i !== groupIssue && i !== adIssue && !pixelIssues.includes(i))
+  if (rest.length > 0 || (!nameIssue && !groupIssue && !adIssue && pixelIssues.length === 0)) {
     formError.value = issues.map(i => `${i.path}: ${i.message}`).join(' · ')
+  } else if (pixelIssues.length > 0) {
+    // the API's own sentence (it names the pixel / advertiser) — the path is not for the user
+    formError.value = [...new Set(pixelIssues.map(i => i.message))].join(' · ')
+  }
+  // a template issue already moved the user to step 2 — that one wins over Review
+  if (pixelIssues.length > 0) void onPixelIssues(pixelIssues, !groupIssue && !adIssue)
+}
+
+/** `targets.<i>.pixelId` / `targets.<i>.advertiserId` (contract §4 — a pixel that is no longer linked / usable) */
+const PIXEL_ISSUE_PATH = /^targets\.(\d+)\.(pixelId|advertiserId)$/
+
+/**
+ * FEAT-104 B3 — 400 about a pixel: the pixel data of `/launch/targets` is stale. Drop the pick of every affected
+ * target's advertiser (so the refreshed default is preselected), re-read the targets like the 409 / currency
+ * paths do, and stay on Review where the pixel picker is. If the refresh leaves an advertiser without any pixel,
+ * the existing gate drops the lead ad group template (`agtBlockReason` watcher) — then step 2 is where the
+ * reason is shown, so the user lands there instead.
+ */
+async function onPixelIssues(issues: NonNullable<ApiErrorBody['issues']>, toReview: boolean) {
+  // the indexes are the POST's `targets` order = `selectedAccounts` at the time of the click (read before refresh)
+  const targets = selectedAccounts.value
+  const stale = new Set<string>()
+  for (const issue of issues) {
+    const index = Number(PIXEL_ISSUE_PATH.exec(issue.path)?.[1])
+    const advertiserId = Number.isInteger(index) ? selection.value[targets[index]?.id ?? ''] : undefined
+    if (advertiserId) stale.add(advertiserId)
+  }
+  if (stale.size > 0) {
+    pixelChoice.value = Object.fromEntries(Object.entries(pixelChoice.value).filter(([id]) => !stale.has(id)))
+  }
+  if (toReview) step.value = 3
+  await loadTargets()
+  if (!canLeaveStep2.value) {
+    // `la-form-error` lives on step 3 — the API's sentence travels as a toast, like the 409 / currency paths
+    toast.add({
+      title: 'Could not create the order',
+      description: formError.value ?? undefined,
+      color: 'warning',
+      icon: 'i-lucide-triangle-alert'
+    })
+    step.value = 2
+    ensureTemplates()
   }
 }
 
@@ -1834,6 +2054,19 @@ onUnmounted(() => {
                                 >
                                   {{ CURRENCY_UNKNOWN_HINT }}
                                 </span>
+                                <!-- FEAT-104 — the pixels linked to this advertiser (a Lead generation order uses one) -->
+                                <UBadge
+                                  v-if="advertiserPixelLabel(advertiser)"
+                                  :color="(advertiser.pixels?.length ?? 0) > 0 ? 'success' : 'neutral'"
+                                  variant="subtle"
+                                  size="sm"
+                                  class="max-w-full truncate"
+                                  :title="(advertiser.pixels ?? []).map(pixelLabel).join(', ') || undefined"
+                                  :data-count="advertiser.pixels?.length ?? 0"
+                                  data-testid="la-adv-pixel"
+                                >
+                                  {{ advertiserPixelLabel(advertiser) }}
+                                </UBadge>
                               </li>
                             </ul>
                           </td>
@@ -1986,6 +2219,17 @@ onUnmounted(() => {
                     <span class="text-xs text-muted tabular-nums" data-testid="la-agt-count">
                       {{ agtCountText }}
                     </span>
+                    <!-- FEAT-104 — drop the pick so the ad template side can switch kind -->
+                    <UButton
+                      v-if="adGroupTemplateId"
+                      label="ล้างการเลือก"
+                      color="neutral"
+                      variant="link"
+                      size="xs"
+                      class="px-0"
+                      data-testid="la-agt-clear"
+                      @click="clearAdGroupTemplate"
+                    />
                     <div class="grow" />
                     <label class="flex items-center gap-1.5 text-xs text-muted">
                       Copies
@@ -2043,13 +2287,18 @@ onUnmounted(() => {
                       data-stale="false"
                       :data-kind="agtKindOf(template) ?? undefined"
                       :data-currency="agtCurrencyOf(template) ?? 'unknown'"
+                      :data-objective="objectiveOfTemplate(template)"
+                      :data-blocked="agtBlockReason(template) ? 'true' : undefined"
+                      :disabled="!!agtBlockReason(template)"
                       data-testid="la-agt-card"
                       class="grid h-13 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden
-                        px-2 py-1.5 text-left hover:bg-elevated focus-visible:inset-ring-2
+                        px-2 py-1.5 text-left focus-visible:inset-ring-2
                         focus-visible:inset-ring-primary focus-visible:outline-none"
-                      :class="template.id === adGroupTemplateId
-                        ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40'
-                        : 'bg-default'"
+                      :class="agtBlockReason(template)
+                        ? 'cursor-not-allowed bg-default opacity-60'
+                        : template.id === adGroupTemplateId
+                          ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40 hover:bg-elevated'
+                          : 'bg-default hover:bg-elevated'"
                       @click="selectAdGroupTemplate(template)"
                     >
                       <span
@@ -2059,10 +2308,31 @@ onUnmounted(() => {
                         <span v-if="template.id === adGroupTemplateId" class="size-2 rounded-full bg-primary" />
                       </span>
                       <span class="flex min-w-0 flex-col">
-                        <span class="truncate text-sm font-medium text-highlighted" :title="template.name">
-                          {{ template.name }}
+                        <span class="flex min-w-0 items-center gap-1.5">
+                          <span class="truncate text-sm font-medium text-highlighted" :title="template.name">
+                            {{ template.name }}
+                          </span>
+                          <!-- FEAT-104 — Sales / Lead generation -->
+                          <UBadge
+                            :color="objectiveBadgeColor(objectiveOfTemplate(template))"
+                            variant="subtle"
+                            size="sm"
+                            class="shrink-0 whitespace-nowrap"
+                            data-testid="la-agt-objective"
+                          >
+                            {{ OBJECTIVE_BADGE[objectiveOfTemplate(template)] }}
+                          </UBadge>
                         </span>
-                        <span class="truncate text-xs text-muted">
+                        <!-- FEAT-104 — a blocked card says why in place of its summary line (card height unchanged) -->
+                        <span
+                          v-if="agtBlockReason(template)"
+                          class="truncate text-xs text-warning"
+                          :title="agtBlockReason(template) ?? undefined"
+                          data-testid="la-agt-block-reason"
+                        >
+                          เลือกไม่ได้: {{ agtBlockReason(template) }}
+                        </span>
+                        <span v-else class="truncate text-xs text-muted">
                           <span :title="budgetCell(template)">{{ budgetCell(template) }}</span>
                           <!-- FEAT-061 — the campaign-level strategy/budget of a v3 template -->
                           <template v-if="campaignCell(template)">
@@ -2171,6 +2441,16 @@ onUnmounted(() => {
                     <span class="text-xs text-muted tabular-nums" data-testid="la-adt-count">
                       {{ adtCountText }}
                     </span>
+                    <UButton
+                      v-if="adTemplateId"
+                      label="ล้างการเลือก"
+                      color="neutral"
+                      variant="link"
+                      size="xs"
+                      class="px-0"
+                      data-testid="la-adt-clear"
+                      @click="clearAdTemplate"
+                    />
                     <div class="grow" />
                     <USwitch
                       v-model="adtOnlyAvailable"
@@ -2234,13 +2514,15 @@ onUnmounted(() => {
                       :data-selected="!isAdtDeleted(template) && template.id === adTemplateId ? 'true' : 'false'"
                       data-stale="false"
                       :data-deleted="isAdtDeleted(template) ? 'true' : undefined"
-                      :disabled="isAdtDeleted(template)"
+                      :data-destination="destinationOfTemplate(template)"
+                      :data-blocked="adtBlockReason(template) ? 'true' : undefined"
+                      :disabled="isAdtDeleted(template) || !!adtBlockReason(template)"
                       data-testid="la-adt-card"
                       class="grid h-15 w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden
                         px-2 py-1.5 text-left focus-visible:inset-ring-2
                         focus-visible:inset-ring-primary focus-visible:outline-none"
-                      :class="isAdtDeleted(template)
-                        ? 'bg-default opacity-60'
+                      :class="isAdtDeleted(template) || adtBlockReason(template)
+                        ? 'cursor-not-allowed bg-default opacity-60'
                         : template.id === adTemplateId
                           ? 'bg-primary/10 inset-ring-2 inset-ring-primary/40 hover:bg-elevated'
                           : 'bg-default hover:bg-elevated'"
@@ -2269,6 +2551,16 @@ onUnmounted(() => {
                             {{ template.name }}
                           </span>
                           <AdTemplatesPostStatus :post-info="template.postInfo" testid="la-adt-post-status" />
+                          <!-- FEAT-104 — Instant Page / Website URL -->
+                          <UBadge
+                            :color="destinationBadgeColor(destinationOfTemplate(template))"
+                            variant="subtle"
+                            size="sm"
+                            class="shrink-0 whitespace-nowrap"
+                            data-testid="la-adt-destination"
+                          >
+                            {{ DESTINATION_BADGE[destinationOfTemplate(template)] }}
+                          </UBadge>
                         </span>
                         <span
                           v-if="isAdtDeleted(template)"
@@ -2278,10 +2570,19 @@ onUnmounted(() => {
                         >
                           {{ postInfoReason(template.postInfo) }}
                         </span>
+                        <!-- FEAT-104 — a card of the other kind than the picked ad group template says why -->
+                        <span
+                          v-else-if="adtBlockReason(template)"
+                          class="truncate text-xs text-warning"
+                          :title="adtBlockReason(template) ?? undefined"
+                          data-testid="la-adt-block-reason"
+                        >
+                          เลือกไม่ได้: {{ adtBlockReason(template) }}
+                        </span>
                         <span v-else class="truncate text-xs text-muted">
                           <span :title="postCell(template)">{{ postCell(template) }}</span>
                           <span class="text-dimmed"> · </span>
-                          <span :title="pageCell(template)">{{ pageCell(template) }}</span>
+                          <span :title="adtDestinationCell(template)">{{ adtDestinationCell(template) }}</span>
                           <span class="text-dimmed"> · </span>
                           <span :title="ctaCell(template)">{{ ctaCell(template) }}</span>
                         </span>
@@ -2410,8 +2711,9 @@ onUnmounted(() => {
                     <dt class="text-muted">
                       Campaign
                     </dt>
-                    <dd class="text-highlighted" data-testid="la-review-campaign">
-                      Sales cashback → Website conversions
+                    <!-- FEAT-104 — read from the picked ad group template (no longer the fixed Sales preset) -->
+                    <dd class="text-highlighted" :data-objective="campaignObjective" data-testid="la-review-campaign">
+                      {{ campaignLine }}
                     </dd>
                     <dt class="text-muted">
                       Ad group template
@@ -2431,6 +2733,15 @@ onUnmounted(() => {
                     <dd class="text-highlighted">
                       {{ adGroupTemplate ? scheduleCell(adGroupTemplate) : '—' }}
                     </dd>
+                    <!-- FEAT-104 — Lead generation: the pixel is per advertiser (see Targets), the event from the template -->
+                    <template v-if="isLeadPair">
+                      <dt class="text-muted">
+                        Pixel · event
+                      </dt>
+                      <dd class="text-highlighted" data-testid="la-review-pixel-event">
+                        pixel ของแต่ละ advertiser (ดู Targets) · {{ leadEventLabel }}
+                      </dd>
+                    </template>
                     <dt class="text-muted">
                       Ad template
                     </dt>
@@ -2454,6 +2765,16 @@ onUnmounted(() => {
                     @updated="replaceAdTemplate"
                   />
                 </section>
+
+                <!-- FEAT-104 decision 18 — the order is created, its builds end Failed until FEAT-B ships -->
+                <UAlert
+                  v-if="isLeadPair"
+                  color="warning"
+                  variant="subtle"
+                  icon="i-lucide-triangle-alert"
+                  :description="LEAD_BUILD_WARNING"
+                  data-testid="la-review-lead-warning"
+                />
 
                 <section class="flex flex-col gap-2">
                   <h2 class="text-sm font-semibold text-highlighted">
@@ -2490,6 +2811,51 @@ onUnmounted(() => {
                       >
                         {{ account.workspace?.name ?? '—' }}
                       </UBadge>
+                      <!--
+                        FEAT-104 — Lead generation: the pixel this target uses and its site link (= the ad's URL);
+                        a select when the advertiser has more than one (default = the API's `isDefault`)
+                      -->
+                      <div
+                        v-if="isLeadPair"
+                        class="flex w-full min-w-0 flex-wrap items-center gap-2 border-t border-default pt-2"
+                        :data-pixel-id="pixelOf(account)?.id ?? ''"
+                        data-testid="la-review-target-pixel"
+                      >
+                        <span class="text-xs text-muted">Pixel</span>
+                        <USelect
+                          v-if="pixelsOf(account).length > 1"
+                          :model-value="pixelOf(account)?.id"
+                          :items="pixelItems(account)"
+                          value-key="value"
+                          size="sm"
+                          class="w-full min-w-0 sm:w-auto sm:min-w-72"
+                          aria-label="Pixel"
+                          data-testid="la-review-pixel-select"
+                          @update:model-value="(v: string) => pickPixel(account, v)"
+                        />
+                        <span
+                          v-else-if="pixelOf(account)"
+                          class="min-w-0 break-words text-highlighted"
+                          data-testid="la-review-pixel"
+                        >
+                          {{ pixelLabel(pixelOf(account)!) }}
+                        </span>
+                        <span v-else class="text-xs text-warning" data-testid="la-review-pixel-none">
+                          ยังไม่ link pixel
+                        </span>
+                        <template v-if="pixelOf(account)">
+                          <UIcon name="i-lucide-arrow-right" class="size-3.5 text-dimmed" />
+                          <a
+                            v-if="pixelOf(account)?.url"
+                            :href="pixelOf(account)?.url ?? undefined"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="min-w-0 text-xs break-all text-primary hover:underline"
+                            data-testid="la-review-pixel-url"
+                          >{{ pixelOf(account)?.url }}</a>
+                          <span v-else class="text-xs text-muted" data-testid="la-review-pixel-url">—</span>
+                        </template>
+                      </div>
                     </li>
                   </ul>
                 </section>
@@ -2550,12 +2916,20 @@ onUnmounted(() => {
                 </dd>
               </dl>
               <!-- FEAT-062 — the fixed campaign preset lives here now, on every step (AS-6) -->
-              <div class="flex flex-col gap-0.5 border-t border-default pt-2 text-xs" data-testid="la-campaign-fixed">
-                <span class="text-sm font-semibold text-highlighted">Campaign · fixed</span>
+              <!-- FEAT-104 — read from the picked ad group template (Sales until one is picked); testids unchanged -->
+              <div
+                class="flex flex-col gap-0.5 border-t border-default pt-2 text-xs"
+                :data-objective="campaignObjective"
+                data-testid="la-campaign-fixed"
+              >
+                <span class="text-sm font-semibold text-highlighted">Campaign · จาก ad group template</span>
                 <span class="text-highlighted">
-                  <span data-testid="la-campaign-objective">Sales cashback</span>
+                  <span data-testid="la-campaign-objective">{{ campaignParts.objective }}</span>
                   <span class="text-dimmed"> → </span>
-                  <span data-testid="la-campaign-destination">Website conversions</span>
+                  <span data-testid="la-campaign-destination">{{ campaignParts.destination }}</span>
+                </span>
+                <span v-if="isLeadPair" class="text-muted" data-testid="la-campaign-lead-sub">
+                  pixel ตาม advertiser · {{ leadEventLabel }}
                 </span>
                 <span class="text-muted">Campaign name = order name</span>
               </div>

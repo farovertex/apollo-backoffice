@@ -46,6 +46,12 @@
  * creator), both with `agt-show-all` to fall back to `Everyone`. After a create or duplicate, a filter on
  * another creator switches to **me** before the single `reload(1)` (the new row is always the caller's own);
  * `all` / `me` keep the filter, like edit / delete.
+ *
+ * **FEAT-104** (api-contract v1 §1.4, §1.5 · spec AC-19): an objective filter `agt-filter-objective` (`ทุก
+ * objective` = no param, then `options.objective` → `?objective=sales|leadGeneration`, part of `queryKey`, resets
+ * the page like the others) and the badge `agt-objective` (Sales / Lead generation, from the view's `objective`)
+ * under the name. The Placement cell of a Lead generation row shows its optimization goal label (it has no
+ * `placement`).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -59,6 +65,12 @@ import type {
   CreatorsResponse,
   OptionItem
 } from '#shared/types/ad-group-templates'
+import {
+  OBJECTIVE_BADGE,
+  OBJECTIVE_LEAD,
+  objectiveBadgeColor,
+  objectiveOfTemplate
+} from '~/utils/objective'
 
 useSeoMeta({ title: 'Ad group templates' })
 
@@ -151,6 +163,18 @@ const currencyFilterItems = computed(() => [
 ])
 const hasCurrencyFilter = computed(() => currencyFilter.value !== CURRENCY_ALL)
 
+/**
+ * FEAT-104 (spec AC-19) — objective filter `agt-filter-objective`: `ทุก objective` (`all`, no param) first, then
+ * `options.objective`; anything else sends `?objective=<value>` (rows without the key count as `sales`, API side).
+ */
+const OBJECTIVE_ALL = 'all'
+const objectiveFilter = ref<string>(OBJECTIVE_ALL)
+const objectiveFilterItems = computed(() => [
+  { label: 'ทุก objective', value: OBJECTIVE_ALL },
+  ...(options.value?.objective ?? []).map(item => ({ label: item.label, value: item.value }))
+])
+const hasObjectiveFilter = computed(() => objectiveFilter.value !== OBJECTIVE_ALL)
+
 const items = ref<AdGroupTemplate[]>([])
 const total = ref(0)
 const pending = ref(true)
@@ -175,7 +199,9 @@ async function load() {
         q: q || undefined,
         workspaceId: createdBy.value !== 'all' ? createdBy.value : undefined,
         // FEAT-083 (api-contract v1 §1.5) — only when a currency is picked
-        currency: currencyFilter.value !== CURRENCY_ALL ? currencyFilter.value : undefined
+        currency: currencyFilter.value !== CURRENCY_ALL ? currencyFilter.value : undefined,
+        // FEAT-104 (api-contract v1 §1.4) — only when an objective is picked
+        objective: objectiveFilter.value !== OBJECTIVE_ALL ? objectiveFilter.value : undefined
       }
     })
     if (s !== session) return
@@ -211,8 +237,13 @@ watch(currencyFilter, () => {
   page.value = 1
 })
 
+// FEAT-104 — and for the objective filter
+watch(objectiveFilter, () => {
+  page.value = 1
+})
+
 const queryKey = computed(() =>
-  `${page.value}|${searchDebounced.value.trim()}|${createdBy.value}|${currencyFilter.value}`
+  `${page.value}|${searchDebounced.value.trim()}|${createdBy.value}|${currencyFilter.value}|${objectiveFilter.value}`
 )
 watch(queryKey, () => {
   void load()
@@ -241,13 +272,15 @@ const isFilterOtherCreator = computed(() => !isFilterAll.value && !isFilterMine.
 
 const baseEmpty = computed(() =>
   loaded.value && !error.value && !forbidden.value && total.value === 0 && !hasSearch.value && !hasCurrencyFilter.value
+  && !hasObjectiveFilter.value
 )
 const isEmpty = computed(() => baseEmpty.value && isFilterAll.value)
 const isEmptyMine = computed(() => baseEmpty.value && isFilterMine.value)
 const isEmptyCreator = computed(() => baseEmpty.value && isFilterOtherCreator.value)
 // FEAT-083 — an empty result under a currency filter is a "no match" too
 const isNoMatch = computed(() =>
-  loaded.value && !error.value && !forbidden.value && total.value === 0 && (hasSearch.value || hasCurrencyFilter.value)
+  loaded.value && !error.value && !forbidden.value && total.value === 0
+  && (hasSearch.value || hasCurrencyFilter.value || hasObjectiveFilter.value)
 )
 const showTable = computed(() =>
   !error.value && !forbidden.value && !isEmpty.value && !isEmptyMine.value && !isEmptyCreator.value && !isNoMatch.value
@@ -274,6 +307,10 @@ function shortDateTime(iso: string): string {
 
 /** `<placement label>` — FEAT-061 dropped `optimizationEvent` from the shape */
 function placementCell(template: AdGroupTemplate): string {
+  // FEAT-104 — a Lead generation row has no placement: its optimization goal says where it optimizes
+  if (objectiveOfTemplate(template) === OBJECTIVE_LEAD) {
+    return labelOf(options.value?.optimizationGoal, template.config?.optimizationGoal)
+  }
   return labelOf(options.value?.placement, template.config?.placement)
 }
 
@@ -484,6 +521,14 @@ function onDeleted() {
             aria-label="Currency"
             data-testid="agt-filter-currency"
           />
+          <USelect
+            v-model="objectiveFilter"
+            :items="objectiveFilterItems"
+            :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
+            class="w-full sm:w-auto sm:min-w-44"
+            aria-label="Objective"
+            data-testid="agt-filter-objective"
+          />
         </div>
 
         <UAlert
@@ -596,10 +641,19 @@ function onDeleted() {
         <UEmpty
           v-else-if="isNoMatch"
           icon="i-lucide-search-x"
-          :title="hasSearch ? 'No templates match your search' : `No ${currencyFilter} templates`"
+          :title="hasSearch ? 'No templates match your search' : (hasCurrencyFilter ? `No ${currencyFilter} templates` : 'No templates with this objective')"
           data-testid="agt-no-match"
         >
           <template #actions>
+            <UButton
+              v-if="hasObjectiveFilter"
+              label="All objectives"
+              icon="i-lucide-x"
+              color="neutral"
+              variant="outline"
+              data-testid="agt-clear-objective"
+              @click="objectiveFilter = OBJECTIVE_ALL"
+            />
             <UButton
               v-if="hasCurrencyFilter"
               label="Show all currencies"
@@ -678,6 +732,17 @@ function onDeleted() {
                 <td class="border-b border-default px-3 py-2">
                   <div class="flex flex-col">
                     <span class="font-medium text-highlighted" data-testid="agt-name">{{ template.name }}</span>
+                    <!-- FEAT-104 — Sales / Lead generation, from the view's `objective` -->
+                    <UBadge
+                      :color="objectiveBadgeColor(objectiveOfTemplate(template))"
+                      variant="subtle"
+                      size="sm"
+                      class="mt-1 w-fit whitespace-nowrap"
+                      :data-objective="objectiveOfTemplate(template)"
+                      data-testid="agt-objective"
+                    >
+                      {{ OBJECTIVE_BADGE[objectiveOfTemplate(template)] }}
+                    </UBadge>
                     <span
                       v-if="template.description"
                       class="line-clamp-1 text-xs text-muted"

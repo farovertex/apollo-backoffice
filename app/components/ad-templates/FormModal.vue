@@ -164,6 +164,25 @@
  * 3. Error routing: 400 at `config.utm` (`UTM ชุดนี้ถูกใช้โดย … อยู่แล้ว — เปลี่ยน campaign`) keeps using the
  *    existing section place `adt-utm-error`; 400 at `config.utm.prefix` (`คุณไม่ได้ดูแล prefix นี้`) the prefix
  *    field; 400 at `utmOwnerAdminId` **and** the 404 `ไม่พบ admin` the owner select.
+ *
+ * **FEAT-104** (api-contract v1 §2.1–§2.4 · spec AC-18, decisions 6, 12, 14, 17, 20) — the destination radio
+ * (`adt-form-destination-mode`, `options.destinationMode`) now offers **Website URL** (`url`). With `url`:
+ * - no URL input: the read-only line `adt-url-pixel-note` says the ad uses the site link of the pixel chosen per
+ *   advertiser at launch; the Instant Page fields (page, button text / image, landing URL, tone, language, hand
+ *   cursor) are not rendered (their values stay in the state, so switching back restores them);
+ * - the ad-texts section and the Add-On section are replaced by one short explanation each
+ *   (`adt-adtexts-hidden-note`, `adt-addon-hidden-note`); the body carries `adTexts: []` (a template that had texts
+ *   says so in `adt-adtexts-cleared-note`) and `addOn` as the switch says — while a display card is still on, the
+ *   reason + the action `adt-addon-remove` render in `adt-addon-url-conflict` and the save is refused client-side
+ *   (the API's 400 at `config.addOn` lands in the same place);
+ * - Call to action (api-contract v1.2 §2.1b · spec AC-26): the picker lists only `options.urlCtaValues` (an API
+ *   without the key: everything but `donateNow`); switching to Website URL drops the other values from the
+ *   selection and says which in `adt-cta-url-removed-note` (switching back does not re-add them); the body never
+ *   carries one, and the API's 400 at `config.cta.values` shows at the field. Instant Page: picker as before;
+ * - the new always-open section `adt-sec-product-details` holds the switch
+ *   `adt-pd-clear` and the add / remove list (`adt-pd-input`, `adt-pd-add`, `adt-pd-item`, `adt-pd-remove`, counter
+ *   `adt-pd-count`, inline message `adt-pd-error`; limits from `options.limits`).
+ * Instant Page: form and body exactly as before (no `productDetails` key).
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -207,6 +226,7 @@ import type {
   AdTemplateOptions,
   AdTemplatePostInfo,
   AdTemplatePostInfoSummary,
+  AdProductDetails,
   CreateAdTemplateBody,
   OptionItem,
   PatchAdTemplateBody,
@@ -215,6 +235,8 @@ import type {
   UtmRefBody,
   VerifyPostInfoResponse
 } from '#shared/types/ad-templates'
+import { instantPageOf } from '#shared/types/ad-templates'
+import { DESTINATION_URL, destinationOfConfig } from '~/utils/objective'
 
 const props = withDefaults(defineProps<{
   /** null = create, a row = edit */
@@ -347,6 +369,8 @@ interface ConfigState {
   utm: UtmState
   /** FEAT-050 — `enabled` is the UI encoding of `addOn !== null`; `image` is display-only */
   addOn: AddOnState
+  /** FEAT-104 — Website URL only (sent only while `destination.mode === 'url'`) */
+  productDetails: AdProductDetails
 }
 
 interface UtmState {
@@ -470,7 +494,7 @@ function configStateFrom(
   addOnImage: AdAddOnImage | null = null,
   buttonImage: AdAddOnImage | null = null
 ): ConfigState {
-  const page = config?.destination?.page
+  const page = instantPageOf(config?.destination)?.page
   const createPage = page?.selection === PAGE_CREATE ? page : null
   const cta = config?.cta
   const buttonImageId = storedButtonImageId(page ?? null)
@@ -510,7 +534,12 @@ function configStateFrom(
       clickUrl: config?.tracking?.clickUrl ?? ''
     },
     utm: utmStateFrom(config?.utm),
-    addOn: addOnStateFrom(config?.addOn, addOnImage)
+    addOn: addOnStateFrom(config?.addOn, addOnImage),
+    // FEAT-104 — an Instant Page row has none: the contract's default block (sent only once `url` is chosen)
+    productDetails: {
+      clearSuggested: config?.productDetails?.clearSuggested === true,
+      items: [...(config?.productDetails?.items ?? [])]
+    }
   }
 }
 
@@ -732,7 +761,7 @@ const isLegacyTemplate = computed(() => {
   const config = editing.value?.config
   if (!config) return false
   return LEGACY_SELECTIONS.has(config.identity?.post?.selection ?? '')
-    || LEGACY_SELECTIONS.has(config.destination?.page?.selection ?? '')
+    || LEGACY_SELECTIONS.has(instantPageOf(config.destination)?.page?.selection ?? '')
 })
 
 // ── the bound post (FEAT-042 · spec §Behaviour — BO 1, AC-13) ───────────────────────────────────────────────────────
@@ -874,15 +903,60 @@ onUnmounted(stopPostPolling)
  * (an older template) counts as nothing here, just as `configFromState()` drops it on save.
  */
 const ctaAllSelected = computed(() => {
-  const all = props.options.ctaValue.map(item => item.value)
+  const all = ctaItems.value.map(item => item.value)
   if (all.length === 0) return false
   const picked = new Set(state.config.cta.values)
   return all.every(value => picked.has(value))
 })
 
 function toggleCtaAll() {
-  state.config.cta.values = ctaAllSelected.value ? [] : props.options.ctaValue.map(item => item.value)
+  state.config.cta.values = ctaAllSelected.value ? [] : ctaItems.value.map(item => item.value)
 }
+
+/**
+ * FEAT-104 (api-contract v1.2 §2.1b · spec AC-26) — TikTok's Lead path does not have every call to action: with
+ * a Website URL destination only `options.urlCtaValues` can be chosen (the API answers 400 at
+ * `config.cta.values` otherwise). An API that does not serve the key yet: everything but `donateNow`.
+ * Instant Page: the whole `options.ctaValue` list, as before.
+ */
+const URL_CTA_EXCLUDED_FALLBACK: readonly string[] = ['donateNow']
+
+function isUrlCta(value: string): boolean {
+  const allowed = props.options.urlCtaValues
+  return Array.isArray(allowed) ? allowed.includes(value) : !URL_CTA_EXCLUDED_FALLBACK.includes(value)
+}
+
+/** what the picker offers (and what "select all" selects) for the current destination */
+const ctaItems = computed<OptionItem[]>(() =>
+  state.config.destination.mode === DESTINATION_URL
+    ? props.options.ctaValue.filter(item => isUrlCta(item.value))
+    : props.options.ctaValue
+)
+
+/** the values the last switch to Website URL (or the load of a Website URL row) took out of the selection */
+const ctaRemovedForUrl = ref<string[]>([])
+
+const URL_CTA_REMOVED_NOTE = 'ปลายทาง Website URL ไม่มี call to action นี้ จึงเอาออกจากที่เลือกไว้'
+
+/**
+ * Drops the values a Website URL template cannot have from the selection and remembers them for the note
+ * `adt-cta-url-removed-note`. Idempotent; nothing is ever put back (a later switch to Instant Page only hides
+ * the note). An empty result is left to the existing "at least 1" validation.
+ */
+function pruneCtaForUrl() {
+  if (state.config.destination.mode !== DESTINATION_URL) return
+  const removed = state.config.cta.values.filter(value => !isUrlCta(value))
+  if (removed.length === 0) return
+  state.config.cta.values = state.config.cta.values.filter(value => isUrlCta(value))
+  ctaRemovedForUrl.value = removed
+  // the note lives in the section body — a collapsed section would hide it
+  expanded.cta = true
+}
+
+watch(() => state.config.destination.mode, (mode) => {
+  if (mode === DESTINATION_URL) pruneCtaForUrl()
+  else ctaRemovedForUrl.value = []
+})
 
 /**
  * FEAT-061 (spec "UI behaviour → Ad-templates form") — the Smart+ ad page only offers 10 of the CTAs
@@ -1237,7 +1311,10 @@ const sectionSummary = computed<Record<string, string | null>>(() => {
     ]),
     destination: joinSummary([
       labelOf(props.options.destinationMode, c.destination.mode),
-      page.buttonMode === 'image' ? SUMMARY_TEXT.buttonImage : SUMMARY_TEXT.buttonText,
+      // FEAT-104 — a Website URL template has no instant-page button to describe
+      c.destination.mode === DESTINATION_URL
+        ? ''
+        : (page.buttonMode === 'image' ? SUMMARY_TEXT.buttonImage : SUMMARY_TEXT.buttonText),
       labelOf(props.options.triState, c.allowOnTiktokPlatforms)
     ]),
     adtexts: c.adTexts.length ? SUMMARY_TEXT.adTexts(c.adTexts.length) : SUMMARY_TEXT.adTextsNone,
@@ -1260,6 +1337,8 @@ function resetForm() {
   // which would wipe the message of a rejected tag before it could be read (the `tagErrors` precedent of the
   // ad-group form). `onAdTextsUpdate` clears it itself as soon as a change is fully accepted.
   adTextsError.value = null
+  pdDraft.value = ''
+  pdError.value = null
   utmPaste.value = ''
   addOnPickerOpen.value = false
   buttonImagePickerOpen.value = false
@@ -1268,6 +1347,10 @@ function resetForm() {
   clearServerErrors()
   formRef.value?.clear()
   syncExpanded()
+  // FEAT-104 (AC-26) — after `syncExpanded()`: a Website URL row that still carries an excluded value opens
+  // with its CTA section expanded and the note
+  ctaRemovedForUrl.value = []
+  pruneCtaForUrl()
 }
 
 watch(open, (isOpen) => {
@@ -1298,28 +1381,146 @@ watch(open, (isOpen) => {
  * template (no `code` in the view) goes back to the hint. A create / legacy template keeps the empty input.
  * FEAT-038: the UTM binding is ours, not TikTok's — it is restored the same way, so this button never silently
  * unbinds a template.
+ * FEAT-104 B3: the button never changes the **kind** of the template — the destination mode selected at the click
+ * is kept (the ad group form's reset keeps the objective the same way). The product details are ours, not a
+ * TikTok default: an edit / duplicate of a stored `url` row gets its stored block back, anything else the empty
+ * default. On Website URL the url rules apply to the defaults: no ad texts, no add-on, and `pruneCtaForUrl()`
+ * below takes the values the url list does not offer out of the CTA selection.
  */
 function resetToDefaults() {
-  state.config = configStateFrom(props.options.systemDefault)
+  const mode = state.config.destination.mode
+  const next = configStateFrom(props.options.systemDefault)
+  if (mode !== '') next.destination.mode = mode
   // FEAT-057: in duplicate mode "the stored code / the bound UTM" are the source's — restored the same way
-  state.config.identity.post.code = storedSparkCode(sourceRow.value?.config)
-  state.config.utm = utmStateFrom(sourceRow.value?.config?.utm)
+  next.identity.post.code = storedSparkCode(sourceRow.value?.config)
+  next.utm = utmStateFrom(sourceRow.value?.config?.utm)
+  const stored = sourceRow.value?.config
+  next.productDetails = destinationOfConfig(stored) === DESTINATION_URL
+    ? {
+        clearSuggested: stored?.productDetails?.clearSuggested === true,
+        items: [...(stored?.productDetails?.items ?? [])]
+      }
+    : { clearSuggested: false, items: [] }
+  if (next.destination.mode === DESTINATION_URL) {
+    next.adTexts = []
+    next.addOn = addOnStateFrom(null, null)
+  }
+  state.config = next
+  pdDraft.value = ''
+  pdError.value = null
   resetCodeMode()
   submitError.value = null
   clearServerErrors()
   formRef.value?.clear()
   syncExpanded()
+  ctaRemovedForUrl.value = []
+  pruneCtaForUrl()
 }
 
 // ── validation (mirrors api-contract.md; an invalid form never reaches the network) ──────────────────────────────────
-const DEFAULT_LIMITS: Required<AdTemplateLimits> = { textMaxLength: 100, urlMaxLength: 2048, adTextsMax: 5 }
+const DEFAULT_LIMITS: Required<AdTemplateLimits> = {
+  textMaxLength: 100,
+  urlMaxLength: 2048,
+  adTextsMax: 5,
+  // FEAT-104 — the contract's own numbers, for an API that does not serve them yet
+  productDetailsMaxItems: 15,
+  productDetailMaxLength: 25
+}
 /** the API's own numbers (spec A2) — never hard-coded when `/options` serves them */
 const limits = computed<Required<AdTemplateLimits>>(() => ({
   textMaxLength: props.options.limits?.textMaxLength ?? DEFAULT_LIMITS.textMaxLength,
   urlMaxLength: props.options.limits?.urlMaxLength ?? DEFAULT_LIMITS.urlMaxLength,
   // FEAT-061 — `adTextsMax` is new; an API that predates it behaves like the contract's 5
-  adTextsMax: props.options.limits?.adTextsMax ?? DEFAULT_LIMITS.adTextsMax
+  adTextsMax: props.options.limits?.adTextsMax ?? DEFAULT_LIMITS.adTextsMax,
+  productDetailsMaxItems: props.options.limits?.productDetailsMaxItems ?? DEFAULT_LIMITS.productDetailsMaxItems,
+  productDetailMaxLength: props.options.limits?.productDetailMaxLength ?? DEFAULT_LIMITS.productDetailMaxLength
 }))
+
+// ── FEAT-104 · Website URL destination + product details ───────────────────────────────────────────────────────────
+const isUrl = computed(() => state.config.destination.mode === DESTINATION_URL)
+
+/** the API's own sentences (api-contract §2.1 `URL_DESTINATION_MESSAGES`, `PRODUCT_DETAILS_MESSAGES`) */
+const URL_MESSAGES = {
+  addOn: 'ปลายทาง Website URL ไม่มี Add-On บัตรดิสเพลย์ — เอาบัตรดิสเพลย์ออกก่อนบันทึก',
+  pdTooMany: (max: number) => `รายละเอียดสินค้าได้ไม่เกิน ${max} ข้อ`,
+  pdDuplicate: 'รายละเอียดสินค้าห้ามซ้ำ',
+  pdEmpty: 'รายละเอียดสินค้าว่างไม่ได้',
+  pdTooLong: (max: number) => `รายละเอียดสินค้ายาวเกิน ${max} ตัว`
+} as const
+
+/** the page chrome of the Website URL variant (mock "ล้อ BO จริง") */
+const URL_TEXT = {
+  modeHelp: {
+    instantPage: 'ใช้กับ ad group แบบ Sales',
+    url: 'ใช้กับ ad group แบบ Lead generation'
+  },
+  pixelNote: 'ใช้ลิงก์เว็บที่ใช้สร้าง pixel ของ advertiser นั้น — ไม่ต้องกรอก',
+  pixelHelp: 'แต่ละบัญชีจึงได้ลิงก์ของตัวเอง และ domain ตรงกับ pixel เสมอ',
+  adTextsHidden: 'ข้อความโฆษณา — ซ่อนเมื่อปลายทางเป็นเว็บไซต์: โฆษณาใช้ข้อความของโพสต์',
+  adTextsCleared: (n: number) => `ข้อความโฆษณา ${n} ข้อความของ template นี้จะถูกล้างเมื่อบันทึก`,
+  addOnHidden: 'Add-On เชิงโต้ตอบ — ซ่อนเมื่อปลายทางเป็นเว็บไซต์ (ทางนี้ไม่มี Add-On บน TikTok)',
+  addOnConflict: 'template นี้ตั้งบัตรดิสเพลย์ไว้ ปลายทางแบบเว็บไซต์ไม่มี Add-On นี้ จึงบันทึกไม่ได้',
+  addOnRemove: 'เอาบัตรดิสเพลย์ออก',
+  pdHeading: 'สินค้าเด่น · รายละเอียดสินค้า',
+  pdClear: 'ล้างข้อความที่ TikTok เติมให้เองหลังใส่ URL',
+  pdLabel: 'ข้อความที่เพิ่มเอง',
+  pdCount: (n: number, max: number, len: number) => `${n} / ${max} · ข้อละไม่เกิน ${len} ตัวอักษร`,
+  pdHintClear: 'โฆษณาจะมีเฉพาะข้อความในรายการนี้',
+  pdHintKeep: (max: number) => `ข้อความในรายการนี้ถูกเพิ่มต่อจากที่ TikTok เติมให้ (รวมกันไม่เกิน ${max})`,
+  pdPlaceholder: 'พิมพ์ข้อความ',
+  pdAdd: 'เพิ่ม',
+  pdRemove: 'ลบข้อความนี้'
+} as const
+
+const destinationModeHelp = computed(() =>
+  isUrl.value ? URL_TEXT.modeHelp.url : URL_TEXT.modeHelp.instantPage
+)
+
+/** the text typed into the product-details input, and why the last add was refused */
+const pdDraft = ref('')
+const pdError = ref<string | null>(null)
+
+function addProductDetail() {
+  const max = limits.value
+  const text = pdDraft.value.trim()
+  const items = state.config.productDetails.items
+  if (text === '') {
+    pdError.value = URL_MESSAGES.pdEmpty
+    return
+  }
+  if (text.length > max.productDetailMaxLength) {
+    pdError.value = URL_MESSAGES.pdTooLong(max.productDetailMaxLength)
+    return
+  }
+  if (items.includes(text)) {
+    pdError.value = URL_MESSAGES.pdDuplicate
+    return
+  }
+  if (items.length >= max.productDetailsMaxItems) {
+    pdError.value = URL_MESSAGES.pdTooMany(max.productDetailsMaxItems)
+    return
+  }
+  state.config.productDetails.items = [...items, text]
+  pdDraft.value = ''
+  pdError.value = null
+}
+
+function removeProductDetail(index: number) {
+  state.config.productDetails.items = state.config.productDetails.items.filter((_, i) => i !== index)
+  pdError.value = null
+}
+
+function onPdDraft(value: string) {
+  pdDraft.value = value
+  pdError.value = null
+}
+
+/** decision 6 — the display card has to go before a Website URL template can be saved */
+function removeAddOnForUrl() {
+  state.config.addOn.enabled = false
+}
+
+const pdFull = computed(() => state.config.productDetails.items.length >= limits.value.productDetailsMaxItems)
 
 /**
  * FEAT-061 (api-contract §1.3) — the `config.adTexts` messages are the API's own, so a client refusal and a
@@ -1453,9 +1654,17 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
         imageId: z.string(),
         zoomClicks: z.number().nullish(),
         displaySeconds: z.number().nullish()
+      }),
+      // FEAT-104 — validated in the refinement below, and only for a Website URL template
+      productDetails: z.object({
+        clearSuggested: z.boolean(),
+        items: z.array(z.string())
       })
     })
   }).superRefine((data, ctx) => {
+    // FEAT-104 — a Website URL template has no instant page and no ad texts (both are not sent): only the
+    // display-card rule (decision 6) and the product-details limits apply to its destination-specific part
+    const url = data.config.destination.mode === DESTINATION_URL
     // the Spark code is required whenever the input is on screen (create, legacy template, or "Change code")
     if (requireCode && data.config.identity.post.code === '') {
       ctx.addIssue({
@@ -1468,7 +1677,7 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
     // the new instant page needs a button text and an https landing URL (api-contract §2.2) — but only in text
     // mode (api-contract v3 §7.4): the image mode's button carries no text, so an empty `buttonText` there is
     // valid and must not block submit.
-    if (data.config.destination.page.buttonMode === 'text' && data.config.destination.page.buttonText === '') {
+    if (!url && data.config.destination.page.buttonMode === 'text' && data.config.destination.page.buttonText === '') {
       ctx.addIssue({
         code: 'custom',
         path: ['config', 'destination', 'page', 'buttonText'],
@@ -1476,8 +1685,10 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
       })
     }
 
-    const pageUrl = data.config.destination.page.url
-    if (pageUrl === '') {
+    const pageUrl = url ? null : data.config.destination.page.url
+    if (pageUrl === null) {
+      // FEAT-104 — Website URL: the link comes from the pixel chosen per advertiser (decision 17)
+    } else if (pageUrl === '') {
       ctx.addIssue({
         code: 'custom',
         path: ['config', 'destination', 'page', 'url'],
@@ -1494,7 +1705,7 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
     // FEAT-054 — the radio is on "รูปภาพ" but nothing was picked yet; `buttonImageId` is not a `UFormField`
     // (same shape as `config.addOn.imageId` below), so this only blocks the submit — the message itself is
     // rendered under the picker by `buttonImageError`.
-    if (data.config.destination.page.buttonMode === 'image' && data.config.destination.page.buttonImageId === '') {
+    if (!url && data.config.destination.page.buttonMode === 'image' && data.config.destination.page.buttonImageId === '') {
       ctx.addIssue({
         code: 'custom',
         path: ['config', 'destination', 'page', 'buttonImageId'],
@@ -1512,9 +1723,10 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
 
     // FEAT-061 — the tag input already refuses these; zod is the backstop
     // 2026-10-21 — `[]` is no longer valid: TikTok needs at least one ad text (1..`adTextsMax`)
-    const adTexts = data.config.adTexts
+    // FEAT-104 — a Website URL template always sends `adTexts: []` (decision 14), so nothing to check there
+    const adTexts = url ? [] : data.config.adTexts
     const adTextsPath = ['config', 'adTexts']
-    if (adTexts.length === 0) {
+    if (!url && adTexts.length === 0) {
       ctx.addIssue({ code: 'custom', path: adTextsPath, message: AD_TEXT_MESSAGES.required })
     }
     if (adTexts.length > max.adTextsMax) {
@@ -1561,7 +1773,31 @@ function makeSchema(max: Required<AdTemplateLimits>, requireCode: boolean) {
     // picked, and both numbers have to be integers inside their range. The switch off means `addOn: null` and
     // no check at all. `config.addOn.imageId` is not a field, so its issue only blocks the submit — the message
     // itself is rendered under the picker by `addOnImageError`.
-    if (data.config.addOn.enabled) {
+    // FEAT-104 decision 6 — no display card on the Website URL path: the save is refused until it is removed
+    // (`adt-addon-url-conflict` shows the reason + the remove action; `config.addOn` is not a field)
+    if (url && data.config.addOn.enabled) {
+      ctx.addIssue({ code: 'custom', path: ['config', 'addOn'], message: URL_MESSAGES.addOn })
+    }
+
+    // FEAT-104 — product details (url only): ≤ max items, each trimmed 1..max characters, no duplicates
+    if (url) {
+      const items = data.config.productDetails.items
+      const itemsPath = ['config', 'productDetails', 'items']
+      if (items.length > max.productDetailsMaxItems) {
+        ctx.addIssue({ code: 'custom', path: itemsPath, message: URL_MESSAGES.pdTooMany(max.productDetailsMaxItems) })
+      }
+      if (items.some(item => item.trim() === '')) {
+        ctx.addIssue({ code: 'custom', path: itemsPath, message: URL_MESSAGES.pdEmpty })
+      }
+      if (items.some(item => item.trim().length > max.productDetailMaxLength)) {
+        ctx.addIssue({ code: 'custom', path: itemsPath, message: URL_MESSAGES.pdTooLong(max.productDetailMaxLength) })
+      }
+      if (new Set(items.map(item => item.trim())).size !== items.length) {
+        ctx.addIssue({ code: 'custom', path: itemsPath, message: URL_MESSAGES.pdDuplicate })
+      }
+    }
+
+    if (!url && data.config.addOn.enabled) {
       if (data.config.addOn.imageId === '') {
         ctx.addIssue({
           code: 'custom',
@@ -1630,10 +1866,11 @@ function configFromState(): AdConfigRequest {
       : null
   }
 
-  // dropdown order, only keys the options list still knows
+  // dropdown order, only keys the options list still knows — FEAT-104 (AC-26): for a Website URL template that
+  // list is `ctaItems` (no excluded value can travel, whatever the state holds)
   const picked = new Set(c.cta.values)
   const cta: AdCta = {
-    values: props.options.ctaValue
+    values: ctaItems.value
       .map(item => item.value)
       .filter((value): value is AdCtaValue => picked.has(value))
   }
@@ -1665,6 +1902,15 @@ function configFromState(): AdConfigRequest {
       }
     : null
 
+  // FEAT-104 — Website URL: `{ mode: 'url' }` only, `adTexts: []`, plus `productDetails`; the Instant Page body
+  // is exactly what it was (no `productDetails` key). `addOn` follows the switch in both variants — for `url` the
+  // client refuses a non-null one before it is sent, and the API's 400 lands in `adt-addon-url-conflict`.
+  const url = c.destination.mode === DESTINATION_URL
+  const productDetails: AdProductDetails = {
+    clearSuggested: c.productDetails.clearSuggested,
+    items: c.productDetails.items.map(item => item.trim())
+  }
+
   return {
     adNamePrefix: prefix === '' ? null : prefix,
     identity: {
@@ -1672,10 +1918,9 @@ function configFromState(): AdConfigRequest {
       source: c.identity.source as AdConfigRequest['identity']['source'],
       post
     },
-    destination: {
-      mode: c.destination.mode as AdConfigRequest['destination']['mode'],
-      page
-    },
+    destination: url
+      ? { mode: DESTINATION_URL }
+      : { mode: c.destination.mode as 'instantPage', page },
     allowOnTiktokPlatforms: radioToTri(c.allowOnTiktokPlatforms),
     cta,
     tracking: {
@@ -1684,7 +1929,8 @@ function configFromState(): AdConfigRequest {
     },
     utm,
     addOn,
-    adTexts
+    adTexts: url ? [] : adTexts,
+    ...(url ? { productDetails } : {})
   }
 }
 
@@ -1719,7 +1965,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
 /** the 8 top-level `config` keys, in `CONFIG_KEYS` order (FEAT-050 api-contract.md v1 §1 rule 5) */
 const CONFIG_KEYS = [
   'adNamePrefix', 'identity', 'destination', 'allowOnTiktokPlatforms', 'cta', 'tracking', 'utm', 'addOn',
-  'adTexts'
+  'adTexts', 'productDetails'
 ] as const satisfies readonly (keyof AdConfig)[]
 
 /**
@@ -1741,15 +1987,23 @@ const CONFIG_KEYS = [
 function diffBaseFrom(original: AdTemplate): Partial<AdConfigRequest> {
   const config = original.config
   if (!config) return {}
-  const page = config.destination?.page
+  // FEAT-104 — only an Instant Page destination has a `page` to normalise; `{ mode: 'url' }` is compared as is
+  const instantPage = instantPageOf(config.destination)
+  const page = instantPage?.page
   const base = {
     ...config,
-    destination: {
-      ...config.destination,
-      page: page?.selection === PAGE_CREATE
-        ? { ...page, buttonImageId: (page as Partial<{ buttonImageId: string | null }>).buttonImageId ?? null }
-        : page
-    },
+    destination: instantPage
+      ? {
+          ...instantPage,
+          page: page?.selection === PAGE_CREATE
+            ? { ...page, buttonImageId: (page as Partial<{ buttonImageId: string | null }>).buttonImageId ?? null }
+            : page
+        }
+      : config.destination,
+    // FEAT-104 — a stored `url` row without the block reads as the API's default (what the form builds then)
+    productDetails: destinationOfConfig(config) === DESTINATION_URL
+      ? (config.productDetails ?? { clearSuggested: false, items: [] })
+      : config.productDetails,
     utm: utmBodyOf(config.utm),
     addOn: config.addOn ?? null,
     // FEAT-061 — a **missing** `adTexts` counts as `[]` (what `configFromState()` builds while the input is
@@ -1830,7 +2084,9 @@ const FIELD_NAMES: ReadonlySet<string> = new Set([
   'config.adTexts',
   'config.tracking.impressionUrl', 'config.tracking.clickUrl',
   'config.utm.prefix', 'config.utm.source', 'config.utm.medium', 'config.utm.campaign',
-  'config.addOn.zoomClicks', 'config.addOn.displaySeconds'
+  'config.addOn.zoomClicks', 'config.addOn.displaySeconds',
+  // FEAT-104 — `items.<i>` folds onto the list, `config.productDetails` itself onto the list too (ISSUE_FOLD)
+  'config.productDetails.clearSuggested', 'config.productDetails.items'
 ])
 
 /**
@@ -1879,7 +2135,8 @@ const ISSUE_FOLD: Readonly<Record<string, string>> = {
   'config.destination': 'config.destination.mode',
   'config.destination.page': 'config.destination.page.selection',
   'config.cta': 'config.cta.values',
-  'config.tracking': 'config.tracking.impressionUrl'
+  'config.tracking': 'config.tracking.impressionUrl',
+  'config.productDetails': 'config.productDetails.items'
 }
 
 /**
@@ -2657,211 +2914,231 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 :disabled="submitting"
                 data-testid="adt-form-destination-mode"
               />
-            </UFormField>
-
-            <!-- the destination is fixed (`create`); only its label comes from `/options` -->
-            <UFormField
-              label="Instant page"
-              name="config.destination.page.selection"
-              :error="serverErrors['config.destination.page.selection']"
-            >
-              <p class="text-sm text-highlighted" data-testid="adt-form-page-selection">
-                {{ pageSelectionLabel }}
-              </p>
+              <!-- FEAT-104 — which ad group objective each destination pairs with (decision 3) -->
+              <template v-if="options.destinationMode.length > 1" #help>
+                <span data-testid="adt-destination-mode-help">{{ destinationModeHelp }}</span>
+              </template>
             </UFormField>
 
             <!--
+              FEAT-104 — Website URL: no URL input (decision 17) — the build uses the site link of the pixel chosen
+              per advertiser at launch. The Instant Page fields below are not rendered (their values stay in the
+              state, so switching back restores them).
+            -->
+            <UFormField v-if="isUrl" label="URL เว็บไซต์" :help="URL_TEXT.pixelHelp">
+              <p
+                class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+                data-testid="adt-url-pixel-note"
+              >
+                {{ URL_TEXT.pixelNote }}
+              </p>
+            </UFormField>
+
+            <template v-if="!isUrl">
+              <!-- the destination is fixed (`create`); only its label comes from `/options` -->
+              <UFormField
+                label="Instant page"
+                name="config.destination.page.selection"
+                :error="serverErrors['config.destination.page.selection']"
+              >
+                <p class="text-sm text-highlighted" data-testid="adt-form-page-selection">
+                  {{ pageSelectionLabel }}
+                </p>
+              </UFormField>
+
+              <!--
               FEAT-054 — the CTA button of the instant page: text (today's behaviour, unchanged) or an image
               from the library. `buttonText` is sent as the form holds it regardless of mode (kept for
               switching back, never injected), so its field is `v-show`n rather than removed — exactly like the
               collapsible section bodies. Required only in text mode (v3): an image-mode button carries no
               text, so an empty value there is valid.
             -->
-            <URadioGroup
-              v-model="state.config.destination.page.buttonMode"
-              :items="BUTTON_MODE_ITEMS"
-              value-key="value"
-              orientation="horizontal"
-              class="xl:col-span-2"
-              :disabled="submitting"
-              data-testid="adt-cta-image-mode"
-            />
-
-            <UFormField
-              v-show="state.config.destination.page.buttonMode === 'text'"
-              label="Button text"
-              name="config.destination.page.buttonText"
-              required
-              help="The call-to-action button on the instant page the build creates."
-              :error="serverErrors['config.destination.page.buttonText']"
-            >
-              <UInput
-                v-model="state.config.destination.page.buttonText"
-                placeholder="Shop now"
-                class="w-full"
-                :maxlength="limits.textMaxLength"
+              <URadioGroup
+                v-model="state.config.destination.page.buttonMode"
+                :items="BUTTON_MODE_ITEMS"
+                value-key="value"
+                orientation="horizontal"
+                class="xl:col-span-2"
                 :disabled="submitting"
-                data-testid="adt-page-button-text"
+                data-testid="adt-cta-image-mode"
               />
-            </UFormField>
 
-            <!-- image + preview + its own error → full width on a wide screen -->
-            <div v-show="state.config.destination.page.buttonMode === 'image'" class="space-y-2 xl:col-span-2">
-              <div class="flex flex-wrap items-start gap-3">
-                <!-- the thumbnail of the picked / stored image -->
-                <img
-                  v-if="buttonImageSrc"
-                  :src="buttonImageSrc"
-                  :alt="buttonImage?.name ?? ''"
-                  class="max-h-24 w-auto max-w-32 rounded-md border border-default object-contain"
-                  data-testid="adt-cta-image"
-                >
-                <div
-                  v-else
-                  class="flex size-16 shrink-0 items-center justify-center rounded-md border border-dashed border-default text-muted"
-                  data-testid="adt-cta-image-empty"
-                >
-                  <UIcon name="i-lucide-image" class="size-5" />
-                </div>
+              <UFormField
+                v-show="state.config.destination.page.buttonMode === 'text'"
+                label="Button text"
+                name="config.destination.page.buttonText"
+                required
+                help="The call-to-action button on the instant page the build creates."
+                :error="serverErrors['config.destination.page.buttonText']"
+              >
+                <UInput
+                  v-model="state.config.destination.page.buttonText"
+                  placeholder="Shop now"
+                  class="w-full"
+                  :maxlength="limits.textMaxLength"
+                  :disabled="submitting"
+                  data-testid="adt-page-button-text"
+                />
+              </UFormField>
 
-                <div class="flex min-w-0 flex-1 flex-col gap-1">
-                  <span
-                    v-if="buttonImage"
-                    class="truncate text-sm font-medium text-highlighted"
-                    data-testid="adt-cta-image-name"
-                  >{{ buttonImage.name }}</span>
-                  <span
-                    v-if="buttonImage"
-                    class="text-xs text-muted"
-                    data-testid="adt-cta-image-size"
-                  >{{ buttonImageSize }}</span>
-                  <div class="flex flex-wrap gap-2">
-                    <UButton
-                      :label="buttonImage ? 'เปลี่ยนรูป' : 'เลือกรูปจากคลัง'"
-                      icon="i-lucide-images"
-                      color="neutral"
-                      variant="outline"
-                      size="xs"
-                      class="w-fit"
-                      :disabled="submitting"
-                      data-testid="adt-cta-image-pick"
-                      @click="buttonImagePickerOpen = true"
-                    />
-                    <UButton
+              <!-- image + preview + its own error → full width on a wide screen -->
+              <div v-show="state.config.destination.page.buttonMode === 'image'" class="space-y-2 xl:col-span-2">
+                <div class="flex flex-wrap items-start gap-3">
+                  <!-- the thumbnail of the picked / stored image -->
+                  <img
+                    v-if="buttonImageSrc"
+                    :src="buttonImageSrc"
+                    :alt="buttonImage?.name ?? ''"
+                    class="max-h-24 w-auto max-w-32 rounded-md border border-default object-contain"
+                    data-testid="adt-cta-image"
+                  >
+                  <div
+                    v-else
+                    class="flex size-16 shrink-0 items-center justify-center rounded-md border border-dashed border-default text-muted"
+                    data-testid="adt-cta-image-empty"
+                  >
+                    <UIcon name="i-lucide-image" class="size-5" />
+                  </div>
+
+                  <div class="flex min-w-0 flex-1 flex-col gap-1">
+                    <span
                       v-if="buttonImage"
-                      label="เอาออก"
-                      icon="i-lucide-x"
-                      color="neutral"
-                      variant="ghost"
-                      size="xs"
-                      class="w-fit"
-                      :disabled="submitting"
-                      data-testid="adt-cta-image-remove"
-                      @click="removeButtonImage"
-                    />
+                      class="truncate text-sm font-medium text-highlighted"
+                      data-testid="adt-cta-image-name"
+                    >{{ buttonImage.name }}</span>
+                    <span
+                      v-if="buttonImage"
+                      class="text-xs text-muted"
+                      data-testid="adt-cta-image-size"
+                    >{{ buttonImageSize }}</span>
+                    <div class="flex flex-wrap gap-2">
+                      <UButton
+                        :label="buttonImage ? 'เปลี่ยนรูป' : 'เลือกรูปจากคลัง'"
+                        icon="i-lucide-images"
+                        color="neutral"
+                        variant="outline"
+                        size="xs"
+                        class="w-fit"
+                        :disabled="submitting"
+                        data-testid="adt-cta-image-pick"
+                        @click="buttonImagePickerOpen = true"
+                      />
+                      <UButton
+                        v-if="buttonImage"
+                        label="เอาออก"
+                        icon="i-lucide-x"
+                        color="neutral"
+                        variant="ghost"
+                        size="xs"
+                        class="w-fit"
+                        :disabled="submitting"
+                        data-testid="adt-cta-image-remove"
+                        @click="removeButtonImage"
+                      />
+                    </div>
                   </div>
                 </div>
+
+                <!-- non-blocking — ±10 % off `recommended['call-action']`, never a hard-coded 686×88 -->
+                <UBadge
+                  v-if="buttonImageRatioWarning"
+                  color="warning"
+                  variant="subtle"
+                  size="sm"
+                  icon="i-lucide-triangle-alert"
+                  class="w-fit"
+                  data-testid="adt-cta-image-ratio-warn"
+                >
+                  {{ buttonImageRatioWarning }}
+                </UBadge>
+
+                <!-- the id is not a `UFormField`: the client issue and the API's 400 on `buttonImageId` land here -->
+                <p
+                  v-if="buttonImageError"
+                  class="text-sm break-words text-error"
+                  role="alert"
+                  data-testid="adt-cta-image-error"
+                >
+                  {{ buttonImageError }}
+                </p>
               </div>
 
-              <!-- non-blocking — ±10 % off `recommended['call-action']`, never a hard-coded 686×88 -->
-              <UBadge
-                v-if="buttonImageRatioWarning"
-                color="warning"
-                variant="subtle"
-                size="sm"
-                icon="i-lucide-triangle-alert"
-                class="w-fit"
-                data-testid="adt-cta-image-ratio-warn"
-              >
-                {{ buttonImageRatioWarning }}
-              </UBadge>
-
-              <!-- the id is not a `UFormField`: the client issue and the API's 400 on `buttonImageId` land here -->
+              <!-- the blob as a whole was refused (a path one level deeper than `buttonImageId`, kept defensively) -->
               <p
-                v-if="buttonImageError"
-                class="text-sm break-words text-error"
+                v-if="buttonImageSectionError"
+                class="text-sm break-words text-error xl:col-span-2"
                 role="alert"
-                data-testid="adt-cta-image-error"
+                data-testid="adt-cta-image-section-error"
               >
-                {{ buttonImageError }}
+                {{ buttonImageSectionError }}
               </p>
-            </div>
 
-            <!-- the blob as a whole was refused (a path one level deeper than `buttonImageId`, kept defensively) -->
-            <p
-              v-if="buttonImageSectionError"
-              class="text-sm break-words text-error xl:col-span-2"
-              role="alert"
-              data-testid="adt-cta-image-section-error"
-            >
-              {{ buttonImageSectionError }}
-            </p>
-
-            <UFormField
-              label="Landing page URL"
-              name="config.destination.page.url"
-              required
-              help="Where the button sends the viewer. https:// only."
-              :error="serverErrors['config.destination.page.url']"
-            >
-              <UInput
-                v-model="state.config.destination.page.url"
-                type="text"
-                inputmode="url"
-                placeholder="https://shop.example/promo"
-                class="w-full"
-                :disabled="submitting"
-                data-testid="adt-page-url"
-              />
-            </UFormField>
-
-            <!-- its own two columns at `sm` already → it spans both columns of the section grid -->
-            <div class="grid gap-4 sm:grid-cols-2 xl:col-span-2">
               <UFormField
-                label="Tone"
-                name="config.destination.page.tone"
+                label="Landing page URL"
+                name="config.destination.page.url"
                 required
-                :error="serverErrors['config.destination.page.tone']"
+                help="Where the button sends the viewer. https:// only."
+                :error="serverErrors['config.destination.page.url']"
               >
-                <USelect
-                  v-model="state.config.destination.page.tone"
-                  :items="options.instantPageTone"
-                  value-key="value"
+                <UInput
+                  v-model="state.config.destination.page.url"
+                  type="text"
+                  inputmode="url"
+                  placeholder="https://shop.example/promo"
                   class="w-full"
                   :disabled="submitting"
-                  data-testid="adt-page-tone"
+                  data-testid="adt-page-url"
                 />
               </UFormField>
 
+              <!-- its own two columns at `sm` already → it spans both columns of the section grid -->
+              <div class="grid gap-4 sm:grid-cols-2 xl:col-span-2">
+                <UFormField
+                  label="Tone"
+                  name="config.destination.page.tone"
+                  required
+                  :error="serverErrors['config.destination.page.tone']"
+                >
+                  <USelect
+                    v-model="state.config.destination.page.tone"
+                    :items="options.instantPageTone"
+                    value-key="value"
+                    class="w-full"
+                    :disabled="submitting"
+                    data-testid="adt-page-tone"
+                  />
+                </UFormField>
+
+                <UFormField
+                  label="Language"
+                  name="config.destination.page.language"
+                  required
+                  :error="serverErrors['config.destination.page.language']"
+                >
+                  <USelect
+                    v-model="state.config.destination.page.language"
+                    :items="options.instantPageLanguage"
+                    value-key="value"
+                    class="w-full"
+                    :disabled="submitting"
+                    data-testid="adt-page-language"
+                  />
+                </UFormField>
+              </div>
+
               <UFormField
-                label="Language"
-                name="config.destination.page.language"
-                required
-                :error="serverErrors['config.destination.page.language']"
+                name="config.destination.page.showHandCursor"
+                :error="serverErrors['config.destination.page.showHandCursor']"
               >
-                <USelect
-                  v-model="state.config.destination.page.language"
-                  :items="options.instantPageLanguage"
-                  value-key="value"
-                  class="w-full"
+                <UCheckbox
+                  v-model="state.config.destination.page.showHandCursor"
+                  label="Show hand cursor"
+                  description="The animated hand pointing at the button."
                   :disabled="submitting"
-                  data-testid="adt-page-language"
+                  data-testid="adt-page-hand-cursor"
                 />
               </UFormField>
-            </div>
-
-            <UFormField
-              name="config.destination.page.showHandCursor"
-              :error="serverErrors['config.destination.page.showHandCursor']"
-            >
-              <UCheckbox
-                v-model="state.config.destination.page.showHandCursor"
-                label="Show hand cursor"
-                description="The animated hand pointing at the button."
-                :disabled="submitting"
-                data-testid="adt-page-hand-cursor"
-              />
-            </UFormField>
+            </template>
 
             <!-- the consent sentence from `/options` is long → full width on a wide screen -->
             <UFormField
@@ -2887,8 +3164,34 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </section>
 
+        <!-- FEAT-104 — Website URL: no ad-texts section (decision 14), one short explanation instead -->
+        <section v-if="isUrl" class="space-y-2 border-t border-default pt-4">
+          <p
+            class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+            data-testid="adt-adtexts-hidden-note"
+          >
+            {{ URL_TEXT.adTextsHidden }}
+          </p>
+          <p
+            v-if="state.config.adTexts.length > 0"
+            class="text-xs text-warning"
+            data-testid="adt-adtexts-cleared-note"
+          >
+            {{ URL_TEXT.adTextsCleared(state.config.adTexts.length) }}
+          </p>
+          <!-- the API's 400 at `config.adTexts` (the field itself is not rendered for `url`) -->
+          <p
+            v-if="serverErrors['config.adTexts']"
+            class="text-sm break-words text-error"
+            role="alert"
+            data-testid="adt-adtexts-error"
+          >
+            {{ serverErrors['config.adTexts'] }}
+          </p>
+        </section>
+
         <!-- 5. FEAT-061 — ad texts of the Smart+ ad page ("ข้อความ (n/5)") -->
-        <section class="border-t border-default pt-4">
+        <section v-else class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button
               type="button"
@@ -3000,7 +3303,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               <USelectMenu
                 v-model="state.config.cta.values"
                 multiple
-                :items="options.ctaValue"
+                :items="ctaItems"
                 value-key="value"
                 placeholder="Select call to action"
                 class="w-full"
@@ -3031,13 +3334,22 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                   variant="link"
                   size="xs"
                   class="p-0"
-                  :disabled="submitting || options.ctaValue.length === 0"
+                  :disabled="submitting || ctaItems.length === 0"
                   :aria-pressed="ctaAllSelected"
                   data-testid="adt-form-cta-all"
                   @click="toggleCtaAll"
                 />
               </template>
             </UFormField>
+
+            <!-- FEAT-104 (AC-26) — which values the switch to Website URL took out of the selection -->
+            <p
+              v-if="isUrl && ctaRemovedForUrl.length"
+              class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted xl:col-span-2"
+              data-testid="adt-cta-url-removed-note"
+            >
+              {{ URL_CTA_REMOVED_NOTE }}: {{ ctaRemovedForUrl.map(value => labelOf(options.ctaValue, value)).join(' · ') }}
+            </p>
 
             <!-- FEAT-061 — non-blocking: the template saves, the build fails at `checking` -->
             <UAlert
@@ -3054,10 +3366,46 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         </section>
 
         <!--
+          FEAT-104 — Website URL: no Add-On section (decision 6), one short explanation instead. A template that
+          still carries a display card cannot be saved: the reason + "remove" (and the API's 400 text) render here.
+        -->
+        <section v-if="isUrl" class="space-y-2 border-t border-default pt-4">
+          <p
+            class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+            data-testid="adt-addon-hidden-note"
+          >
+            {{ URL_TEXT.addOnHidden }}
+          </p>
+          <UAlert
+            v-if="state.config.addOn.enabled || addOnSectionError"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            :title="state.config.addOn.enabled ? URL_TEXT.addOnConflict : (addOnSectionError ?? '')"
+            :description="state.config.addOn.enabled ? (addOnSectionError ?? URL_MESSAGES.addOn) : undefined"
+            role="alert"
+            data-testid="adt-addon-url-conflict"
+          >
+            <template v-if="state.config.addOn.enabled" #actions>
+              <UButton
+                :label="URL_TEXT.addOnRemove"
+                icon="i-lucide-x"
+                color="error"
+                variant="outline"
+                size="xs"
+                :disabled="submitting"
+                data-testid="adt-addon-remove"
+                @click="removeAddOnForUrl"
+              />
+            </template>
+          </UAlert>
+        </section>
+
+        <!--
           7. FEAT-050 — the interactive add-on (display card). Collapsible like TikTok's four sections: collapsed
           with the `Default` badge while there is no add-on, auto-expanded by `expandSectionsOf` on a 400.
         -->
-        <section class="border-t border-default pt-4">
+        <section v-else class="border-t border-default pt-4">
           <h3 class="text-sm font-semibold text-highlighted">
             <button
               type="button"
@@ -3209,6 +3557,87 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               {{ addOnSectionError }}
             </p>
           </div>
+        </section>
+
+        <!--
+          FEAT-104 — Website URL only, always open (decision 12): clear the texts TikTok fills in after the URL,
+          and the admin's own list (add / remove one at a time, counter, limits from `options.limits`)
+        -->
+        <section
+          v-if="isUrl"
+          class="grid gap-4 border-t border-default pt-4 xl:grid-cols-2"
+          data-testid="adt-sec-product-details"
+        >
+          <h3 class="text-sm font-semibold text-highlighted xl:col-span-2">
+            {{ URL_TEXT.pdHeading }}
+          </h3>
+
+          <UFormField
+            name="config.productDetails.clearSuggested"
+            class="xl:col-span-2"
+            :error="serverErrors['config.productDetails.clearSuggested']"
+          >
+            <USwitch
+              v-model="state.config.productDetails.clearSuggested"
+              :label="URL_TEXT.pdClear"
+              :disabled="submitting"
+              data-testid="adt-pd-clear"
+            />
+          </UFormField>
+
+          <UFormField
+            :label="URL_TEXT.pdLabel"
+            name="config.productDetails.items"
+            class="xl:col-span-2"
+            :help="pdError ? undefined : (state.config.productDetails.clearSuggested ? URL_TEXT.pdHintClear : URL_TEXT.pdHintKeep(limits.productDetailsMaxItems))"
+            :error="serverErrors['config.productDetails.items'] ?? pdError ?? undefined"
+          >
+            <template #hint>
+              <span data-testid="adt-pd-count">{{ URL_TEXT.pdCount(state.config.productDetails.items.length, limits.productDetailsMaxItems, limits.productDetailMaxLength) }}</span>
+            </template>
+            <div class="space-y-2">
+              <ul v-if="state.config.productDetails.items.length" class="flex flex-wrap gap-1.5" data-testid="adt-pd-list">
+                <li
+                  v-for="(item, i) in state.config.productDetails.items"
+                  :key="`${i}-${item}`"
+                  class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated/50 py-0.5 ps-2 text-sm"
+                  data-testid="adt-pd-item"
+                >
+                  <span class="min-w-0 break-all">{{ item }}</span>
+                  <UButton
+                    icon="i-lucide-x"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    :aria-label="URL_TEXT.pdRemove"
+                    :disabled="submitting"
+                    data-testid="adt-pd-remove"
+                    @click="removeProductDetail(i)"
+                  />
+                </li>
+              </ul>
+              <div class="flex flex-wrap gap-2">
+                <UInput
+                  :model-value="pdDraft"
+                  :placeholder="URL_TEXT.pdPlaceholder"
+                  class="min-w-0 flex-1 basis-56"
+                  :disabled="submitting || pdFull"
+                  data-testid="adt-pd-input"
+                  @update:model-value="(v: string | number) => onPdDraft(String(v ?? ''))"
+                  @keydown.enter.prevent="addProductDetail"
+                />
+                <UButton
+                  :label="URL_TEXT.pdAdd"
+                  icon="i-lucide-plus"
+                  color="neutral"
+                  variant="outline"
+                  :disabled="submitting || pdFull"
+                  data-testid="adt-pd-add"
+                  @click="addProductDetail"
+                />
+              </div>
+            </div>
+          </UFormField>
         </section>
 
         <!-- 8. third-party tracking -->

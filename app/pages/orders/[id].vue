@@ -63,6 +63,12 @@
  * FEAT-086 (spec §4, AC-23) — under the builds table, section `od-adgroup-guard-list` with one
  * `AdGroupGuardBuildCard` (`od-adgroup-guard`) per build whose `adGroupGuard` snapshot is non-null. Same body, no
  * new request or polling (A11).
+ *
+ * FEAT-104 (api-contract v1 §3.4 · spec AC-22) — the Campaign line `od-preset` reads `campaignPreset.objective`
+ * (`salesCashback` → the text it always showed, `leadGeneration` → `Lead generation → Website engagements`); a lead
+ * order adds `od-pixel-event` and `od-destination`, and every build with a `pixel` snapshot shows it under the
+ * advertiser (`od-build-pixel` name + `…last4`, `od-build-pixel-url` the site link the ad uses). A failed build's
+ * `lastError` (e.g. `unsupportedConfig: lead generation build is not supported yet`) is shown as is (`od-build-error`).
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -71,6 +77,7 @@ import type { AdTemplate } from '#shared/types/ad-templates'
 import type { MediaAssetView } from '#shared/types/media'
 import { adAddOnSummaryText, readAdAddOn } from '~/utils/ad-add-on'
 import { mediaSrc } from '~/utils/media'
+import { OBJECTIVE_LEAD, campaignLineOfPreset, objectiveOfPreset, pixelLabel } from '~/utils/objective'
 import {
   type BuildConflictBody,
   type BuildScreenshotResponse,
@@ -815,8 +822,12 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                 <dt class="text-muted">
                   Campaign
                 </dt>
-                <dd class="text-highlighted" data-testid="od-preset">
-                  Sales cashback → Website conversions
+                <dd
+                  class="text-highlighted"
+                  :data-objective="objectiveOfPreset(order.campaignPreset)"
+                  data-testid="od-preset"
+                >
+                  {{ campaignLineOfPreset(order.campaignPreset) }}
                 </dd>
                 <dt class="text-muted">
                   Ad group template
@@ -824,6 +835,21 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                 <dd class="text-highlighted" data-testid="od-agt">
                   {{ order.adGroupTemplate?.name ?? '—' }}
                 </dd>
+                <!-- FEAT-104 — Lead generation: the pixel (and the ad's link) is per build, see the table -->
+                <template v-if="objectiveOfPreset(order.campaignPreset) === OBJECTIVE_LEAD">
+                  <dt class="text-muted">
+                    Pixel · event
+                  </dt>
+                  <dd class="text-highlighted" data-testid="od-pixel-event">
+                    ต่อบัญชี (ดูตาราง build){{ order.adGroupConfig?.optimizationEvent ? ` · ${order.adGroupConfig.optimizationEvent}` : '' }}
+                  </dd>
+                  <dt class="text-muted">
+                    Destination
+                  </dt>
+                  <dd class="text-highlighted" data-testid="od-destination">
+                    Website URL · ลิงก์ของ pixel ต่อบัญชี
+                  </dd>
+                </template>
                 <!-- FEAT-061 — only a v3 snapshot carries a campaign section -->
                 <template v-if="campaignSnapshot">
                   <dt class="text-muted">
@@ -1001,6 +1027,19 @@ const shotContent = { 'data-testid': 'od-shot' } as Record<string, string>
                         <div class="flex flex-col">
                           <span class="text-highlighted">{{ build.advertiser?.name ?? '—' }}</span>
                           <span v-if="build.advertiser" class="text-xs text-muted">{{ build.advertiser.tiktokAdvertiserId }}</span>
+                          <!-- FEAT-104 — the pixel snapshot of a lead build and the site link the ad uses -->
+                          <span v-if="build.pixel" class="text-xs text-muted" data-testid="od-build-pixel">
+                            pixel {{ pixelLabel(build.pixel) }}
+                          </span>
+                          <a
+                            v-if="build.pixel?.url"
+                            :href="build.pixel.url"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="max-w-56 text-xs break-all text-primary hover:underline"
+                            data-testid="od-build-pixel-url"
+                            @click.stop
+                          >{{ build.pixel.url }}</a>
                         </div>
                       </td>
                       <td class="border-b border-default px-3 py-2">
