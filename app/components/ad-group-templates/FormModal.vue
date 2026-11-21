@@ -113,6 +113,20 @@
  * `/options` body (day order `sun`…`sat`, English labels `Sun`…`Sat`, the `daypartingHint` sentence, the 400 path
  * form `.<day>.<i>` and its bracket form `[<i>]`) — all already correct, nothing changed here beyond this note and
  * the unit-test additions in `tests/unit/dayparting.test.ts`.
+ *
+ * **FEAT-104** (api-contract v1 §1.1–§1.6 · spec AC-17) — the objective selector `agt-campaign-objective` at the top
+ * of the campaign section (`options.objective`; hidden on an API that does not serve it → Sales only, as before).
+ * **Lead generation** shows the always-open block `agt-sec-optimization` (goal `agt-lead-goal`, read-only from
+ * `options.optimizationGoal`; the location line `agt-lead-location`; the pixel line `agt-lead-pixel-note` — the
+ * pixel is chosen per advertiser at launch, decision 16ก; the event select `agt-lead-event`), hides the placement
+ * section, and shows the budget strategy / bid strategy as locked read-only text (`agt-lead-budget-strategy-locked`,
+ * `agt-lead-bid-strategy-locked`, values from `options.leadGeneration.locked`) — so there is no campaign budget and
+ * no target CPA. Audience interactions (`advancedPlacement`) are unchanged. Payload: lead = no `placement`,
+ * `optimizationGoal` + `optimizationEvent`, `campaign.objective: 'leadGeneration'`; sales = exactly as before (no
+ * optimization keys and **never** a `campaign.objective` key — B3: the view's `'sales'` is filled by the API at read
+ * time, so the diff ignores it and an untouched Sales edit still diffs to nothing). Switching keeps the Sales choices (budget / bid strategy, placement) in the
+ * state, so switching back restores them; the PATCH leaves the keys the new variant forbids out of the body
+ * (the API drops the stored ones, api-contract §1.3).
  */
 import * as z from 'zod'
 import type { FetchError } from 'ofetch'
@@ -138,6 +152,7 @@ import type {
   TriState
 } from '#shared/types/ad-group-templates'
 import type { DaypartingCells } from '~/utils/dayparting'
+import { OBJECTIVE_LEAD, OBJECTIVE_SALES } from '~/utils/objective'
 import {
   DEFAULT_GRANULARITY_MINUTES, cellsToSchedule, countRanges, rangesToCells
 } from '~/utils/dayparting'
@@ -239,6 +254,8 @@ interface MoneyState {
  * TASK-adgroup-targeting: no `name` any more — the form has no input for it and always sends `null`.
  */
 interface CampaignState {
+  /** FEAT-104 — `sales` / `leadGeneration` (set through `setObjective`, never by a bare v-model) */
+  objective: string
   budgetStrategy: string
   budget: MoneyState
   bidStrategy: string
@@ -250,7 +267,12 @@ interface ConfigState {
   campaign: CampaignState
   /** FEAT-061 — only sent while `campaign.bidStrategy === 'costCap'` */
   targetCpa: string
+  /** Sales only — kept in the state while Lead generation is selected, so switching back restores it */
   placement: string
+  /** FEAT-104 — Lead generation only (sent only while the objective is lead) */
+  optimizationGoal: string
+  /** FEAT-104 — Lead generation only */
+  optimizationEvent: string
   locations: string[]
   ageGroups: string[]
   gender: string
@@ -364,9 +386,14 @@ function configStateFrom(config: FillableConfig): ConfigState {
   const advanced = config.advancedPlacement
   const campaign = config.campaign
   const campaignBudget = campaign?.budget
+  const leadDefaults = props.options.leadGeneration?.defaults
   return {
     adGroupNamePrefix: config.adGroupNamePrefix ?? '',
     campaign: {
+      // FEAT-104 — the contract's `objectiveOf()`: only an explicit `leadGeneration` is lead
+      objective: (campaign as { objective?: string } | undefined)?.objective === OBJECTIVE_LEAD
+        ? OBJECTIVE_LEAD
+        : OBJECTIVE_SALES,
       // a migration draft leaves it `null` → no radio selected until the admin picks one (spec "required")
       budgetStrategy: campaign?.budgetStrategy ?? '',
       budget: {
@@ -379,7 +406,12 @@ function configStateFrom(config: FillableConfig): ConfigState {
       bidStrategy: campaign?.bidStrategy ?? ''
     },
     targetCpa: config.targetCpa === null || config.targetCpa === undefined ? '' : String(config.targetCpa),
-    placement: config.placement,
+    // FEAT-104 — a lead row has no placement: start from the system default so a switch to Sales has one
+    placement: config.placement ?? props.options.systemDefault?.placement ?? '',
+    optimizationGoal: config.optimizationGoal
+      ?? leadDefaults?.optimizationGoal ?? props.options.optimizationGoal?.[0]?.value ?? '',
+    optimizationEvent: config.optimizationEvent
+      ?? leadDefaults?.optimizationEvent ?? props.options.optimizationEvent?.[0]?.value ?? '',
     locations: [...(config.locations ?? [])],
     ageGroups: [...(config.ageGroups ?? [])],
     gender: config.gender,
@@ -647,6 +679,9 @@ const SECTION_OF_KEY: Record<string, SectionId> = {
     SECTIONS.flatMap(section => section.keys.map(key => [key, section.id] as [string, SectionId]))
   ),
   campaign: 'campaign',
+  // FEAT-104 — the lead block is always open (no toggle), like `adgroup`
+  optimizationGoal: 'adgroup',
+  optimizationEvent: 'adgroup',
   // TASK-smart-plus-publish: the target cost is filled on the ad-group page → rendered in the (always open) adgroup block
   targetCpa: 'adgroup'
 }
@@ -674,6 +709,74 @@ function expandSectionsOf(names: (string | undefined)[]) {
     if (id && COLLAPSIBLE_IDS.includes(id as typeof COLLAPSIBLE_IDS[number])) expanded[id] = true
   }
 }
+
+// ── FEAT-104 · objective (Sales / Lead generation) ──────────────────────────────────────────────────────────────────
+/** the selector exists only while `/options` serves the list (an older API = Sales only, exactly as before) */
+const objectiveSupported = computed(() => (props.options.objective?.length ?? 0) > 0)
+const isLead = computed(() => state.config.campaign.objective === OBJECTIVE_LEAD)
+/** the locked campaign values of the lead variant (api-contract §1.6); the contract's own values as fallback */
+const leadLocked = computed(() => ({
+  budgetStrategy: props.options.leadGeneration?.locked?.budgetStrategy ?? 'adGroup',
+  bidStrategy: props.options.leadGeneration?.locked?.bidStrategy ?? 'maxResults'
+}))
+/**
+ * The Sales choices the lead variant overrides, kept while Lead generation is selected so switching back to
+ * Sales restores what the admin had (cleared on every open / reset).
+ */
+const salesStash = ref<{ budgetStrategy: string, bidStrategy: string } | null>(null)
+
+/** the only way the objective changes: locks the campaign values for lead, restores the Sales ones on the way back */
+function setObjective(next: string) {
+  const c = state.config.campaign
+  if (next === c.objective) return
+  if (next === OBJECTIVE_LEAD) {
+    salesStash.value = { budgetStrategy: c.budgetStrategy, bidStrategy: c.bidStrategy }
+    c.objective = OBJECTIVE_LEAD
+    c.budgetStrategy = leadLocked.value.budgetStrategy
+    c.bidStrategy = leadLocked.value.bidStrategy
+    const defaults = props.options.leadGeneration?.defaults
+    if (state.config.optimizationGoal === '') {
+      state.config.optimizationGoal = defaults?.optimizationGoal ?? props.options.optimizationGoal?.[0]?.value ?? ''
+    }
+    if (state.config.optimizationEvent === '') {
+      state.config.optimizationEvent = defaults?.optimizationEvent ?? props.options.optimizationEvent?.[0]?.value ?? ''
+    }
+    return
+  }
+  c.objective = OBJECTIVE_SALES
+  if (salesStash.value) {
+    c.budgetStrategy = salesStash.value.budgetStrategy
+    c.bidStrategy = salesStash.value.bidStrategy
+    salesStash.value = null
+  }
+}
+
+/** the label `/options` gives a value, for the locked read-only lines */
+const leadBudgetStrategyText = computed(() =>
+  `${labelOf(props.options.budgetStrategy, leadLocked.value.budgetStrategy)} — ${LEAD_TEXT.locked}`
+)
+const leadBidStrategyText = computed(() =>
+  `${labelOf(props.options.bidStrategy, leadLocked.value.bidStrategy)} — ${LEAD_TEXT.locked}`
+)
+const leadGoalText = computed(() =>
+  labelOf(props.options.optimizationGoal, state.config.optimizationGoal) || '—'
+)
+const objectiveHelp = computed(() => (isLead.value ? LEAD_TEXT.objectiveHelpLead : LEAD_TEXT.objectiveHelpSales))
+
+/** FEAT-104 — the page chrome of the lead variant (mock "ล้อ BO จริง") */
+const LEAD_TEXT = {
+  objectiveHelpSales: 'Sales: เหมือนเดิมทุกอย่าง · ใช้กับ ad template แบบอินสแตนท์เพจ',
+  objectiveHelpLead: 'Lead generation: worker เลือกเป้าหมาย "การมีส่วนร่วมบนเว็บไซต์" และใช้ได้กับ ad template ที่ปลายทางเป็นเว็บไซต์',
+  locked: 'ล็อกสำหรับ Lead generation',
+  sectionHeading: 'การเพิ่มประสิทธิภาพ',
+  sectionCaption: 'Lead generation: ค่าในส่วนนี้ worker ตั้งบนหน้ากลุ่มโฆษณาของ TikTok',
+  location: 'เว็บไซต์ — TikTok ตั้งให้เอง',
+  pixel: 'ระบบเลือกต่อ advertiser ตอน launch',
+  pixelHelp: 'ใช้ pixel ที่ advertiser นั้น link อยู่ · template เดียวจึงใช้ได้กับทุกบัญชี',
+  eventHelp: 'event ต้อง Active บน TikTok ตอน build',
+  /** the API's own sentence (`LEAD_MESSAGES`, api-contract §1.1) */
+  eventRequired: 'optimizationEvent รองรับเฉพาะ clickButton'
+} as const
 
 // ── conditional fields ───────────────────────────────────────────────────────────────────────────────────────────────
 const showStartTime = computed(() => state.config.schedule.startMode === 'scheduled')
@@ -862,6 +965,7 @@ const sectionSummary = computed<Record<string, string | null>>(() => {
 })
 
 function resetForm() {
+  salesStash.value = null
   Object.assign(state, stateFrom(props.template))
   submitting.value = false
   submitError.value = null
@@ -881,8 +985,12 @@ watch(open, (isOpen) => {
 
 /** "Reset to TikTok defaults" — config controls only, name/description untouched, no request */
 function resetToDefaults() {
+  // FEAT-104 — the objective is the template's kind, not a TikTok default: it survives the reset
+  const objective = state.config.campaign.objective
+  salesStash.value = null
   rememberTimes(props.options.systemDefault)
   state.config = configStateFrom(props.options.systemDefault)
+  setObjective(objective)
   submitError.value = null
   clearServerErrors()
   tagErrors.value = {}
@@ -1065,6 +1173,7 @@ function makeSchema(
     config: z.object({
       adGroupNamePrefix: z.string().trim().max(100, 'Prefix must be at most 100 characters'),
       campaign: z.object({
+        objective: z.string(),
         budgetStrategy: z.string(),
         budget: z.object({
           type: z.string(),
@@ -1074,7 +1183,10 @@ function makeSchema(
         bidStrategy: z.string()
       }),
       targetCpa: z.string().trim(),
-      placement: z.string().min(1, 'Placement is required'),
+      // FEAT-104 — required for Sales only (refinement below)
+      placement: z.string(),
+      optimizationGoal: z.string(),
+      optimizationEvent: z.string(),
       locations: z.array(z.string()).min(1, 'Select at least one location'),
       ageGroups: z.array(z.string()),
       gender: z.string().min(1, 'Gender is required'),
@@ -1105,6 +1217,14 @@ function makeSchema(
   }).superRefine((data, ctx) => {
     // ── FEAT-061 campaign section ────────────────────────────────────────────────────────────────────────────
     const campaign = data.config.campaign
+    // ── FEAT-104 — the variant's own required keys (lead: event; sales: placement) ──────────────────────────
+    const lead = campaign.objective === OBJECTIVE_LEAD
+    if (lead && data.config.optimizationEvent === '') {
+      ctx.addIssue({ code: 'custom', path: ['config', 'optimizationEvent'], message: LEAD_TEXT.eventRequired })
+    }
+    if (!lead && data.config.placement === '') {
+      ctx.addIssue({ code: 'custom', path: ['config', 'placement'], message: 'Placement is required' })
+    }
     if (campaign.budgetStrategy === '') {
       ctx.addIssue({ code: 'custom', path: ['config', 'campaign', 'budgetStrategy'], message: MSG.budgetStrategy })
     }
@@ -1242,8 +1362,12 @@ function configFromState(): AdGroupConfig {
     : { mode: 'continuous', startTime }
 
   // FEAT-061 — a hidden campaign budget / targetCpa is sent as `null`, whatever the form still holds
+  // FEAT-104 — the lead variant always carries the locked values, whatever the state holds
+  const lead = c.campaign.objective === OBJECTIVE_LEAD
+  const budgetStrategy = lead ? leadLocked.value.budgetStrategy : c.campaign.budgetStrategy
+  const bidStrategy = lead ? leadLocked.value.bidStrategy : c.campaign.bidStrategy
   const campaignAmount = c.campaign.budget.amount.trim()
-  const campaignBudget: AdGroupBudget | null = c.campaign.budgetStrategy === 'cbo'
+  const campaignBudget: AdGroupBudget | null = budgetStrategy === 'cbo'
     ? {
         type: c.campaign.budget.type as AdGroupBudget['type'],
         amount: Number(campaignAmount),
@@ -1252,14 +1376,17 @@ function configFromState(): AdGroupConfig {
       }
     : null
   const campaign: AdGroupCampaign = {
+    // FEAT-104 — lead always says so; a Sales body never has the key (B3 · spec A3: the view's `'sales'` is filled
+    // at read time and must not be written into rows that never stored it)
+    ...(lead ? { objective: OBJECTIVE_LEAD } : {}),
     // TASK-adgroup-targeting — always `null`: the worker never types a campaign name (TikTok's default is used)
     name: null,
-    budgetStrategy: c.campaign.budgetStrategy as AdGroupCampaign['budgetStrategy'],
+    budgetStrategy: budgetStrategy as AdGroupCampaign['budgetStrategy'],
     budget: campaignBudget,
-    bidStrategy: c.campaign.bidStrategy as AdGroupCampaign['bidStrategy']
+    bidStrategy: bidStrategy as AdGroupCampaign['bidStrategy']
   }
   const targetCpaText = c.targetCpa.trim()
-  const targetCpa = c.campaign.bidStrategy === 'costCap' && targetCpaText !== '' ? Number(targetCpaText) : null
+  const targetCpa = bidStrategy === 'costCap' && targetCpaText !== '' ? Number(targetCpaText) : null
 
   // hidden is not cleared: an `instantPage` placement still sends the website-only values below (the job decides
   // what to use). FEAT-013 — `audiences` is pass-through: rebuilt exactly as it was read, so the diff never marks
@@ -1268,7 +1395,13 @@ function configFromState(): AdGroupConfig {
     adGroupNamePrefix: prefix === '' ? null : prefix,
     campaign,
     targetCpa,
-    placement: c.placement as AdGroupConfig['placement'],
+    // FEAT-104 — Sales: `placement` (as before) · Lead generation: the two optimization keys instead
+    ...(lead
+      ? {
+          optimizationGoal: c.optimizationGoal as AdGroupConfig['optimizationGoal'],
+          optimizationEvent: c.optimizationEvent as AdGroupConfig['optimizationEvent']
+        }
+      : { placement: c.placement as AdGroupConfig['placement'] }),
     locations: [...c.locations],
     ageGroups: [...c.ageGroups] as AdGroupConfig['ageGroups'],
     gender: c.gender as AdGroupConfig['gender'],
@@ -1331,10 +1464,22 @@ function deepEqual(a: unknown, b: unknown): boolean {
  * right after `dayparting`)
  */
 const CONFIG_KEYS = [
-  'adGroupNamePrefix', 'campaign', 'targetCpa', 'placement', 'locations', 'ageGroups', 'gender', 'targetingMode',
+  'adGroupNamePrefix', 'campaign', 'targetCpa', 'placement', 'optimizationGoal', 'optimizationEvent', 'locations', 'ageGroups', 'gender', 'targetingMode',
   'spendingPower', 'budget', 'schedule', 'timezone', 'dayparting', 'daypartingSchedule', 'audiences', 'interests',
   'languages', 'advancedPlacement'
 ] as const satisfies readonly (keyof AdGroupConfig)[]
+
+/**
+ * FEAT-104 B3 — the stored `campaign` as the form would send it back: the API fills `objective: 'sales'` into the
+ * view of a Sales row at read time, and a Sales body never carries the key, so a non-lead `objective` is dropped
+ * before the compare (otherwise every Sales edit would resend `campaign`). A stored `leadGeneration` stays, so a
+ * lead → Sales switch is a change and the whole block travels without the key.
+ */
+function campaignDiffBase(campaign: AdGroupCampaign | undefined): AdGroupCampaign | undefined {
+  if (!campaign || campaign.objective === OBJECTIVE_LEAD || !('objective' in campaign)) return campaign
+  const { objective: _readTimeDefault, ...rest } = campaign
+  return rest
+}
 
 /** only the keys whose value really changed; each changed `config` key is sent whole (A3) */
 function patchBodyFrom(original: AdGroupTemplate, name: string, description: string | null): PatchAdGroupTemplateBody {
@@ -1347,9 +1492,13 @@ function patchBodyFrom(original: AdGroupTemplate, name: string, description: str
   let hasConfigChange = false
   for (const key of CONFIG_KEYS) {
     // TASK-adgroup-targeting — a key this form does not send (no v3.1 `/options`) is never part of the diff
+    // FEAT-104 — nor is a key the selected variant forbids (lead: `placement`; sales: the optimization keys):
+    // the API drops the stored one itself when the objective switches (api-contract §1.3)
     if (next[key] === undefined) continue
     // TASK-adgroup-dayparting — a row written before v3.2 has no `daypartingSchedule`: it reads as `null`
-    const stored = key === 'daypartingSchedule' ? (original.config?.[key] ?? null) : original.config?.[key]
+    const stored = key === 'daypartingSchedule'
+      ? (original.config?.[key] ?? null)
+      : key === 'campaign' ? campaignDiffBase(original.config?.campaign) : original.config?.[key]
     if (!deepEqual(next[key], stored)) {
       // each key carries its complete value — the API replaces it wholesale
       Object.assign(changed, { [key]: next[key] })
@@ -1372,7 +1521,6 @@ const visibleFieldNames = computed(() => {
     'name', 'description',
     'config.adGroupNamePrefix',
     'config.campaign.budgetStrategy', 'config.campaign.bidStrategy',
-    'config.placement',
     'config.locations', 'config.ageGroups', 'config.gender',
     'config.budget.type', 'config.budget.amount', 'config.budget.currency',
     'config.schedule.mode', 'config.schedule.startMode',
@@ -1383,6 +1531,11 @@ const visibleFieldNames = computed(() => {
   // rendered with `v-if`: while it does not exist, its issue belongs in the form alert (Lead ruling 2026-09-25)
   // TASK-adgroup-targeting — both controls only exist while `/options` serves the mode list
   if (daypartingSupported.value) names.push('config.daypartingSchedule')
+  // FEAT-104 — the selector exists only while `/options` serves it; placement only for Sales, the two
+  // optimization fields only for Lead generation (a 400 for a hidden one lands in the form alert)
+  if (objectiveSupported.value) names.push('config.campaign.objective')
+  if (isLead.value) names.push('config.optimizationGoal', 'config.optimizationEvent')
+  else names.push('config.placement')
   if (targetingSupported.value) names.push('config.targetingMode', 'config.spendingPower')
   if (showCampaignBudget.value) names.push('config.campaign.budget.type', 'config.campaign.budget.amount')
   if (showTargetCpa.value) names.push('config.targetCpa')
@@ -1617,6 +1770,28 @@ const submitLabel = computed(() => {
               </p>
             </div>
 
+            <!-- FEAT-104 — Sales / Lead generation, at the top of the campaign section (labels from `/options`) -->
+            <UFormField
+              v-if="objectiveSupported"
+              label="Objective"
+              name="config.campaign.objective"
+              required
+              class="xl:col-span-2"
+              :error="fieldError('config.campaign.objective')"
+            >
+              <URadioGroup
+                :model-value="state.config.campaign.objective"
+                :items="options.objective ?? []"
+                value-key="value"
+                :disabled="submitting"
+                data-testid="agt-campaign-objective"
+                @update:model-value="(v: string) => setObjective(v)"
+              />
+              <template #help>
+                <span data-testid="agt-campaign-objective-help">{{ objectiveHelp }}</span>
+              </template>
+            </UFormField>
+
             <!-- TASK-adgroup-targeting — no name input at all: the worker always leaves TikTok's default name -->
             <p class="text-sm text-muted xl:col-span-2" data-testid="agt-campaign-name-note">
               {{ CAMPAIGN_NAME_NOTE }}
@@ -1644,7 +1819,22 @@ const submitLabel = computed(() => {
               />
             </UFormField>
 
+            <!-- FEAT-104 — Lead generation: always the ad-group budget (decision 8), read-only -->
             <UFormField
+              v-if="isLead"
+              label="Budget strategy"
+              name="config.campaign.budgetStrategy"
+              :error="fieldError('config.campaign.budgetStrategy')"
+            >
+              <p
+                class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+                data-testid="agt-lead-budget-strategy-locked"
+              >
+                {{ leadBudgetStrategyText }}
+              </p>
+            </UFormField>
+            <UFormField
+              v-else
               label="Budget strategy"
               name="config.campaign.budgetStrategy"
               required
@@ -1787,8 +1977,22 @@ const submitLabel = computed(() => {
               `cbo` → TikTok shows the campaign choice read-only, so does the form; `costCap` → the target cost is typed here.
             -->
             <div class="grid gap-4 sm:grid-cols-2 xl:col-span-2" data-testid="agt-adgroup-bidding">
+              <!-- FEAT-104 — Lead generation: always Maximum results (decision 9), read-only, no target CPA -->
               <UFormField
-                v-if="showBidOnAdGroup"
+                v-if="isLead"
+                label="Bid strategy"
+                name="config.campaign.bidStrategy"
+                :error="fieldError('config.campaign.bidStrategy')"
+              >
+                <p
+                  class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+                  data-testid="agt-lead-bid-strategy-locked"
+                >
+                  {{ leadBidStrategyText }}
+                </p>
+              </UFormField>
+              <UFormField
+                v-else-if="showBidOnAdGroup"
                 label="Bid strategy"
                 name="config.campaign.bidStrategy"
                 required
@@ -1833,8 +2037,75 @@ const submitLabel = computed(() => {
             </div>
           </section>
 
-          <!-- 3. placement / optimization location -->
-          <section class="border-t border-default pt-4">
+          <!--
+            FEAT-104 — Lead generation only, always open: goal (fixed), where it optimizes (fixed), the pixel line
+            (chosen per advertiser at launch — no pixel in the template, decision 16ก) and the event select
+          -->
+          <section
+            v-if="isLead"
+            class="grid gap-4 border-t border-default pt-4 xl:grid-cols-2"
+            data-testid="agt-sec-optimization"
+          >
+            <div class="xl:col-span-2">
+              <h3 class="text-sm font-semibold text-highlighted">
+                {{ LEAD_TEXT.sectionHeading }}
+              </h3>
+              <p class="mt-1 text-xs text-muted">
+                {{ LEAD_TEXT.sectionCaption }}
+              </p>
+            </div>
+
+            <UFormField
+              label="เป้าหมาย"
+              name="config.optimizationGoal"
+              :error="fieldError('config.optimizationGoal')"
+            >
+              <p
+                class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+                data-testid="agt-lead-goal"
+              >
+                {{ leadGoalText }}
+              </p>
+            </UFormField>
+
+            <UFormField label="ตำแหน่งการเพิ่มประสิทธิภาพ">
+              <p
+                class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+                data-testid="agt-lead-location"
+              >
+                {{ LEAD_TEXT.location }}
+              </p>
+            </UFormField>
+
+            <UFormField label="การเชื่อมต่อข้อมูล (Pixel)" :help="LEAD_TEXT.pixelHelp">
+              <p
+                class="rounded-md border border-default bg-elevated/50 px-3 py-2 text-sm text-muted"
+                data-testid="agt-lead-pixel-note"
+              >
+                {{ LEAD_TEXT.pixel }}
+              </p>
+            </UFormField>
+
+            <UFormField
+              label="กิจกรรมการเพิ่มประสิทธิภาพ"
+              name="config.optimizationEvent"
+              required
+              :help="LEAD_TEXT.eventHelp"
+              :error="fieldError('config.optimizationEvent')"
+            >
+              <USelect
+                v-model="state.config.optimizationEvent"
+                :items="options.optimizationEvent ?? []"
+                value-key="value"
+                class="w-full"
+                :disabled="submitting"
+                data-testid="agt-lead-event"
+              />
+            </UFormField>
+          </section>
+
+          <!-- 3. placement / optimization location — FEAT-104: Sales only (Lead generation has no placement) -->
+          <section v-if="!isLead" class="border-t border-default pt-4">
             <h3 class="text-sm font-semibold text-highlighted">
               <button
                 type="button"

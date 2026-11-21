@@ -72,6 +72,12 @@
  * row's UTM key underneath its summary — `adt-row-utm-owner` (`utmOwner.displayName`), rendered only when the
  * view's new key is non-null (no UTM / a key with no owner row / a deleted admin → nothing). Read-only: a key
  * is moved on the GOD page `/settings/utm-keys`, never here, and there is no new filter.
+ *
+ * **FEAT-104** (api-contract v1 §2.3 · spec AC-19): a destination filter `adt-filter-destination` (`ทุกปลายทาง`
+ * = no param, then `options.destinationMode` → `?destination=instantPage|url`, part of `queryKey`, resets the
+ * page like the others) and the column **Destination** in place of "Instant page": the badge
+ * `adt-destination-badge` (Instant Page / Website URL) + the former text of the column (`adt-destination`), or
+ * `ลิงก์ของ pixel` for a `url` template. The FEAT-054 image badge only reads an Instant Page row.
  */
 import { formatTimeAgo } from '@vueuse/core'
 import type { FetchError } from 'ofetch'
@@ -87,6 +93,14 @@ import type {
 import { AD_ADD_ON_LABEL } from '~/utils/ad-add-on'
 import { BUTTON_IMAGE_LABEL, hasButtonImage } from '~/utils/ad-cta-image'
 import { ctaSummary, ctaValuesFrom } from '~/utils/ad-cta'
+import { instantPageOf } from '#shared/types/ad-templates'
+import {
+  DESTINATION_BADGE,
+  DESTINATION_URL,
+  URL_DESTINATION_TEXT,
+  destinationBadgeColor,
+  destinationOfTemplate
+} from '~/utils/objective'
 
 useSeoMeta({ title: 'Ad templates' })
 
@@ -174,6 +188,18 @@ const forbidden = ref<string | null>(null)
 // bumped on every request so a late response from a superseded query is dropped
 let session = 0
 
+/**
+ * FEAT-104 (spec AC-19) — destination filter `adt-filter-destination`: `ทุกปลายทาง` (`all`, no param) first, then
+ * `options.destinationMode`; anything else sends `?destination=<mode>`.
+ */
+const DESTINATION_ALL = 'all'
+const destinationFilter = ref<string>(DESTINATION_ALL)
+const destinationFilterItems = computed(() => [
+  { label: 'ทุกปลายทาง', value: DESTINATION_ALL },
+  ...(options.value?.destinationMode ?? []).map(item => ({ label: item.label, value: item.value }))
+])
+const hasDestinationFilter = computed(() => destinationFilter.value !== DESTINATION_ALL)
+
 /** `silent` = a FEAT-042 poll tick: the same single request, but the table is not dimmed for it */
 async function load(silent = false) {
   const s = ++session
@@ -188,7 +214,9 @@ async function load(silent = false) {
         page: page.value,
         limit: LIMIT,
         q: q || undefined,
-        workspaceId: createdBy.value !== 'all' ? createdBy.value : undefined
+        workspaceId: createdBy.value !== 'all' ? createdBy.value : undefined,
+        // FEAT-104 (api-contract v1 §2.3) — only when a destination is picked
+        destination: destinationFilter.value !== DESTINATION_ALL ? destinationFilter.value : undefined
       }
     })
     if (s !== session) return
@@ -221,7 +249,14 @@ watch(createdBy, () => {
   page.value = 1
 })
 
-const queryKey = computed(() => `${page.value}|${searchDebounced.value.trim()}|${createdBy.value}`)
+// FEAT-104 — and for the destination filter
+watch(destinationFilter, () => {
+  page.value = 1
+})
+
+const queryKey = computed(() =>
+  `${page.value}|${searchDebounced.value.trim()}|${createdBy.value}|${destinationFilter.value}`
+)
 watch(queryKey, () => {
   void load()
 })
@@ -325,12 +360,14 @@ const isFilterOtherCreator = computed(() => !isFilterAll.value && !isFilterMine.
 
 const baseEmpty = computed(() =>
   loaded.value && !error.value && !forbidden.value && total.value === 0 && !hasSearch.value
+  && !hasDestinationFilter.value
 )
 const isEmpty = computed(() => baseEmpty.value && isFilterAll.value)
 const isEmptyMine = computed(() => baseEmpty.value && isFilterMine.value)
 const isEmptyCreator = computed(() => baseEmpty.value && isFilterOtherCreator.value)
 const isNoMatch = computed(() =>
-  loaded.value && !error.value && !forbidden.value && total.value === 0 && hasSearch.value
+  loaded.value && !error.value && !forbidden.value && total.value === 0
+  && (hasSearch.value || hasDestinationFilter.value)
 )
 const showTable = computed(() =>
   !error.value && !forbidden.value && !isEmpty.value && !isEmptyMine.value && !isEmptyCreator.value && !isNoMatch.value
@@ -352,7 +389,9 @@ function timeAgo(iso: string): string {
  * else the English chrome `First in library` (A8).
  */
 function destinationCell(template: AdTemplate): string {
-  const page = template.config?.destination?.page
+  // FEAT-104 — a Website URL template links to the site of the pixel chosen per advertiser at launch
+  if (destinationOfTemplate(template) === DESTINATION_URL) return URL_DESTINATION_TEXT
+  const page = instantPageOf(template.config?.destination)?.page
   if (page?.selection === 'create') return 'New instant page'
   return page?.selection === 'named' ? page.name : 'First in library'
 }
@@ -580,6 +619,14 @@ function onDeleted() {
               @update:model-value="(v: string) => createdBy = v"
             />
           </span>
+          <USelect
+            v-model="destinationFilter"
+            :items="destinationFilterItems"
+            :ui="{ trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200' }"
+            class="w-full sm:w-auto sm:min-w-44"
+            aria-label="Destination"
+            data-testid="adt-filter-destination"
+          />
         </div>
 
         <UAlert
@@ -692,11 +739,21 @@ function onDeleted() {
         <UEmpty
           v-else-if="isNoMatch"
           icon="i-lucide-search-x"
-          title="No templates match your search"
+          :title="hasSearch ? 'No templates match your search' : 'No templates with this destination'"
           data-testid="adt-no-match"
         >
           <template #actions>
             <UButton
+              v-if="hasDestinationFilter"
+              label="All destinations"
+              icon="i-lucide-x"
+              color="neutral"
+              variant="outline"
+              data-testid="adt-clear-destination"
+              @click="destinationFilter = DESTINATION_ALL"
+            />
+            <UButton
+              v-if="hasSearch"
               label="Clear search"
               icon="i-lucide-x"
               color="neutral"
@@ -718,8 +775,9 @@ function onDeleted() {
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   โพสต์
                 </th>
+                <!-- FEAT-104 — "Destination" replaces "Instant page": badge + the former text, or the pixel-link text -->
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
-                  Instant page
+                  Destination
                 </th>
                 <th class="border-y border-default px-3 py-2 text-left font-semibold whitespace-nowrap text-highlighted">
                   CTA
@@ -780,7 +838,7 @@ function onDeleted() {
                     </UBadge>
                     <!-- FEAT-054 — which templates use an image as the instant page's CTA button -->
                     <UBadge
-                      v-if="hasButtonImage(template.config?.destination?.page)"
+                      v-if="hasButtonImage(instantPageOf(template.config?.destination)?.page)"
                       color="neutral"
                       variant="subtle"
                       size="sm"
@@ -823,7 +881,18 @@ function onDeleted() {
                   </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
-                  <span class="line-clamp-2 max-w-48" :title="destinationCell(template)" data-testid="adt-destination">{{ destinationCell(template) }}</span>
+                  <div class="flex flex-col items-start gap-1" :data-destination="destinationOfTemplate(template)">
+                    <UBadge
+                      :color="destinationBadgeColor(destinationOfTemplate(template))"
+                      variant="subtle"
+                      size="sm"
+                      class="whitespace-nowrap"
+                      data-testid="adt-destination-badge"
+                    >
+                      {{ DESTINATION_BADGE[destinationOfTemplate(template)] }}
+                    </UBadge>
+                    <span class="line-clamp-2 max-w-48" :title="destinationCell(template)" data-testid="adt-destination">{{ destinationCell(template) }}</span>
+                  </div>
                 </td>
                 <td class="border-b border-default px-3 py-2">
                   <span class="line-clamp-2 max-w-56" :title="ctaCell(template)" data-testid="adt-cta">{{ ctaCell(template) }}</span>

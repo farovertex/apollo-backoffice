@@ -39,8 +39,11 @@ export interface OptionItem {
 export type AdIdentityMode = 'spark'
 /** Single-valued for now; the only supported source is the "โพสต์ที่ได้รับอนุญาต" tab. */
 export type AdIdentitySource = 'authorizedPosts'
-/** Single-valued for now; a `url` destination may be added later (spec Q5/Q13/Q17). */
-export type AdDestinationMode = 'instantPage'
+/**
+ * FEAT-104 (api-contract v1 §2.1) — `instantPage` (Sales path, unchanged) or `url` (Website URL, Lead generation
+ * path: no URL in the template — the build uses the site link of the pixel chosen per advertiser).
+ */
+export type AdDestinationMode = 'instantPage' | 'url'
 /**
  * One call-to-action in the Ads Manager tree. Stored key is stable; the BO shows the Thai `label`
  * from `/options`. The runner clicks the tree node id that the key maps to.
@@ -145,10 +148,33 @@ export interface AdIdentityRequest {
   post: AdPostSelection
 }
 
-/** `config.destination` — the instant page the ad points at (library page or a newly created one). */
-export interface AdDestination {
-  mode: AdDestinationMode
+/** `config.destination` of an Instant Page template — the instant page the ad points at. */
+export interface AdDestinationInstantPage {
+  mode: 'instantPage'
   page: AdPageSelection
+}
+
+/** FEAT-104 — `config.destination` of a Website URL template: strict, no other key (no `url`, no `page`). */
+export interface AdDestinationUrl {
+  mode: 'url'
+}
+
+/** `config.destination` — discriminated on `mode` (FEAT-104 api-contract v1 §2.1). */
+export type AdDestination = AdDestinationInstantPage | AdDestinationUrl
+
+/**
+ * FEAT-104 (api-contract v1 §2.1) — `config.productDetails`, **url only** (forbidden with `instantPage`):
+ * `clearSuggested` = the worker clears the texts TikTok fills in after the URL; `items` = the texts the admin
+ * adds (≤ `limits.productDetailsMaxItems`, each trimmed 1..`limits.productDetailMaxLength`, unique).
+ */
+export interface AdProductDetails {
+  clearSuggested: boolean
+  items: string[]
+}
+
+/** narrows `config.destination` to its Instant Page variant (null for `url` / a malformed row) */
+export function instantPageOf(destination: AdDestination | null | undefined): AdDestinationInstantPage | null {
+  return destination && destination.mode !== 'url' && 'page' in destination ? destination : null
 }
 
 /** `config.cta` — the call-to-action texts to leave checked (at least one). */
@@ -247,6 +273,8 @@ export interface AdConfig {
    * every reader treats absence the same as `[]`, and `[]` means the worker never touches the control.
    */
   adTexts?: string[]
+  /** FEAT-104 — Website URL templates only (10th key, after `adTexts`); absent on an Instant Page template */
+  productDetails?: AdProductDetails
 }
 
 /**
@@ -471,6 +499,10 @@ export interface AdTemplateLimits {
    * still renders against an API that predates the feature (then the BO falls back to 5).
    */
   adTextsMax?: number
+  /** FEAT-104 — max `config.productDetails.items` (15); optional for an older API */
+  productDetailsMaxItems?: number
+  /** FEAT-104 — max characters of one product-details item (25); optional for an older API */
+  productDetailMaxLength?: number
 }
 
 /**
@@ -485,7 +517,7 @@ export interface AdTemplateOptions {
   identitySource: OptionItem[]
   /** `first`, `named`, `authCode` (FEAT-017; only `authCode` is offered by the form) */
   postSelection: OptionItem[]
-  /** 1 item (`instantPage`) */
+  /** FEAT-104 — `instantPage` / `url` (one item on an API that predates the feature) */
   destinationMode: OptionItem[]
   /** `first`, `named`, `create` (FEAT-017; only `create` is offered by the form) */
   pageSelection: OptionItem[]
@@ -521,6 +553,12 @@ export interface AdTemplateOptions {
    * it. Absent (an API that predates the feature) = no hints at all, never a wrong warning.
    */
   smartPlusCtaValues?: string[]
+  /**
+   * FEAT-104 (api-contract v1.2 §2.1b) — the `ctaValue` keys a **Website URL** template may carry (everything
+   * but `donateNow`, same order); another value → 400 at `config.cta.values`. Absent on an older API: the form
+   * hides `donateNow` itself.
+   */
+  urlCtaValues?: string[]
 }
 
 /**
