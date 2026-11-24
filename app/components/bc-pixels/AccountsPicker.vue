@@ -4,7 +4,9 @@
  * Reads `GET /bc-pixels/:id/accounts` (page 1 when it mounts, again on every debounced search / filter change, the next
  * page on `bpx-accounts-more` — rows accumulate). Nothing is ticked by default (A1); a linked row cannot be ticked, carries
  * the "ผูกแล้ว" badge and a `bpx-unlink-<id>` button. "เลือกทั้งหมดที่ยังไม่ผูก" ticks every not-linked row of the loaded
- * pages. The ticks survive a search / filter change (they are ids). The picker sends nothing itself: `link` / `unlink`
+ * pages. A suspended not-linked row (v1.13, §7.5) is disabled, carries the "ถูกระงับ" badge and never enters the selection
+ * (checkbox, select-all, a selection kept across a reload). The ticks survive a search / filter change (they are ids).
+ * The picker is link-only (unlink is the per-row button, unchanged). The picker sends nothing itself: `link` / `unlink`
  * go to the step, which owns the POST, the confirm dialog and the job card.
  */
 import type { PixelAccountRow, PixelAccountsResponse } from '#shared/types/bc-pixels'
@@ -49,6 +51,15 @@ const loadError = ref<string | null>(null)
 let seq = 0
 
 const selected = ref<Set<string>>(new Set())
+/** ids seen as suspended + not linked in any loaded page (rows of other searches / filters are gone from `rows`) */
+const suspendedKnown = new Set<string>()
+
+/** drop every suspended id from the selection (after a load, or on the API's `advertiserSuspended`) */
+function pruneSelection(extra: string[] = []) {
+  for (const id of extra) suspendedKnown.add(id)
+  if (![...selected.value].some(id => suspendedKnown.has(id))) return
+  selected.value = new Set([...selected.value].filter(id => !suspendedKnown.has(id)))
+}
 
 async function load(nextPage: number) {
   const s = ++seq
@@ -67,6 +78,11 @@ async function load(nextPage: number) {
     total.value = res.total ?? rows.value.length
     linkedTotal.value = res.linkedTotal ?? null
     advertiserTotal.value = res.advertiserTotal ?? null
+    for (const a of list) {
+      if (bcPixelAccountSuspended(a)) suspendedKnown.add(a.advertiserId)
+      else suspendedKnown.delete(a.advertiserId)
+    }
+    pruneSelection()
     loaded.value = true
   } catch (e) {
     if (s !== seq) return
@@ -90,7 +106,12 @@ onUnmounted(() => {
 function reload() {
   void load(1)
 }
-defineExpose({ reload })
+/** the API refused the request with `advertiserSuspended`: forget those ids and re-read the list */
+function dropSuspended(ids: string[]) {
+  pruneSelection(ids)
+  reload()
+}
+defineExpose({ reload, dropSuspended })
 
 const hasMore = computed(() => loaded.value && rows.value.length < total.value)
 
@@ -98,7 +119,7 @@ function isChecked(id: string): boolean {
   return selected.value.has(id)
 }
 function toggle(row: PixelAccountRow, value: boolean | 'indeterminate') {
-  if (row.linked) return
+  if (row.linked || bcPixelAccountSuspended(row)) return
   const next = new Set(selected.value)
   if (value === true) next.add(row.advertiserId)
   else next.delete(row.advertiserId)
@@ -106,7 +127,7 @@ function toggle(row: PixelAccountRow, value: boolean | 'indeterminate') {
 }
 function selectUnlinked() {
   const next = new Set(selected.value)
-  for (const r of rows.value) if (!r.linked) next.add(r.advertiserId)
+  for (const r of rows.value) if (!r.linked && !bcPixelAccountSuspended(r)) next.add(r.advertiserId)
   selected.value = next
 }
 function clearSelection() {
@@ -115,7 +136,7 @@ function clearSelection() {
 
 const count = computed(() => selected.value.size)
 const tooMany = computed(() => count.value > BC_PIXEL_LINK_MAX)
-const unlinkedLoaded = computed(() => rows.value.filter(r => !r.linked).length)
+const unlinkedLoaded = computed(() => rows.value.filter(r => !r.linked && !bcPixelAccountSuspended(r)).length)
 
 const submitDisabled = computed(() =>
   props.superseded || props.posting || count.value === 0 || tooMany.value
@@ -213,10 +234,11 @@ function submit() {
         class="flex items-center gap-2 px-2 py-2"
         :data-testid="`bpx-account-${a.advertiserId}`"
         :data-linked="a.linked ? 'true' : 'false'"
+        :data-suspended="bcPixelAccountSuspended(a) ? 'true' : undefined"
       >
         <UCheckbox
           :model-value="isChecked(a.advertiserId)"
-          :disabled="a.linked || superseded || posting"
+          :disabled="a.linked || bcPixelAccountSuspended(a) || superseded || posting"
           :aria-label="`เลือก ${a.name}`"
           :data-testid="`bpx-account-check-${a.advertiserId}`"
           @update:model-value="toggle(a, $event)"
@@ -232,6 +254,17 @@ function submit() {
             </template>
           </p>
         </div>
+        <UBadge
+          v-if="bcPixelAccountSuspended(a)"
+          color="warning"
+          variant="subtle"
+          size="sm"
+          class="shrink-0 whitespace-nowrap"
+          :title="BC_PIXEL_TEXT.suspendedHint"
+          :data-testid="`bpx-account-suspended-${a.advertiserId}`"
+        >
+          {{ BC_PIXEL_TEXT.suspendedBadge }}
+        </UBadge>
         <template v-if="a.linked">
           <UBadge
             color="success"

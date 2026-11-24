@@ -6,7 +6,7 @@
  * Unlink: `bpx-unlink-<id>` → confirm dialog → `bpx-unlink-confirm` → exactly one `POST …/unlink` with that id.
  * A 202 closes the picker, toasts (with the `skipped` ids, if any) and hands `{ pixel }` to the panel, which polls
  * while the job runs. While a link / unlink job is open the picker is closed, `bpx-link-open` is disabled and
- * `bpx-link-busy` ("กำลังทำงานผูกบัญชีอยู่") shows. A 409 shows the API's `error` (inside the picker when open).
+ * `bpx-link-busy` ("กำลังทำงานผูกบัญชีอยู่") shows. A 409 shows the API's `error` (inside the picker when open); `advertiserSuspended` (v1.13) also drops `advertiserIds` from the selection and reloads the picker only.
  * The job card's ลองใหม่ repeats the last request (same kind, same ids); after a page reload that request is not
  * known (`PixelJobView` has no payload, contract v1.2) → the button stays disabled with a hint to pick again.
  * A superseded pixel keeps only unlink (the picker opens; ticking and linking are disabled).
@@ -32,7 +32,7 @@ const pickerOpen = ref(false)
 const posting = ref(false)
 const refusal = ref<string | null>(null)
 const lastRequest = ref<LinkRequest | null>(null)
-const picker = ref<{ reload: () => void } | null>(null)
+const picker = ref<{ reload: () => void, dropSuspended: (ids: string[]) => void } | null>(null)
 
 watch(() => props.pixel.id, () => {
   pickerOpen.value = false
@@ -89,8 +89,10 @@ async function send(req: LinkRequest) {
     toast.add({ title: req.kind === 'link' ? 'ผูกบัญชีไม่ได้' : 'เลิกผูกบัญชีไม่ได้', description: f.message, color: 'error' })
     if (f.status === 409) {
       // the list or the view is stale: re-read what the API says now
-      if (['alreadyLinked', 'notLinked', 'unknownAdvertiser'].includes(f.reason ?? '')) picker.value?.reload()
-      if (f.reason !== 'unknownAdvertiser') emit('reload')
+      if (f.reason === 'advertiserSuspended') picker.value?.dropSuspended(f.body?.advertiserIds ?? [])
+      else if (['alreadyLinked', 'notLinked', 'unknownAdvertiser'].includes(f.reason ?? '')) picker.value?.reload()
+      // the pixel view is still right when the refusal is about the picked advertisers only
+      if (f.reason !== 'unknownAdvertiser' && f.reason !== 'advertiserSuspended') emit('reload')
     }
   } finally {
     posting.value = false
