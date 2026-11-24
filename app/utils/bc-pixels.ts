@@ -397,6 +397,20 @@ export function bcPixelCountdown(iso: string | null | undefined, now: Date): str
   return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`
 }
 
+/**
+ * 409 `advertiserSuspended` met while the picker is closed (retry from the job card, v1.13 follow-up): the API's own `error`
+ * stays first, then what the BO did with the request and what the user can do next. `left` = ids still in the request.
+ */
+export function bcPixelSuspendedDroppedText(apiText: string, suspended: string[], left: string[]): string {
+  const tails = suspended.slice(0, 5).map(id => `…${bcPixelTail(id)}`).join(', ')
+  const more = suspended.length > 5 ? ` และอีก ${suspended.length - 5} บัญชี` : ''
+  const taken = suspended.length ? `ระบบเอาบัญชีที่ถูกระงับ (${tails}${more}) ออกจากคำขอให้แล้ว` : 'ระบบเอาบัญชีที่ถูกระงับออกจากคำขอให้แล้ว'
+  const next = left.length
+    ? `กดลองใหม่เพื่อผูกอีก ${left.length} บัญชีที่เหลือ`
+    : 'ไม่เหลือบัญชีให้ลองใหม่ ให้เปิดรายการบัญชีแล้วเลือกใหม่'
+  return `${apiText} (${taken} — ${next})`
+}
+
 /** §7.5 (v1.13): a suspended, not-yet-linked advertiser cannot be chosen for a link (a linked one can still be unlinked) */
 export function bcPixelAccountSuspended(row: { status?: string | null, linked: boolean }): boolean {
   return row.status === 'suspended' && !row.linked

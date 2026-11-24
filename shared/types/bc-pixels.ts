@@ -54,7 +54,7 @@ export interface BcPixelConflictBody {
   pixelId?: string
   /** `unknownAdvertiser` */
   advertiserId?: string
-  /** `advertiserSuspended` (v1.13): every requested id whose advertiser is suspended, in body order */
+  /** `advertiserSuspended` (v1.13): the suspended ids that would be queued (requested, not already linked), in body order */
   advertiserIds?: string[]
   /** `runOpen` */
   runId?: string
