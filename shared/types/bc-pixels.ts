@@ -28,6 +28,7 @@ export type BcPixelConflictReason
     | 'eventExists'
     | 'buttonNotFound'
     | 'unknownAdvertiser'
+    | 'advertiserSuspended'
     | 'alreadyLinked'
     | 'notLinked'
     | 'linkBusy'
@@ -53,6 +54,8 @@ export interface BcPixelConflictBody {
   pixelId?: string
   /** `unknownAdvertiser` */
   advertiserId?: string
+  /** `advertiserSuspended` (v1.13): the suspended ids that would be queued (requested, not already linked), in body order */
+  advertiserIds?: string[]
   /** `runOpen` */
   runId?: string
   /** `runOpen`, `invalidState` */
@@ -445,6 +448,7 @@ export interface PixelAccountsQuery {
 export interface PixelAccountRow {
   advertiserId: string
   name: string
+  /** v1.13: `active` | `suspended` | `unknown` (`advertisers.status`); kept loose so a new value never breaks the list */
   status: string
   linked: boolean
   linkedAt: string | null
