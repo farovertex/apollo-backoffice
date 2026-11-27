@@ -231,7 +231,13 @@ const viewer = computed<TopupViewer>(() => ({
 /** an SSE `topup` event (or the answer of a mutation) replaces the round of the advertiser it belongs to */
 function patchTopup(topup: TopupView) {
   const row = items.value.find(a => a.id === topup.advertiserId)
-  if (row) row.topup = topup
+  if (!row) return
+  row.topup = topup
+  // the worker already marked the advertiser banned — show it now, not on the next list read
+  if (topupSaysSuspended(topup)) {
+    row.status = 'suspended'
+    row.suspendedReason = 'banned'
+  }
 }
 
 const { mode: liveMode, syncedAt, start: startLive, stop: stopLive } = useTopupsLive({ onTopup: patchTopup })

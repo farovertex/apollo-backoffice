@@ -777,3 +777,15 @@ export function topupAmountError(
   }
   return null
 }
+
+/**
+ * 2026-11-27 — the worker reads TikTok's permission API at top-up time and, on status 8, ends the round with this
+ * exact text (`TOPUP_ADVERTISER_SUSPENDED` in apollo-api `topup-rules.ts` / `CARD_FAIL_TEXT.advertiserSuspended`)
+ * **and** flips the advertiser to `suspended` / `banned` in the DB. The slide-over only receives the round over SSE,
+ * so it applies the same flip to the row it already shows instead of waiting for the next list read.
+ */
+export const TOPUP_ADVERTISER_SUSPENDED = 'บัญชีโฆษณาถูกระงับ (TikTok) — เติมเงินไม่ได้'
+
+export function topupSaysSuspended(topup: Pick<TopupView, 'status' | 'error'>): boolean {
+  return (topup.status === 'qrFailed' || topup.status === 'cardFailed') && (topup.error ?? '').startsWith(TOPUP_ADVERTISER_SUSPENDED)
+}
